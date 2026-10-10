@@ -40,50 +40,90 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 
 ## The designer: a flow board
 
-The design is drawn as a board of cards, in the order the workflow runs:
+The design is drawn as a board of cards, in the order the workflow runs. Docked beside
+the transcript it flows top to bottom and every card is as wide as the pane:
 
 ```
-╭ n1 agent ────╮    ╭ n2 pipeline ×4 · review ───────────────────────╮     ╭ n5 agent ────╮
-│ scout diff   │ ─▶ │ ╭ n3 agent ────╮    ╭ n4 verify ×3 ──────╮     │▒ ═▶ │ synthesize   │ +
-│ low          │ +  │ │ review       │ ─▶ │ adversarial verify │▒ +  │▒ +  │ Write one r… │
-╰──────────────╯    │ │ Review the … │ +  │ 3 votes            │▒    │▒    ╰──────────────╯
-                    │ ╰──────────────╯    ╰────────────────────╯▒    │▒
-                    ╰ ×4 dimensions ─────────────────────────────────╯▒
+╭── n1 agent ────────────────────────────────╮
+│ scout diff                                 │
+│ Cheap and mechanical. Its list of          │
+│ dimensions is the work-list for the…       │
+╰ low ───────────────────────────────────────╯
+  │  +
+┏━▼ n2 pipeline ×4 · review · each: dimensi… ┓
+┃ ╭── n3 agent ────────────────────────────╮ ┃
+┃ │ review                                 │ ┃
+┃ │ One reviewer per dimension.            │ ┃
+┃ ╰────────────────────────────────────────╯ ┃
+┃   │                                        ┃
+┃ ╭─▼ n4 verify ×3 ────────────────────────╮ ┃
+┃ │ adversarial verify                     │ ┃
+┃ │ Each skeptic tries to refute a finding │ ┃
+┃ │ and defaults to refuted when unsure.…  │ ┃
+┃ ╰ 3 votes ───────────────────────────────╯ ┃
+┃  ╰──────────────────────────────────────╯  ┃
+┃   ╰────────────────────────────────────╯   ┃
+┗━ + ━━━━━━━━━━━━━━━━━━━━━━━━━━━ edit ━ del ━┛
+ ╰──────────────────────────────────────────╯
+  ╰────────────────────────────────────────╯
+  ║  +
+╭─▼ n5 agent ────────────────────────────────╮
 ```
 
-- A block is a card: `id type` on its border, its title, then its knobs (or, with a run, its progress).
+Above the prompt (inline) it flows left to right:
+
+```
+╭ n1 agent ────╮    ╭ n2 pipeline ×4 · review · each: dimensions ───╮    ╭ n5 agent ────╮
+│ scout diff   │ ─▶ │ ╭ n3 agent ────╮    ╭ n4 verify ×3 ──────╮    │ ═▶ │ synthesize   │ +
+│ Cheap and…   │    │ │ review       │ ─▶ │ adversarial verify │    │    │ Runs once…   │
+╰ low ─────────╯    │ │ One reviewe… │    │ Each skeptic trie… │    │    ╰──────────────╯
+                    │ ╰──────────────╯    ╰ 3 votes ───────────╯    │
+```
+
+- A block is a card: `id type` on its top border, its title, the start of its notes, its knobs
+  on the bottom border (with a run, its progress there instead).
+- The selected card has a heavy border and grows to show all its notes and a line of its knobs.
+  Its colour stays its type's.
 - A container is a box around its blocks. A pipeline or loop chains them along the flow;
-  a parallel, sweep or branch stacks them across it.
-- `─▶` hands each result on as it arrives; `═▶` waits for all results first.
-- `×4` and the shade beside a card mean it runs many times (a fan-out, or votes).
+  a parallel, sweep or branch puts them side by side across it.
+- `│` (or `─▶`) hands each result on as it arrives; `║` (or `═▶`) waits for all results first.
+- `×4` and the borders stacked under a box mean it runs many times (a fan-out, or votes).
+  A container's header says what each run is for (`each: …`); `out: …` on its bottom border is what it hands on.
+- `+` adds a block there. The ones around the selection and at the ends are always drawn; the rest
+  show under the pointer. A `+` on a container's bottom border adds at the end of that container.
+- `▲ 3 more above` / `▼ 5 more below` on the board's edge say it goes on; a container whose header
+  has scrolled off keeps it pinned on the first row.
 - `▲` on a border is a lint; the inspector under the board says what it is.
-- The board flows left to right when the pane sits above the prompt and top to bottom when
-  it is docked beside the transcript. A board larger than its room pans.
+
+Under the board: one row of keys, then the inspector. Docked, the inspector has the title and
+notes fields, with the notes word-wrapped under their field. Inline it is one line until you press `e`.
 
 With the mouse:
 
-- Click a card to select it; the inspector under the board edits it.
-- Click a `+` to add a block at that place: between two blocks, at the end of a container, at the end of the design.
-- Drag a card to a slot to move it, into or out of a container too. A bar shows where it will land;
-  releasing away from any slot cancels. Held at the board's edge, the board pans.
+- Click a card to select it.
+- Click a `+` to add a block at that place.
+- Drag a card to a slot to move it, into or out of a container too. A bar shows where it will land
+  and the words at the pointer say what a release does; releasing away from any slot cancels.
+  Held at the board's edge, the board pans.
 - The selected card carries `edit` and `del` on its border. `del` on a container that holds blocks asks once more.
 - Drag the background to pan.
 - While a run is in progress editing is locked: a click only selects, and the inspector lists the selected block's agents.
 
-With the keyboard (the designer opens with it on the toolbar; a click on the board hands the board the same keys):
+With the keyboard. The keys do the same whether the pane's key row or the board (after a click on it) has the keyboard:
 
 | Key | Action |
 | --- | --- |
-| `h` `j` `k` `l` (arrows on the board) | move the selection: along the flow to the next or previous block, across it into a container or back out |
+| `h` `j` `k` `l` | move the selection: along the flow to the next or previous block, across it into a container or back out |
 | `a` | add a block after the selection |
 | `i` | add a block inside the selected container |
 | `x` | delete (a container that holds blocks asks first) |
 | `g` | grab the selected block; the direction keys then move it a step at a time, `g` drops it |
-| `e` | edit the title |
-| `c` | show the block type's help card |
+| `e` | edit: the title field takes the keyboard, Tab reaches the notes; Enter saves |
+| `z` | compact: every card but the selected one becomes one row; `z` again brings them back |
+| `c` | help: the block type's card, what the board's marks mean, the design file's path |
 | `r` | put `/conductor run <name>` in the prompt; Enter sends it |
 
-Escape hands the keys back to the prompt.
+After a click on the board the arrow keys also move the selection and Enter edits. Escape hands the keys back to the prompt.
 After a handoff the keyboard is in the prompt: `/conductor` reopens the pane with the keyboard.
 
 ## How a design becomes a workflow

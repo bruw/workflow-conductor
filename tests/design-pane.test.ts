@@ -5,6 +5,7 @@ import { flatten, parseDesign, serializeDesign } from '../src/design/model'
 import type { Design } from '../src/design/model'
 import { PANE_COLUMNS } from '../hooks/design'
 import { DESIGN_PANE_ID, DESIGN_PANE_TITLE, designFile } from '../src/design/session'
+import { KEY_OPS } from '../src/ui/board-model'
 import type { DesignUi } from '../src/design/session'
 import { review } from '../src/design/templates'
 
@@ -28,7 +29,7 @@ const watch = (on: On): Seen => {
   return seen
 }
 
-// The board as drawn: one string per row, the legend last.
+// The board as drawn: one string per row.
 type Drawn = { children?: (Drawn | string)[] }
 const flat = (node: Drawn | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(flat).join(''))
 const screen = async (ui: { drawn: (query: { in: string }) => Promise<unknown> }): Promise<string[]> => ((await ui.drawn({ in: 'canvas' })) as Drawn).children?.map(flat) ?? []
@@ -103,11 +104,18 @@ for (const surface of SURFACES) {
     expect(client?.props.props).toMatchObject({ mode: 'design', orientation: 'vertical', selectedId: 'n1', grabbedId: null, pickerAt: null })
     const first = await screen(ui)
     // The selected card has the heavy border; the pipeline is a box around its stages.
-    expect(first[0]).toMatch(/^┏ n1 agent ━+┓$/)
+    expect(first[0]).toMatch(/^┏━━ n1 agent ━+┓$/)
     expect(first[1]).toMatch(/^┃ scout diff +┃$/)
-    expect(first.some(line => /^│ ╭ n3 agent ─+╮ +│▒$/.test(line))).toBe(true)
-    expect(first.at(-1)).toMatch(/^│▼ hands each result on · ║▼ waits for all · \+ add · drag a card to move it/)
+    // Cards fill the pane's columns; the selected one says its notes in full.
+    expect([...(first[0] ?? '')]).toHaveLength(PANE.bodyColumns - 2)
+    expect(first[2]).toMatch(/^┃ Cheap and mechanical\. Its list of dimensions is the work-list for the +┃$/)
+    expect(first[3]).toMatch(/^┃ pipeline\. +┃$/)
+    expect(first.some(line => /^│ ╭── n3 agent ─+╮ │$/.test(line))).toBe(true)
+    // No legend row and no file row: the board ends with the top level's +, the pane with the inspector.
+    expect(first.at(-1)).toBe(' + add block ')
     expect(first).toHaveLength(Number(client?.props.height))
+    const chrome = (await ui.findAll({ type: 'Text' })).map(one => one.text ?? '').join('\n')
+    expect(chrome).not.toMatch(/hands each result|drag a card|workflow-designs|gives it the keys/)
     expect((await ui.find({ type: 'Input', key: 'design-title' }))?.props.value).toBe('scout diff')
     expect(await ui.find({ type: 'Text', text: 'One subagent call' })).toBeDefined()
 
@@ -142,7 +150,8 @@ for (const surface of SURFACES) {
     // The board draws the new node selected.
     await ui.advance(200)
     const lit = (await ui.findAll({ type: 'Text', in: 'canvas' })).filter(one => one.text?.includes('n6 critic'))
-    expect(lit.map(one => one.props)).toEqual([{ color: 'claude', bold: true }])
+    // Selected is the heavy border and bold, in the critic's own colour.
+    expect(lit.map(one => one.props)).toEqual([{ color: 'permission', bold: true }])
 
     // Rename it in the inspector.
     expect((await ui.find({ type: 'Input', key: 'design-title' }))?.props.value).toBe('critic')
@@ -157,12 +166,12 @@ for (const surface of SURFACES) {
     expect(saved().nodes[1]?.knobs).toBe(undefined)
 
     // Grab it and move it down: one step enters the pipeline, as its first stage.
-    await ui.key({ key: ' ' })
+    await ui.key({ key: 'g' })
     expect(state.ui?.grabbedId).toBe('n6')
     await ui.key({ key: 'j' })
     expect(await ids()).toEqual(['n1', 'n2', '  n6', '  n3', '  n4', 'n5'])
     expect(saved().nodes[1]?.children?.[0]?.id).toBe('n6')
-    await ui.key({ key: ' ' })
+    await ui.key({ key: 'g' })
     expect(state.ui?.grabbedId).toBe(null)
 
     // A move posted with an exact place (what a pointer drop sends) lands the same way.
@@ -186,14 +195,21 @@ for (const surface of SURFACES) {
 
     // The card, the edit key and the Run button.
     expect(await ui.find({ key: 'design-card' })).toBe(undefined)
-    await ui.key({ key: '?' })
+    await ui.key({ key: 'c' })
     expect(await ui.find({ key: 'design-card' })).toBeDefined()
+    // The help card is where the legend and the file's path now are.
+    const help = (await ui.findAll({ type: 'Text' })).map(one => one.text ?? '').join('\n')
+    expect(help).toMatch(/hands each result on[\s\S]*waits for all[\s\S]*\+ adds a block[\s\S]*drag a card[\s\S]*\.claude\/workflow-designs\/demo\.json/)
     await ui.post({ kind: 'key', op: 'card', orientation: 'vertical' })
     expect(await ui.find({ key: 'design-card' })).toBe(undefined)
     await ui.key({ key: 'return' })
     expect(state.ui).toMatchObject({ selectedId: 'n2' })
     await ui.press({ key: 'design-run' })
     expect(fills).toEqual(['/conductor run demo'])
+    // r on the board is the same run.
+    await ui.key({ key: 'r' })
+    expect(fills).toEqual(['/conductor run demo', '/conductor run demo'])
+    expect(state.ui?.notice).toBe('run: /conductor run demo is in the prompt · Enter sends it')
 
     // A refused edit changes nothing and writes nothing; junk is ignored.
     const before = writes.length
@@ -262,12 +278,17 @@ for (const surface of SURFACES) {
       'x:key:remove',
       'g:key:grab',
       'e:key:edit',
+      'z:key:compact',
       'c:key:card',
       'r:design-run',
     ])
     expect(keys.every(one => one.props.plain === true && one.props.dimColor === true)).toBe(true)
     // `x: label`, a cell apart: the row fits the body of the dock the pane asks for.
-    expect(keys.reduce((sum, one) => sum + String(one.props.label).length + 3, 0) + keys.length - 1).toBeLessThanOrEqual(PANE_COLUMNS - 4)
+    const width = keys.reduce((sum, one) => sum + String(one.props.label).length + 3, 0) + keys.length - 1
+    expect(width).toBeLessThanOrEqual(PANE_COLUMNS - 4)
+    expect(width).toBeLessThanOrEqual(80)
+    // The ring rests on edit, so Enter edits here as it does on the board.
+    expect(keys.filter(one => one.props.autoFocus === true).map(one => one.key)).toEqual(['key:edit'])
 
     // The arrows move the selection as the docked board flows: down the flow, right into a box.
     await ui.press({ key: 'key:down' })
@@ -338,7 +359,7 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'key:remove' })
     expect(state.ui).toMatchObject({ confirmId: 'n2', selectedId: 'n2' })
     expect(state.ui?.notice).toMatch(/n2 holds 3 blocks: delete again/)
-    expect((await ui.find({ type: 'Button', key: 'key:remove' }))?.props.label).toBe('del all?')
+    expect((await ui.find({ type: 'Button', key: 'key:remove' }))?.props.label).toBe('sure?')
     expect((await ui.find({ type: 'Client' }))?.props.props).toMatchObject({ confirmId: 'n2' })
     await ui.press({ key: 'key:down' })
     await ui.press({ key: 'key:up' })
@@ -354,6 +375,25 @@ for (const surface of SURFACES) {
     expect(state.ui?.selectedId).toBe('n6')
     expect(files.get(FILE)).toBe(serializeDesign(state.design ?? review()))
 
+    // z: compact mode. Every card but the selected one is a row; the board is much shorter; z again brings them back.
+    const full = Number((await ui.find({ type: 'Client' }))?.props.height)
+    const kept = writes.length
+    await ui.press({ key: 'key:compact' })
+    await ui.advance(200)
+    expect(state.ui?.compact).toBe(true)
+    expect((await ui.find({ type: 'Client' }))?.props.props).toMatchObject({ compact: true, selectedId: 'n6' })
+    expect((await ui.find({ type: 'Button', key: 'key:compact' }))?.props.label).toBe('full')
+    const rows = await screen(ui)
+    expect(rows[0]).toMatch(/^╶── n1 agent · scout diff ─+╴$/)
+    expect(rows.some(line => /^┏━▼ n6 critic ━+┓$/.test(line))).toBe(true)
+    expect(rows).toHaveLength(Number((await ui.find({ type: 'Client' }))?.props.height))
+    expect(rows.length).toBeLessThan(full)
+    expect(writes).toHaveLength(kept)
+    await ui.press({ key: 'key:compact' })
+    expect(state.ui?.compact).toBe(false)
+    expect((await ui.find({ type: 'Button', key: 'key:compact' }))?.props.label).toBe('compact')
+    expect(Number((await ui.find({ type: 'Client' }))?.props.height)).toBe(full)
+
     // c shows the card; r puts the handoff command in the prompt for the person to send.
     await ui.press({ key: 'key:card' })
     expect(await ui.find({ key: 'design-card' })).toBeDefined()
@@ -365,6 +405,84 @@ for (const surface of SURFACES) {
     expect(state.ui?.notice).toBe(null)
 
     await ui.unmount()
+  })
+
+  test(`designer: every key does the same from the toolbar and from the board, on ${surface}`, async ($, on) => {
+    const files = new Map<string, string>()
+    const fills: string[] = []
+    const state = watch(on)
+    mock.clock(on)
+    on('session.root', () => ({ value: ROOT }))
+    on('fs.exists', (_$, e) => ({ value: files.has(e.path) }))
+    on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+    on('fs.write', (_$, e) => {
+      files.set(e.path, e.text)
+
+      return { value: undefined }
+    })
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('ui.focus', () => ({}))
+    on('prompt.fill', (_$, e) => {
+      fills.push(e.text)
+      return { isFilled: true }
+    })
+    let letters: string[] = []
+
+    // The same keys, once through the toolbar's Buttons and once typed at the board; what the pane holds after each is recorded.
+    const drive = async (name: string, via: 'toolbar' | 'board'): Promise<unknown[]> => {
+      await $.command.run({ command: 'conductor', args: `design ${name}`, ...RUN })
+      const ui = await $.ui.mount({ plugin: 'conductor', surface, component: 'Pane', requestId: DESIGN_PANE_ID, props: PANE })
+      await ui.press({ key: 'template:review' })
+      const buttons = new Map((await ui.findAll({ type: 'Button' })).filter(one => typeof one.props.hotkey === 'string').map(one => [String(one.props.hotkey), one.key ?? '']))
+      letters = [...buttons.keys()]
+      const seen: unknown[] = []
+      fills.length = 0
+      const tap = async (letter: string): Promise<void> => {
+        if (via === 'toolbar') await ui.press({ key: buttons.get(letter) ?? '' })
+        else await ui.key({ key: letter })
+        await ui.advance(200)
+        const held = state.ui
+        seen.push({
+          letter,
+          // The kit's pane holds no keyboard until a ui.open, so its $.ui.focus is refused on the toolbar's path
+          // and the pane says to click the field: that one notice is the kit's, and is left out of the comparison.
+          ui: { ...held, name: '', notice: held?.notice?.startsWith('edit: click') ? null : (held?.notice?.replaceAll(name, '<name>') ?? null) },
+          ids: flatten(state.design ?? review()).map(row => `${'  '.repeat(row.depth)}${row.node.id}`),
+          fills: fills.map(text => text.replaceAll(name, '<name>')),
+          // What the board is told to draw; its rows are left out, since that notice takes one.
+          board: await ui.find({ type: 'Client' }).then(one => ({ ...(one?.props.props as Record<string, unknown>), design: null, rows: 0, room: 0 })),
+        })
+      }
+      // Move about, grab and carry, compact and back, the card and back, edit.
+      for (const letter of ['j', 'l', 'j', 'h', 'k', 'g', 'j', 'g', 'z', 'z', 'c', 'c', 'e']) await tap(letter)
+      // a and i open the picker, where no key is armed: it is closed by its own Buttons.
+      await tap('a')
+      await ui.press({ key: 'design-add-cancel' })
+      // i is refused on a leaf; out to its container, it opens the picker inside.
+      await tap('i')
+      await tap('h')
+      await tap('i')
+      await ui.press({ key: 'pick:agent' })
+      // x on a leaf, then twice on the container that holds blocks; r.
+      await tap('x')
+      await tap('h')
+      await tap('x')
+      await tap('x')
+      await tap('r')
+      await ui.unmount()
+
+      return seen
+    }
+    const toolbar = await drive('one', 'toolbar')
+    const board = await drive('two', 'board')
+    // Step by step, so a difference names the key that made it.
+    for (const [i, step] of toolbar.entries()) expect(board[i]).toEqual(step)
+    expect(toolbar).toHaveLength(22)
+    // Every letter the toolbar has is one the board answers, and the board answers no other letter.
+    expect(letters.sort()).toEqual(Object.keys(KEY_OPS).filter(key => key.length === 1).sort())
+    expect(letters).toHaveLength(12)
+
+    await $.command.run({ command: 'conductor', args: 'design one', ...RUN })
   })
 
   test(`designer: a saved design opens as it is, and a broken file is reported, not replaced, on ${surface}`, async ($, on) => {
@@ -390,7 +508,7 @@ for (const surface of SURFACES) {
     expect(state.ui).toMatchObject({ status: 'ready', name: 'kept', selectedId: 'n1' })
     expect(serializeDesign(state.design ?? review())).toBe(stored)
 
-    // A short pane: the board gets a fixed height and pans inside it, following the selection.
+    // A short pane: the board gets a fixed height (more than half the pane) and pans inside it, following the selection.
     const short = await $.ui.mount({
       plugin: 'conductor',
       surface,
@@ -399,29 +517,72 @@ for (const surface of SURFACES) {
       props: { ...PANE, scroll: { offset: 0, bodyRows: 20 } },
     })
     const board = await short.find({ type: 'Client' })
-    expect(board?.props.height).toBe(9)
-    expect(board?.props.props).toMatchObject({ rows: 9, selectedId: 'n1', mode: 'design', orientation: 'vertical' })
-    // Eight rows of board and the legend, which says there is more below.
+    expect(board?.props.height).toBe(11)
+    expect(board?.props.props).toMatchObject({ rows: 11, room: 11, selectedId: 'n1', mode: 'design', orientation: 'vertical' })
+    // The last row says how much more there is below; nothing is said above at the top.
     const top = await screen(short)
-    expect(top).toHaveLength(9)
-    expect(top[0]).toMatch(/^┏ n1 agent/)
-    expect(top.at(-1)).toMatch(/▼ more: drag the background$/)
-    expect(top.join('\n')).not.toMatch(/n5 agent/)
+    expect(top).toHaveLength(11)
+    expect(top[0]).toMatch(/^┏━━ n1 agent/)
+    expect(top.at(-1)).toMatch(/^ ▼ \d more below *$/)
+    expect(top.join('\n')).not.toMatch(/n5 agent|more above/)
+    // Into the pipeline, to its second stage: its header scrolls off and stays pinned on the first row, with what is above.
     await short.key({ key: 'j' })
+    await short.key({ key: 'l' })
     await short.key({ key: 'j' })
+    expect(state.ui?.selectedId).toBe('n4')
+    await short.advance(200)
+    const middle = await screen(short)
+    expect(middle).toHaveLength(11)
+    expect(middle[0]).toMatch(/^╭── n2 pipeline ×4 · review .* ▲ \d more above ─╮$/)
+    expect(middle.some(line => /^│ ┏━▼ n4 verify ×3 ━+┓ │$/.test(line))).toBe(true)
+    // The whole selected card is in view, its bottom border and stacked borders too.
+    expect(middle.some(line => /^│ ┗━+ edit ━ del ━┛ │$/.test(line))).toBe(true)
+    await short.key({ key: 'j' })
+    await short.advance(200)
     const bottom = await screen(short)
-    expect(bottom).toHaveLength(9)
-    expect(bottom.some(line => /^┏ n5 agent/.test(line))).toBe(true)
+    expect(bottom).toHaveLength(11)
+    expect(bottom.some(line => /^┏━▼ n5 agent/.test(line))).toBe(true)
     expect(bottom.join('\n')).not.toMatch(/n1 agent/)
-    expect(bottom.at(-1)).toMatch(/▲/)
+    expect(bottom[0]).toMatch(/▲ \d more above/)
+    expect(bottom.at(-1)).toMatch(/^ \+ add block *$/)
     expect(writes).toEqual([])
     await short.unmount()
 
     // Inline (wide, short) the same design flows left to right, and asks for no more rows than it has.
-    const wide = await $.ui.mount({ plugin: 'conductor', surface, component: 'Pane', requestId: DESIGN_PANE_ID, props: { ...PANE, bodyColumns: 120, placement: 'inline' } })
-    expect((await wide.find({ type: 'Client' }))?.props).toMatchObject({ height: 7, props: { orientation: 'horizontal', rows: 7, columns: 118 } })
-    expect((await screen(wide))[1]).toMatch(/^│ scout diff +│ ─▶ │ ╭ n3 agent ─+╮ +╭ n4 verify ×3 ─+╮ +│▒ ═▶ ┃ synthesize +┃ \+ $/)
+    const wide = await $.ui.mount({ plugin: 'conductor', surface, component: 'Pane', requestId: DESIGN_PANE_ID, props: { ...PANE, bodyColumns: 120, placement: 'inline', scroll: { offset: 0, bodyRows: 14 } } })
+    // Fourteen rows: the header, the key row and one line of inspector leave the board eleven; it needs ten.
+    expect((await wide.find({ type: 'Client' }))?.props).toMatchObject({ height: 10, props: { orientation: 'horizontal', rows: 10, room: 11, columns: 118 } })
+    expect((await screen(wide))[1]).toMatch(/^│ scout diff +│ ─▶ │ ╭ n3 agent ─+╮ +╭ n4 verify ×3 ─+╮ +│ ═▶ ┃ synthesize +┃ \+ $/)
+    // The inspector is one line: the block, its title, how its notes start. No fields, no rule.
+    expect(await wide.find({ type: 'Input', key: 'design-title' })).toBe(undefined)
+    expect(await wide.find({ type: 'Input', key: 'design-notes' })).toBe(undefined)
+    expect(await wide.find({ type: 'Select', key: 'design-model' })).toBe(undefined)
+    expect((await wide.find({ type: 'Text', text: /^n5 · agent · synthesize — Runs once over all surviving findings/ }))).toBeDefined()
+    expect(await wide.find({ type: 'Text', text: /^─{20,}$/ })).toBe(undefined)
+    // e opens it: the fields are there to type in, and the board gives up rows for them.
+    await wide.press({ key: 'key:edit' })
+    expect(state.ui?.editing).toBe(true)
+    expect((await wide.find({ type: 'Input', key: 'design-title' }))?.props.value).toBe('synthesize')
+    expect((await wide.find({ type: 'Input', key: 'design-notes' }))?.props.value).toMatch(/^Runs once over all surviving findings/)
+    // Header, key row, headline, two fields with room to type, the knobs: the board keeps the six rows left, and stays sideways.
+    expect((await wide.find({ type: 'Client' }))?.props).toMatchObject({ height: 6, props: { orientation: 'horizontal', room: 6 } })
+    expect(await wide.find({ type: 'Select', key: 'design-model' })).toBeDefined()
+    // Sending a field closes it again.
+    await wide.input({ key: 'design-notes', text: 'Runs once.' })
+    expect(writes).toHaveLength(1)
+    expect(state.ui?.editing).toBe(false)
+    expect(await wide.find({ type: 'Input', key: 'design-title' })).toBe(undefined)
+    expect(await wide.find({ type: 'Text', text: 'n5 · agent · synthesize — Runs once.' })).toBeDefined()
+    expect((await wide.find({ type: 'Client' }))?.props.height).toBe(10)
+    // The board's own e opens it too; moving the selection closes it.
+    await wide.key({ key: 'e' })
+    expect(state.ui?.editing).toBe(true)
+    expect(await wide.find({ type: 'Input', key: 'design-notes' })).toBeDefined()
+    await wide.key({ key: 'h' })
+    expect(state.ui).toMatchObject({ editing: false, selectedId: 'n2' })
+    expect(await wide.find({ type: 'Input', key: 'design-notes' })).toBe(undefined)
     await wide.unmount()
+    writes.length = 0
 
     const broken = await $.command.run({ command: 'conductor', args: 'design broken', ...RUN })
     expect(broken.text).toMatch(/could not be opened/)

@@ -6,7 +6,7 @@
 import type { NodeType } from '../design/model'
 import type { Place } from '../design/ops'
 import type { NodeRun, RunStatus } from '../run/events'
-import { clip, samePlace } from './board-layout'
+import { clip, samePlace, slotVisible } from './board-layout'
 import type { BoardCard, BoardLayout, DropTarget } from './board-layout'
 import { FAILED, fmtTokens, spinnerFrame } from './rail'
 import { ACCENT, GLYPH } from './theme'
@@ -82,7 +82,7 @@ export const CONFIRM_LABEL = ' delete all? '
  * left out where the card is too narrow for both.
  */
 export function affordances(card: BoardCard, confirm: boolean = false): Affordance[] {
-  if (card.type === 'unmapped') return []
+  if (card.type === 'unmapped' || card.line) return []
   const y = card.y + card.h - 1
   const del = confirm ? CONFIRM_LABEL : ' del '
   const edit = ' edit '
@@ -111,15 +111,17 @@ export type PaintOptions = {
   confirmId?: string | null
   /** The slot the add picker is open for. */
   pickerAt?: Place | null
+  /** The slot under the pointer: its `+` is drawn though the selection does not call for it. */
+  hoverAt?: Place | null
   /** Ids of nodes a lint marks. */
   lints?: ReadonlySet<string>
   run?: RunOverlay
   /** A run is in progress: no slots, no affordances. */
   locked?: boolean
-  /** A card in the pointer's hand: `x`, `y` are window cells. */
-  drag?: { id: string; target: DropTarget | null; x: number; y: number } | null
-  /** Cards still sliding to their place: cells away from it. */
-  offsets?: Record<string, { dx: number; dy: number }>
+  /** A card in the pointer's hand: `x`, `y` are window cells; `hint` says what a release would do. */
+  drag?: { id: string; target: DropTarget | null; x: number; y: number; hint?: string } | null
+  /** Cards still sliding to their place or growing to their size: cells away from it. */
+  offsets?: Record<string, { dx: number; dy: number; dh?: number }>
   /** Colours and hovers left out: what a board too large for one tree falls back to. */
   plain?: boolean
 }
@@ -128,21 +130,44 @@ const ROUND = ['╭', '─', '╮', '│', '╰', '╯'] as const
 const HEAVY = ['┏', '━', '┓', '┃', '┗', '┛'] as const
 const DASHED = ['╭', '╌', '╮', '┆', '╰', '╯'] as const
 
+/** Left to right an edge is a line and its head; top to bottom, one row of line, the head on the next card's top border. */
 export const EDGE_GLYPH = {
   h: { stream: '─▶', barrier: '═▶' },
   v: { stream: '│▼', barrier: '║▼' },
 } as const
 
-export const EMPTY_HINT = 'add the first block'
+export { EMPTY_HINT } from './board-layout'
 
 function accentOf(type: NodeType | 'unmapped'): string {
-  return type === 'unmapped' ? 'inactive' : ACCENT[type]
+  return type === 'unmapped' ? 'subtle' : ACCENT[type]
+}
+
+/** What the window's edges say of the board past them. */
+export function edgeMarks(layout: BoardLayout, window: Pick<PaintOptions, 'columns' | 'rows' | 'panX' | 'panY'>): { above: string; below: string; left: boolean; right: boolean } {
+  const bottom = window.panY + window.rows
+  const count = (hidden: (card: BoardCard) => boolean, glyph: string, where: string): string => {
+    const blocks = layout.cards.filter(hidden).length
+    return blocks > 0 ? `${glyph} ${blocks} more ${where}` : `${glyph} more ${where}`
+  }
+  return {
+    above: window.panY > 0 ? count(card => card.y + card.h <= window.panY, '▲', 'above') : '',
+    below: bottom < layout.height ? count(card => card.y >= bottom, '▼', 'below') : '',
+    left: window.panX > 0,
+    right: window.panX + window.columns < layout.width,
+  }
+}
+
+/** The containers whose header is scrolled off the window's top while their body shows: the innermost of each nest. */
+export function stickyCards(layout: BoardLayout, panY: number): BoardCard[] {
+  const open = layout.cards.filter(card => card.container && card.y < panY && card.y + card.h - 1 > panY)
+  return open.filter(card => !open.some(other => other.parentId === card.id))
 }
 
 /** The board as rows of spans: exactly `rows` rows, none wider than `columns`. */
 export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][] {
   const width = Math.max(0, Math.trunc(options.columns))
   const height = Math.max(0, Math.trunc(options.rows))
+  const vertical = layout.orientation === 'vertical'
   const chars: string[][] = Array.from({ length: height }, () => new Array<string>(width).fill(' '))
   const looks: number[][] = Array.from({ length: height }, () => new Array<number>(width).fill(0))
   const table: Look[] = [{}]
@@ -178,45 +203,109 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
   const offsets = options.offsets ?? {}
   const moving = Object.keys(offsets).length > 0
   const dragId = options.drag?.id ?? null
+  const subtle = look({ color: 'subtle' })
 
-  for (const card of layout.cards) {
-    const offset = offsets[card.id]
-    const x = card.x + (offset?.dx ?? 0)
-    const y = card.y + (offset?.dy ?? 0)
+  type Tone = { selected: boolean; grabbed: boolean; lifted: boolean; lit: boolean; faded: boolean; tint: string; frame: typeof ROUND | typeof HEAVY | typeof DASHED; edge: number; run: CardRun | undefined }
+  const toneOf = (card: BoardCard): Tone => {
     const selected = card.id === options.selectedId
     const grabbed = card.id === options.grabbedId
     const lifted = card.id === dragId
     const lit = selected || grabbed
     const run = runs?.get(card.id)
+    // Dim is for a block the run never reached (and a card in the hand): a type is never dim by itself.
     const faded = lifted || run?.reached === false
-    const tint = faded ? 'inactive' : lit ? 'claude' : accentOf(card.type)
-    const frame = lifted ? DASHED : lit ? HEAVY : ROUND
-    const edge = look(lit && !faded ? { color: tint, bold: true } : { color: tint })
+    const tint = faded ? 'inactive' : accentOf(card.type)
+    // Selection is the heavy border and the bold words; the colour stays the type's.
+    return { selected, grabbed, lifted, lit, faded, tint, frame: lifted ? DASHED : lit ? HEAVY : ROUND, edge: look(lit && !faded ? { color: tint, bold: true } : { color: tint }), run }
+  }
 
+  /** A box card's top border and what is written on it. `kept` columns at its right end are left for other words. */
+  const drawTop = (card: BoardCard, x: number, y: number, tone: Tone, kept: number = 0): void => {
+    const { frame, edge, tint, lit, grabbed, lifted } = tone
     put(x, y, `${frame[0]}${frame[1].repeat(Math.max(0, card.w - 2))}${frame[2]}`, edge)
-    for (let row = 1; row < card.h - 1; row++) {
+    const marked = lints.has(card.id)
+    const hx = x + (vertical ? 3 : 1)
+    const room = card.w - (hx - x) - 3 - (marked ? 2 : 0) - kept
+    if (room < 2) return
+    const flags = { ...(lit ? { bold: true as const } : {}), ...(grabbed || lifted ? { inverse: true as const } : {}) }
+    const head = clip(card.header, room)
+    put(hx, y, ` ${head}`, look({ color: tint, ...flags }))
+    let at = hx + 1 + head.length
+    let left = room - head.length
+    if (card.container) {
+      const title = card.title === '' || card.title === card.type ? '' : card.title
+      if (title !== '' && left >= 6) {
+        // The title keeps at least half the room when there is an `each:` to say after it.
+        const text = ` · ${clip(title, card.each === '' ? left - 3 : Math.max(Math.min(title.length, left - 3), Math.ceil(left / 2) - 3))}`
+        put(at, y, text, look(lit && !tone.faded ? flags : { color: tint, ...flags }))
+        at += text.length
+        left -= text.length
+      }
+      if (card.each !== '' && left >= 14) {
+        const text = ` · each: ${clip(card.each, left - 9)}`
+        put(at, y, text, look({ color: tone.faded ? 'inactive' : 'subtle', ...(grabbed || lifted ? { inverse: true as const } : {}) }))
+        at += text.length
+      }
+    }
+    put(at, y, ' ', look({ color: tint, ...flags }))
+    if (marked) put(x + card.w - 3 - kept, y, GLYPH.lint, look({ color: 'warning' }))
+  }
+
+  for (const card of layout.cards) {
+    const offset = offsets[card.id]
+    const x = card.x + (offset?.dx ?? 0)
+    const y = card.y + (offset?.dy ?? 0)
+    const tone = toneOf(card)
+    const { selected, grabbed, lifted, lit, faded, tint, frame, edge, run } = tone
+    const status = run ? `${run.glyph} ${run.text}` : ''
+
+    if (card.line) {
+      // One row: `╶── n3 agent · review ─────╴`, the run's count at its right end.
+      put(x, y, `╶${frame[1].repeat(Math.max(0, card.w - 2))}╴`, edge)
+      const tail = status === '' ? 0 : status.length + 3
+      const mark = lints.has(card.id) ? 2 : 0
+      const room = card.w - 7 - tail - mark
+      if (room >= 2) {
+        const head = clip(card.header, room)
+        const flags = grabbed || lifted ? { inverse: true as const } : {}
+        put(x + 3, y, ` ${head}`, look({ color: tint, ...flags }))
+        const rest = room - head.length
+        const title = rest >= 5 && card.title !== '' ? ` · ${clip(card.title, rest - 3)}` : ''
+        put(x + 4 + head.length, y, `${title} `, look(faded ? { color: 'inactive', ...flags } : flags))
+      }
+      if (mark) put(x + card.w - 3 - tail, y, GLYPH.lint, look({ color: 'warning' }))
+      if (status !== '' && card.w - tail >= 8) put(x + card.w - 1 - tail, y, ` ${status} `, look({ color: run?.color ?? 'subtle' }))
+      continue
+    }
+
+    // A card growing or shrinking to its size is drawn at the height it has reached.
+    const h = Math.max(2, card.h + (offset?.dh ?? 0))
+    drawTop(card, x, y, tone)
+    for (let row = 1; row < h - 1; row++) {
       put(x, y + row, frame[3], edge)
       put(x + 1, y + row, ' '.repeat(Math.max(0, card.w - 2)), 0)
       put(x + card.w - 1, y + row, frame[3], edge)
     }
-    put(x, y + card.h - 1, `${frame[4]}${frame[1].repeat(Math.max(0, card.w - 2))}${frame[5]}`, edge)
-    if (card.shadow) for (let row = 1; row < card.h; row++) put(x + card.w, y + row, '▒', look({ color: 'subtle' }))
+    put(x, y + h - 1, `${frame[4]}${frame[1].repeat(Math.max(0, card.w - 2))}${frame[5]}`, edge)
+    // Many of these: more bottom borders under the first, each a column in.
+    for (let layer = 1; layer <= card.stack; layer++) {
+      if (card.w - 2 * layer < 4) break
+      put(x + layer, y + h - 1 + layer, `${ROUND[4]}${ROUND[1].repeat(card.w - 2 - 2 * layer)}${ROUND[5]}`, look({ color: tint }))
+    }
 
-    const marked = lints.has(card.id)
-    put(x + 1, y, ` ${clip(card.header, card.w - 4 - (marked ? 2 : 0))} `, look({ color: tint, ...(lit ? { bold: true } : {}), ...(grabbed || lifted ? { inverse: true } : {}) }))
-    if (marked) put(x + card.w - 3, y, GLYPH.lint, look({ color: 'warning' }))
+    for (const [i, line] of card.lines.entries()) {
+      if (1 + i >= h - 1) break
+      const style: Look =
+        line.role === 'title' ? (faded ? { color: 'inactive' } : lit ? { bold: true } : {}) : faded ? { color: 'inactive' } : line.role === 'note' && selected ? {} : { color: 'subtle' }
+      put(x + 2, y + 1 + i, clip(line.text, card.w - 4), look(style))
+    }
 
     const acts = selected && !options.locked && dragId === null && !moving ? affordances(card, options.confirmId === card.id) : []
-    const status = run ? `${run.glyph} ${run.text}` : ''
-    if (card.container) {
-      const foot = status || card.knobs
-      const room = (acts[0]?.x ?? card.x + card.w - 1) - card.x - 4
-      if (foot !== '' && room >= 4) put(x + 1, y + card.h - 1, ` ${clip(foot, room)} `, look({ color: run ? run.color : 'subtle' }))
-    } else {
-      put(x + 2, y + 1, clip(card.title, card.w - 4), look(faded ? { color: 'inactive' } : lit ? { bold: true } : {}))
-      if (run) put(x + 2, y + 2, clip(status, card.w - 4), look({ color: run.color }))
-      else put(x + 2, y + 2, clip(card.knobs, card.w - 4), look({ color: 'subtle' }))
-    }
+    const foot = status || card.foot
+    // Top to bottom a container's bottom border starts with its `+`; the words come after it.
+    const fx = x + (vertical && card.container ? 5 : 1)
+    const room = (acts[0]?.x ?? card.x + card.w - 1) - (fx - x + card.x) - 4
+    if (foot !== '' && room >= 4) put(fx, y + h - 1, ` ${clip(foot, room)} `, look({ color: run ? run.color : faded ? 'inactive' : 'subtle' }))
     for (const act of acts) {
       const sure = act.kind === 'remove' && options.confirmId === card.id
       put(act.x, act.y, act.label, look({ color: sure ? 'error' : 'claude', ...(sure ? { bold: true } : {}), hover: `conductor-${act.kind}` }))
@@ -230,6 +319,7 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
       const style = look(edge.kind === 'barrier' ? { bold: true } : { color: 'subtle' })
       if (edge.axis === 'h') put(edge.x, edge.y, glyph, style)
       else {
+        // One row of line; its head sits on the next card's top border.
         put(edge.x, edge.y, glyph.slice(0, 1), style)
         put(edge.x, edge.y + 1, glyph.slice(1), style)
       }
@@ -238,9 +328,11 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
       for (const slot of layout.slots) {
         if (!slot.mark) continue
         const open = samePlace(options.pickerAt, slot.place)
-        put(slot.mark.x - 1, slot.mark.y, ' + ', look(open ? { color: 'claude', bold: true, inverse: true } : { color: 'subtle', hover: `conductor-slot-${slot.place.parentId ?? 'top'}-${slot.place.index}` }))
+        const hovered = samePlace(options.hoverAt, slot.place)
+        if (!open && !hovered && !slotVisible(layout, slot, options.selectedId)) continue
+        const style: Look = open ? { color: 'claude', bold: true, inverse: true } : { color: hovered ? 'claude' : 'subtle', ...(hovered ? { bold: true as const } : {}), hover: `conductor-slot-${slot.place.parentId ?? 'top'}-${slot.place.index}` }
+        put(slot.mark.x - 1, slot.mark.y, ` ${slot.mark.label} `, look(style))
       }
-      if (layout.cards.length === 0) put(4, 0, EMPTY_HINT, look({ color: 'subtle' }))
     }
   }
 
@@ -248,10 +340,49 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
   if (drag) {
     const slot = drag.target && drag.target.to !== null ? drag.target.slot : undefined
     const bar = look({ color: 'claude', bold: true })
-    if (slot && slot.axis === 'h') for (let row = 0; row < slot.h; row++) put(slot.mark?.x ?? slot.x, slot.y + row, '┃', bar)
-    if (slot && slot.axis === 'v') put(slot.x, slot.mark?.y ?? slot.y, '━'.repeat(slot.w), bar)
+    if (slot && slot.bar === 'column') for (let row = 0; row < slot.h; row++) put(slot.mark?.x ?? slot.x, slot.y + row, '┃', bar)
+    if (slot && slot.bar === 'row') put(slot.x, slot.y, '━'.repeat(slot.w), bar)
     const card = layout.cards.find(one => one.id === drag.id)
-    if (card) put(drag.x + 2 + options.panX, drag.y + options.panY, ` ${card.id} ${clip(card.title, 16)} `, look({ color: 'claude', bold: true, inverse: true }))
+    if (card) {
+      const chip = ` ${card.id} ${clip(card.title, 16)}${drag.hint ? ` · ${drag.hint}` : ''} `
+      // Kept inside the window: the words say what a release does.
+      const at = Math.max(0, Math.min(drag.x + 2, width - chip.length))
+      put(at + options.panX, drag.y + options.panY, chip, look({ color: 'claude', bold: true, inverse: true }))
+    }
+  }
+
+  // Where the board goes on past the window: a sticky header for the container the top row is inside, and dim words at the edges.
+  if (height >= 3 && width >= 8) {
+    const marks = edgeMarks(layout, { columns: width, rows: height, panX: options.panX, panY: options.panY })
+    if (marks.above !== '') {
+      const pinned = moving ? [] : stickyCards(layout, options.panY)
+      const first = pinned[0]
+      const words = ` ${marks.above} `
+      const inside = first !== undefined && first.w >= words.length + 16
+      if (!first) put(options.panX, options.panY, ' '.repeat(width), 0)
+      for (const card of pinned) drawTop(card, card.x, options.panY, toneOf(card), card === first && inside ? words.length + 1 : 0)
+      if (first && inside) put(first.x + first.w - 2 - words.length, options.panY, words, subtle)
+      else if (!first) put(options.panX + 1, options.panY, marks.above, subtle)
+    }
+    if (marks.below !== '') {
+      put(options.panX, options.panY + height - 1, ' '.repeat(width), 0)
+      put(options.panX + 1, options.panY + height - 1, marks.below, subtle)
+    }
+    // Sideways: one glyph in the edge column, on the empty cell nearest mid-height, so nothing drawn is written over.
+    const side = look({ color: 'subtle', bold: true })
+    const free = (column: number): number | undefined => {
+      for (let away = 0; away < height; away++) {
+        for (const row of [Math.floor(height / 2) - away, Math.floor(height / 2) + away]) {
+          // Not on the first or last row: those say what is above and below.
+          if (row >= 1 && row < height - 1 && chars[row]?.[column] === ' ' && looks[row]?.[column] === 0) return row
+        }
+      }
+      return undefined
+    }
+    const leftRow = marks.left ? free(0) : undefined
+    const rightRow = marks.right ? free(width - 1) : undefined
+    if (leftRow !== undefined) put(options.panX, options.panY + leftRow, '◀', side)
+    if (rightRow !== undefined) put(options.panX + width - 1, options.panY + rightRow, '▶', side)
   }
 
   return chars.map((line, row) => {

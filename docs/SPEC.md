@@ -234,30 +234,70 @@ The test kit checks the tree a hook returns, not the surface's paint.
 
 ## Flow board (replaces the designer's tree view)
 
-The tree showed containment; a workflow is flow. The designer now draws the design as a board of cards. Three pure modules: `src/ui/board-layout.ts` (cells), `board-paint.ts` (styled spans), `board-model.ts` (props, messages, the Client's reducer). `hooks/canvas.tsx` is the Client.
+The tree showed containment; a workflow is flow. The designer draws the design as a board of cards. Three pure modules: `src/ui/board-layout.ts` (cells), `board-paint.ts` (styled spans), `board-model.ts` (props, messages, the Client's reducer). `hooks/canvas.tsx` is the Client. The docked pane (narrow, tall, flowing top to bottom) is the main view; inline (wide, short, left to right) is the other.
+
+```
+│ ╭── n4 pipeline ×n · deep read · each: deduped sources ─────────── ▲ 1 more above ─╮
+│ │   │  +                                                                           │
+│ │ ┏━▼ n5 agent ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ │
+│ │ ┃ read source                                                                  ┃ │
+│ │ ┃ One reader per source.                                                       ┃ │
+│ │ ┃ out: { claims: [{ claim, quote, confidence }] }                              ┃ │
+│ │ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ edit ━ del ━┛ │
+│ │   │  +                                                                           │
+│ │ ╭─▼ n1 sweep ×4 · multi-modal sweep · each: search angles: by container, by c… ╮ │
+│ │ │  + add first block                                                           │ │
+│ │ ╰──────────────────────────────────────────────────────────────────────────────╯ │
+│ │  ╰────────────────────────────────────────────────────────────────────────────╯  │
+│ │   ╰──────────────────────────────────────────────────────────────────────────╯   │
+│ ╰─ + ──────────────────────────────────────────────────────────────────────────────╯
+│  ╰────────────────────────────────────────────────────────────────────────────────╯
+│   ╰──────────────────────────────────────────────────────────────────────────────╯
+│   ║
+│ ╭─▼ n7 critic ─────────────────────────────────────────────────────────────────────╮
+```
 
 **Layout rules**
-- One model, two orientations: `horizontal` (flow left to right) when the pane is inline, `vertical` (top to bottom) when docked. Inline falls back to vertical only when the horizontal board is taller than the room and the vertical one fits the columns.
-- Leaf = a bordered card, 4 rows, 16 to 30 columns (20 minimum with a run): `id type ×N` on the top border, title, then knobs (or the prompt's first words, which never widen the card) or the run's status.
-- Container = a box around its children, its title after ` · ` in the header, its knobs or run sum on the bottom border. `pipeline`, `loop`, `loop-until-dry` and the top level are **chains**: children along the main axis, an edge and a `+` in each gap. `parallel`, `sweep`, `branch` are **stacks**: children across it, no edges, one `+` at the end.
-- Edge kind (derived, not stored): inside a `pipeline` always stream (`─▶`). Elsewhere barrier (`═▶`) when the source yields many results (a `fanout` or `votes` knob, or a pipeline, parallel, sweep or judge-panel), else stream. Vertical glyphs: `│▼`, `║▼`.
-- Fan-out: `×N` from a leading count in `fanout` or from `votes`, `×n` for a fan-out with no count; plus a `▒` column right of the card.
-- Type accents are theme keys (`ACCENT` in `theme.ts`); `claude` is the selection, `success`/`error` run outcomes. The selected card has a heavy border.
-- Slots: every list has a slot per insertion index. Those with a `+` take clicks; before the first card and between stacked cards a slot only takes a drop.
-- The region is as tall as the board plus one legend line, up to the pane's room; past that it pans (drag the background; the selection is scrolled into view; a card held at the edge pans). No wheel: `ClientPointerEvent` has none.
+- One model, two orientations: `horizontal` when the pane is inline, `vertical` when docked. Inline falls back to vertical only when the horizontal board is taller than the pane at rest and the vertical one fits the columns. The direction never depends on the selection or on the inspector opening (`turnRoom`).
+- **Vertical: cards fill the width.** Every card is as wide as its list (`width`, the pane's columns, at most `BOARD_MAX_W` 100); a container's children are 4 columns narrower. Branches of a `parallel`/`sweep`/`branch` stand side by side and share the width down to `BRANCH_MIN_W` 18; past that the box grows and the board pans sideways.
+- **Horizontal:** a card is as wide as its words (16 to 30; 20 minimum with a run); the selected one grows to `EXPANDED_W` 40 so its notes can wrap.
+- **A card's text:** the title, then the block's notes (with none, its prompt): two lines when vertical, one when horizontal, the last ending in `…`. Heights vary; a card with no text is three rows when vertical.
+- **The selected card expands:** all its notes word-wrapped, up to `expandRows(orientation, room)` rows (a third of the board's rows, 3 to 10; horizontal 2 to 4), then `… N more lines`, then one line of knobs (`low · 3 votes · out: <schema>`). Horizontal has no row to spare: the last note line ends in `…` and the knobs stay on the border. A selected container says its notes above its children. Growth is tweened with the cards' slide (`motionH` beside `motionX`/`motionY`), and the window scrolls so the whole card shows with a cell to spare on each side (`revealPadded`).
+- **Bottom border:** a leaf's knobs (model, effort, isolation, votes, `until`, and `each: …` for a leaf that fans out); with a run, its status instead. A container's knobs and `out: <schema knob>`.
+- **Container wording:** header `id type ×N · title · each: <fanout knob without its count>`; `out:` is the `schema` knob. No new fields. The title keeps at least half the header's room; both are cut with `…`.
+- Container = a box around its children. `pipeline`, `loop`, `loop-until-dry` and the top level are **chains**; `parallel`, `sweep`, `branch` are **stacks** (no edges between children).
+- **Connectors:** vertical, one row between two stacked siblings and nothing else: `│` (each result handed on) or `║` (barrier), the head `▼` on the next card's top border (`╭─▼ n6 …`), always two columns in from the list's left edge. Horizontal keeps `─▶` / `═▶`. Edge kind is derived: inside a `pipeline` always stream; elsewhere barrier when the source yields many results.
+- **Fan-out:** `×N` in the header (`×n` with no count) and bottom borders stacked under the box, each a column in: one more for two, two for three or more. No shade column. Both orientations. The rows are outside the card's own (`card.stack`).
+- **Compact (`z`):** every leaf that is not selected is one row, `╶── n3 agent · review ───╴` (the run's count at its right end); containers keep their boxes, the selected card stays expanded.
+- **Slots:** every list has a slot per insertion index. Its `+` is drawn only (`slotVisible`) before and after the selected card, at the end of the list the selection is in, at the end of the selected container's own list, at the end of the top level, and in an empty container. Every other `+` shows while the pointer is on it (the Client keeps `hover`) and takes a click either way; all slots take a drop. Where it stands says what it adds to: between two cards on the connector's row, three cells right of the line; **the end of a container's list on that container's bottom border** (`╰─ + ──`); the end of the top level on a row of its own (`+ add block`); an empty container holds one `+ add first block` row. Before the first card of a list a slot only takes a drop.
+- **Past the window:** the first row says `▲ N more above`, the last `▼ N more below` (N blocks wholly out of view; without N when only part of one is). Sideways a `◀`/`▶` on the empty cell of the edge column nearest mid-height. When a container's header is scrolled off and its body shows, its header is drawn on the first row (sticky, the innermost container; `stickyCards`), carrying the `▲` words.
+- **Colour:** each type has its accent (`ACCENT` in `theme.ts`); none is dim (`code` is `ide`). Selection is shape: heavy border, bold header and title, in the type's own colour. `claude` marks only what can be pressed (`edit`, `del`, a `+` in use, a card in hand). `inactive` is a block a finished run never reached, and a card lifted by a drag.
+- The region is as tall as the board up to the pane's room; past that it pans (drag the background; the selection is scrolled into view; a card held at the edge pans).
 - Agents no block claims are one `unmapped ×N` card after the design.
 
+**Pane chrome**
+- Header row, the board, **one key row**, the inspector. No legend row, no file row: the legend and the design file's path are in the help card (`c`). While a card is dragged, what a release does is said beside it (`n6 critic · drop into n2`).
+- Key row: `h: ← j: ↓ k: ↑ l: → a: add i: in x: del g: grab e: edit z: compact c: ? r: run`, 78 cells. A Button takes one hotkey, so the four directions are four Buttons (`hjkl: move` is not possible). The row wraps where the pane is narrower; its rows are counted (`wrapRows`).
+- **Inspector, docked:** headline, lints, the agents of a run, `title` and `notes` fields, then the notes word-wrapped under the field (bounded by `inspectorNoteRows`, 2 to 8 rows, with `… N more lines`), the knob pickers. The board keeps at least 55% of the pane's rows.
+- **Inspector, inline:** one line (`n4 · verify · title — notes…`) until a field is being typed in (`designUi.editing`: set by `e`, by `edit` on the card, or by the ring landing on a field; cleared when the field is sent, the selection changes, another key comes, or the person moves the ring off). While open the board shrinks, never turns.
+
 **Editing model**
-- Single source of truth: selection, grab, picker place and the delete question live in `designUi` (hooks). The Client keeps only pan, a drag in flight and card motion, so `rev` and the Client-side selection are gone.
+- Single source of truth: selection, grab, picker place, the delete question, `compact` and `editing` live in `designUi` (hooks). The Client keeps only pan, a drag in flight, the hovered slot and card motion.
 - Messages: `select`, `move {id, to}`, `addAt {at}`, `remove {id}`, `edit {id}`, `key {op, orientation}`. One per input.
-- Click a card: select. Click a `+`: the hooks-tree type picker opens for that place (all 12 types as Buttons, the field filters). Drag: the card is drawn dashed where it stood, a bar marks the nearest slot within reach, release posts one `move`; no slot near, off the board, or its own place cancels.
+- Click a card: select. Click a `+`: the hooks-tree type picker opens for that place. Drag: the card is drawn dashed where it stood, a bar marks the nearest slot within reach, release posts one `move`; no slot near, off the board, or its own place cancels.
 - The selected card's bottom border carries `edit` and `del`; `del` on a container with children turns into `delete all?` and needs a second click.
-- Keys (toolbar Buttons `h j k l a i x g e c r`, or the same keys and the arrows once the board was clicked): along the sibling axis to the previous or next block (before the first: the container; after the last: what follows the container on that axis); across it, forward into a container, backward out. With a block grabbed the direction keys call `moveBy` ±1.
-- Run overlay: status glyph, `settled/total`, `N✗` failures and tokens on each card (containers sum their children, on the bottom border); never-reached blocks dim with `not run`. While running: no `+`, no `edit`/`del`, a press only selects or pans. The selected block's agents are listed in the inspector (no more per-row expand, `o`, or `runUi` in `designUi`).
+- **One key model.** The letters `h j k l a i x g e z c r` do the same whether the toolbar's Buttons or the clicked board hold the keyboard (`KEY_OPS` mirrors the toolbar; a kit test drives both and compares the state after every key). `e` and a `+` from the board first take the keyboard back for the pane (`$.ui.open` with `focus`), then move the ring to the field. Not identical, by the engine: the arrows (on the board they move the selection; on the toolbar they move the focus ring), Enter (edit on the board; on the toolbar it presses the Button under the ring, which rests on `edit`, so the same until the person moves the ring), Escape (on the board it lets go of a grab or the picker; elsewhere the engine hands the keys to the prompt).
+- Along the sibling axis the direction keys go to the previous or next block; across it, forward into a container, backward out. With a block grabbed they call `moveBy` ±1.
+- Run overlay: status glyph, `settled/total`, `N✗` failures and tokens on each card's bottom border (containers sum their children); never-reached blocks dim with `not run`. While running: no `+`, no `edit`/`del`, a press only selects or pans. The selected block's agents are listed in the inspector.
 
 **Findings**
 - Drawn by cell: each board row is a `Box` row of `Text` spans. Nested bordered Boxes cannot put a title on a border, draw an edge between two boxes, or pan. A `Text` nested in a `Text` cannot start a hover group, hence sibling spans.
 - A tree is refused past 100,000 characters: `paintWeight` estimates it and the board repaints without colours past 70,000.
-- `rows`/`columns` on `$.ui.open` are requests: 28 rows were asked and a 50-row terminal gave `scroll.bodyRows` 14, so the board is sized from `bodyRows` and keeps at least 9 rows; the inspector's lower fields scroll.
+- `rows`/`columns` on `$.ui.open` are requests: 28 rows were asked and a 50-row terminal gave `scroll.bodyRows` 14 inline. A dock's width the person dragged is kept and wins over the request (86 was asked, the kept 72 was given until the border was dragged).
+- `Input` has no multi-line prop (`InputProps`: key, label, placeholder, value, submitLabel, autoFocus, onInput, onSubmit). In real paint a **focused** field wraps its text over as many rows as it takes; at rest it is one line cut with `…` (with an empty row under it when the text is much longer). So notes are typed in the one field, which wraps while typed in, and shown wrapped under it at rest; the pane reserves rows for both (`inspectorTyping`, `inspectorNotes`).
+- A pointer `move` with no button reaches `onPointer` (tmux: SGR code 35): that is how a hidden `+` shows under the pointer. One `setState` per change of slot, none while the pointer stays on it.
+- `$.ui.open({ focus: true })` on the open pane takes the keyboard back from a clicked Client; `$.ui.focus` then lands on a field. A `ui.focus` hook sees the ring move (`e.element`, `e.origin.kind`).
+- A hot reload of the plugin hands the keyboard to the prompt.
 - A string sent to a focused Client in one burst arrives as a single paste key and is ignored; Escape first hands the keys back to the prompt.
 - Text measures by code unit: a title with wide or combined characters misaligns its card.
+- No wheel reaches a Client (`ClientPointerEvent` has none). The pane's own `ui.scroll` event carries wheel ticks; panning the board from it is not built.

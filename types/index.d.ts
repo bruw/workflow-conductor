@@ -34,6 +34,8 @@ export type ConductorDesignUi = {
   grabbedId: string | null
   picker: { at: { parentId?: string; index: number }; query: string } | null
   confirmId: string | null
+  compact: boolean
+  editing: boolean
 }
 
 declare module 'claude-code' {

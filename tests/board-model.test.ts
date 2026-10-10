@@ -4,7 +4,7 @@ import type { Design } from '../src/design/model'
 import { review } from '../src/design/templates'
 import { layoutBoard } from '../src/ui/board-layout'
 import type { BoardCard, BoardLayout } from '../src/ui/board-layout'
-import { DRAG_SCROLL_MS, boardMoving, boardOffsets, boardReduce, boardTicking, dragScroll, dragTarget, dragging, initialBoard, legendLine, moveBoard, parseBoardMessage, reveal, syncBoard, tickBoard } from '../src/ui/board-model'
+import { DRAG_SCROLL_MS, boardMoving, boardOffsets, BOARD_OPS, KEY_OPS, LEGEND, boardLayout, boardReduce, boardTicking, dragHint, dragScroll, dragTarget, dragging, initialBoard, moveBoard, parseBoardMessage, reveal, revealPadded, syncBoard, tickBoard } from '../src/ui/board-model'
 import type { BoardContext, BoardInput, BoardMessage, BoardState } from '../src/ui/board-model'
 import { affordances } from '../src/ui/board-paint'
 import { FRAME_MS, TWEEN_MS } from '../src/ui/tween'
@@ -79,7 +79,7 @@ test('dragging a card to a slot posts one move; nothing moves before the release
   expect(held.posts).toEqual([{ kind: 'select', id: 'n5' }])
   expect(dragging(held.state)).toBe('n5')
   expect(dragTarget(held.state, context())?.to).toEqual({ index: 1 })
-  expect(legendLine(held.state, context())).toBe('release to drop n5')
+  expect(dragHint(held.state, context())).toBe('drop here')
   const dropped = run([up(n1.w + 1, 1)], context(), held.state)
   expect(dropped.posts).toEqual([{ kind: 'move', id: 'n5', to: { index: 1 } }])
   expect(dropped.state.drag).toBe(null)
@@ -89,7 +89,7 @@ test('a card is dragged into a container and out of one', () => {
   const n4 = card('n4')
   const n5 = card('n5')
   const into = run([down(2, 1), move(n4.x - 2, n4.y + 1)])
-  expect(legendLine(into.state, context())).toBe('release to drop n1 into n2')
+  expect(dragHint(into.state, context())).toBe('drop into n2')
   expect(run([up(n4.x - 2, n4.y + 1)], context(), into.state).posts).toEqual([{ kind: 'move', id: 'n1', to: { parentId: 'n2', index: 1 } }])
   const out = run([down(n4.x + 3, n4.y + 1), move(n5.x + n5.w + 1, 1), up(n5.x + n5.w + 1, 1)])
   expect(out.posts).toEqual([
@@ -101,13 +101,14 @@ test('a card is dragged into a container and out of one', () => {
 test('a drop outside any slot cancels: far from one, off the board, or back where the card was', () => {
   const far = run([down(2, 1), move(4, 5)], context({ rows: H.height + 20, layout: { ...H, height: H.height + 20 } }))
   const lost = run([move(4, H.height + 12)], context({ rows: H.height + 20 }), far.state)
-  expect(legendLine(lost.state, context({ rows: H.height + 20 }))).toBe('no slot here · release to cancel')
+  expect(dragHint(lost.state, context({ rows: H.height + 20 }))).toBe('no slot here: release cancels')
   expect(run([up(4, H.height + 12)], context({ rows: H.height + 20 }), lost.state).posts).toEqual([])
   // Past the window's edge: the instance still gets the moves, the drop cancels.
   expect(run([down(2, 1), move(30, -3), up(30, -3)]).posts).toEqual([])
   // Next to itself.
   const home = run([down(2, 1), move(card('n1').w + 1, 1)])
-  expect(legendLine(home.state, context())).toBe('n1 is already here · release to leave it')
+  expect(dragHint(home.state, context())).toBe('already here')
+  expect(dragHint(ready(), context())).toBe('')
   expect(run([up(card('n1').w + 1, 1)], context(), home.state).posts).toEqual([])
   // A key lets go of the card; enter and leave change nothing.
   const held = run([down(2, 1), move(40, 1), { type: 'pointer', event: 'leave', x: 40, y: 1 }])
@@ -122,7 +123,6 @@ test('locked: a press selects and pans, and never lifts a card', () => {
   expect(pressed.posts).toEqual([{ kind: 'select', id: 'n3' }])
   expect(dragging(pressed.state)).toBe(null)
   expect(pressed.state.panX).toBe(8)
-  expect(legendLine(pressed.state, ctx)).not.toMatch(/\+ add|drag a card/)
   // A run that starts takes a held card out of the hand.
   const held = run([down(2, 1), move(30, 1)])
   expect(syncBoard(held.state, context({ locked: true })).drag).toBe(null)
@@ -139,9 +139,8 @@ test('the background pans a board larger than its window, and stops at the board
   expect(dragged.state.panX).toBe(10)
   expect(run([move(-500, -500)], ctx, dragged.state).state).toMatchObject({ panX: H.width - 40, panY: H.height - 4 })
   expect(run([move(500, 500), up(500, 500)], ctx, dragged.state).state).toMatchObject({ panX: 0, panY: 0, drag: null })
-  expect(legendLine(dragged.state, ctx)).toMatch(/◀▼▶ more: drag the background$/)
-  expect(legendLine(ready(), context())).toBe('─▶ hands each result on · ═▶ waits for all · + add · drag a card to move it')
-  expect(legendLine(ready(), context({ layout: layoutBoard(design, { orientation: 'vertical' }), rows: 99 }))).toMatch(/^│▼ hands each result on · ║▼ waits for all/)
+  // What the marks mean is said in the help card, not on the board.
+  expect(LEGEND.join('\n')).toMatch(/│ ─▶ {2}hands each result on[\s\S]*║ ═▶ {2}waits for all[\s\S]*\+ adds a block[\s\S]*drag a card/)
 })
 
 test('the pan follows the selection, as little as it must, and leaves a hand-made pan alone', () => {
@@ -152,7 +151,8 @@ test('the pan follows the selection, as little as it must, and leaves a hand-mad
   const n5 = card('n5')
   const ctx = context({ columns: 40, rows: 4, selectedId: 'n5' })
   const shown = syncBoard(initialBoard(), ctx)
-  expect(shown.panX).toBe(n5.x + n5.w - 40)
+  // A cell to spare past the card, where the board goes on.
+  expect(shown.panX).toBe(n5.x + n5.w + 1 - 40)
   // Nothing new to follow: the very same state comes back.
   expect(syncBoard(shown, ctx)).toBe(shown)
   // The person pans away: the selection has not changed, so the pan stays.
@@ -170,12 +170,75 @@ test('the pan follows the selection, as little as it must, and leaves a hand-mad
 test('keys become ops, with the orientation the arrows are meant in', () => {
   const ops = (name: string) => run([key(name)]).posts.map(post => (post.kind === 'key' ? post.op : post.kind))
   expect(['left', 'h', 'right', 'l', 'up', 'k', 'down', 'j'].flatMap(ops)).toEqual(['left', 'left', 'right', 'right', 'up', 'up', 'down', 'down'])
-  expect(['a', 'i', 'x', 'delete', 'g', ' ', 'return', 'e', '?', 'c'].flatMap(ops)).toEqual(['addAfter', 'addInside', 'remove', 'remove', 'grab', 'grab', 'edit', 'edit', 'card', 'card'])
-  expect(['q', 'tab', 'Z'].flatMap(ops)).toEqual([])
+  // The toolbar's letters, letter for letter; Enter is edit, where the toolbar's ring rests.
+  expect(['a', 'i', 'x', 'g', 'e', 'z', 'c', 'r', 'return'].flatMap(ops)).toEqual(['addAfter', 'addInside', 'remove', 'grab', 'edit', 'compact', 'card', 'run', 'edit'])
+  expect(ops('escape')).toEqual(['cancel'])
+  // Keys the toolbar has no Button for do nothing on the board either.
+  expect(['q', 'tab', 'Z', ' ', 'space', 'delete', '?'].flatMap(ops)).toEqual([])
   expect(run([key('x', { ctrl: true })]).posts).toEqual([])
+  expect(Object.values(KEY_OPS).every(op => BOARD_OPS.includes(op))).toBe(true)
   expect(run([key('down')])).toMatchObject({ posts: [{ kind: 'key', op: 'down', orientation: 'horizontal' }] })
   const V = layoutBoard(design, { orientation: 'vertical' })
   expect(run([key('down')], context({ layout: V })).posts).toEqual([{ kind: 'key', op: 'down', orientation: 'vertical' }])
+})
+
+test('the pointer over a hidden + shows it: the hover is kept until the pointer leaves it', () => {
+  const V = layoutBoard(design, { orientation: 'vertical', width: 60 })
+  const ctx = context({ layout: V, columns: 60, rows: V.height, selectedId: 'n5' })
+  const gap = V.slots.find(slot => slot.place.parentId === 'n2' && slot.place.index === 1)
+  const at = gap?.mark ?? { x: -1, y: -1, label: '' }
+  const over = run([move(at.x, at.y)], ctx)
+  expect(over.state.hover).toEqual({ parentId: 'n2', index: 1 })
+  expect(over.posts).toEqual([])
+  // Another move on the same slot changes nothing: the very same state, so nothing is redrawn.
+  const start = over.state
+  expect(boardReduce(start, move(at.x + 1, at.y), ctx).state).toBe(start)
+  // Off it, or out of the region: gone.
+  expect(run([move(at.x + 9, at.y)], ctx, start).state.hover).toBe(null)
+  expect(run([{ type: 'pointer', event: 'leave', x: at.x, y: at.y }], ctx, start).state.hover).toBe(null)
+  // A click there opens the picker for that place, shown or not.
+  expect(run([down(at.x, at.y)], ctx, start)).toMatchObject({ posts: [{ kind: 'addAt', at: { parentId: 'n2', index: 1 } }], state: { hover: null } })
+  expect(run([down(at.x, at.y)], ctx).posts).toEqual([{ kind: 'addAt', at: { parentId: 'n2', index: 1 } }])
+  // Locked, nothing hovers; a slot that is gone lets go of its hover.
+  expect(run([move(at.x, at.y)], { ...ctx, locked: true }).state.hover).toBe(null)
+  expect(syncBoard(start, { ...ctx, locked: true }).hover).toBe(null)
+  expect(syncBoard({ ...start, hover: { parentId: 'gone', index: 0 } }, ctx).hover).toBe(null)
+  expect(syncBoard(start, ctx).hover).toEqual({ parentId: 'n2', index: 1 })
+})
+
+test('the selected card grows over a few frames, what is under it slides, and the window keeps all of it in view', () => {
+  const props = { design, orientation: 'vertical' as const, columns: 60, room: 14, compact: false }
+  const before = boardLayout({ ...props, selectedId: 'n1' })
+  const after = boardLayout({ ...props, selectedId: 'n4' })
+  const [was, now] = [card('n4', before), card('n4', after)]
+  expect(now.h).toBeGreaterThan(was.h)
+  // The window follows the selection with a row to spare above and below, for the words on its edges.
+  const ctx = (layout: BoardLayout, selectedId: string): BoardContext => ({ layout, columns: 60, rows: 14, selectedId })
+  let state = moveBoard(syncBoard(initialBoard(), ctx(before, 'n1')), before)
+  expect(state.panY).toBe(0)
+  state = syncBoard(state, ctx(after, 'n4'))
+  expect(state.panY).toBe(now.y + now.h + now.stack + 1 - 14)
+  expect(state.panY).toBeLessThanOrEqual(now.y - 1)
+  // The card starts at its old height and its old place, and both ease to the new ones.
+  state = { ...moveBoard(state, after), ticking: true }
+  expect(boardMoving(state)).toBe(true)
+  expect(boardOffsets(state).n4).toEqual({ dx: 0, dy: was.y - now.y, dh: was.h - now.h })
+  expect(boardOffsets(state).n5).toEqual({ dx: 0, dy: card('n5', before).y - card('n5', after).y, dh: 0 })
+  expect(boardOffsets(state).n1?.dh).toBe(card('n1', before).h - card('n1', after).h)
+  let frames = 0
+  while (state.ticking && frames < 100) {
+    state = tickBoard(state, ctx(after, 'n4'))
+    frames++
+  }
+  expect(frames * FRAME_MS).toBeLessThanOrEqual(TWEEN_MS + FRAME_MS)
+  expect(boardOffsets(state)).toEqual({})
+  expect(moveBoard(state, after)).toBe(state)
+  // A card taller than the window with its margins shows its top; one taller than the window, its first row.
+  expect(revealPadded(0, 20, 5, 10, 1)).toBe(16)
+  expect(revealPadded(30, 20, 5, 10, 1)).toBe(19)
+  expect(revealPadded(0, 0, 5, 10, 1)).toBe(0)
+  expect(revealPadded(0, 20, 9, 10, 1)).toBe(19)
+  expect(revealPadded(0, 20, 12, 10, 1)).toBe(20)
 })
 
 test('cards slide to a new place over a few frames, and the ticker flag drops when they have arrived', () => {
@@ -238,7 +301,9 @@ test('posted data is read back as a message, or refused', () => {
   expect(parseBoardMessage({ kind: 'edit', id: 'n1' })).toEqual({ kind: 'edit', id: 'n1' })
   expect(parseBoardMessage({ kind: 'key', op: 'grab', orientation: 'vertical' })).toEqual({ kind: 'key', op: 'grab', orientation: 'vertical' })
   expect(parseBoardMessage({ kind: 'key', op: 'left' })).toEqual({ kind: 'key', op: 'left', orientation: 'horizontal' })
-  for (const junk of [null, 3, 'select', [], {}, { kind: 'select' }, { kind: 'move', id: 'n1' }, { kind: 'move', id: 'n1', to: { index: -1 } }, { kind: 'addAt', at: { index: 1.5 } }, { kind: 'key', op: 'explode' }, { kind: 'remove' }, { kind: 'nope', id: 'n1' }]) {
+  expect(parseBoardMessage({ kind: 'key', op: 'compact' })).toEqual({ kind: 'key', op: 'compact', orientation: 'horizontal' })
+  expect(parseBoardMessage({ kind: 'key', op: 'run', orientation: 'vertical' })).toEqual({ kind: 'key', op: 'run', orientation: 'vertical' })
+  for (const junk of [null, 3, 'select', [], {}, { kind: 'select' }, { kind: 'move', id: 'n1' }, { kind: 'move', id: 'n1', to: { index: -1 } }, { kind: 'addAt', at: { index: 1.5 } }, { kind: 'key', op: 'explode' }, { kind: 'key', op: 'space' }, { kind: 'remove' }, { kind: 'nope', id: 'n1' }]) {
     expect(parseBoardMessage(junk)).toBe(undefined)
   }
 })

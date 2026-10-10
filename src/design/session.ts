@@ -4,9 +4,8 @@
 // saves. Pure TypeScript: no `$`, no engine imports.
 
 import type { AgentStatus, NodeRun, RunState } from '../run/events'
-import { UNMAPPED_ID, chooseOrientation, layoutBoard, navigate } from '../ui/board-layout'
+import { UNMAPPED_ID, cappedLines, chooseOrientation, clip, expandRows, layoutBoard, navigate, wrapText } from '../ui/board-layout'
 import type { Orientation } from '../ui/board-layout'
-import { LEGEND_ROWS } from '../ui/board-model'
 import type { BoardMessage, BoardOp, BoardProps } from '../ui/board-model'
 import type { RunOverlay } from '../ui/board-paint'
 import { lint } from './lints'
@@ -48,6 +47,10 @@ export type DesignUi = {
   picker: { at: Place; query: string } | null
   /** The container a first delete asked about; a second one on it removes it. */
   confirmId: string | null
+  /** Compact mode: every card that is not selected is one row. */
+  compact: boolean
+  /** The selected block's fields are being typed in: an inline pane shows them only meanwhile. */
+  editing: boolean
 }
 
 /** What stands in the way of an edit, and what an arrow key needs to know. */
@@ -70,7 +73,7 @@ export type ToolbarOp = BoardOp
 export type Step = { design: Design | null; ui: DesignUi; changed: boolean }
 
 export function initialUi(): DesignUi {
-  return { name: DEFAULT_DESIGN_NAME, status: 'closed', error: null, selectedId: null, showCard: false, notice: null, grabbedId: null, picker: null, confirmId: null }
+  return { name: DEFAULT_DESIGN_NAME, status: 'closed', error: null, selectedId: null, showCard: false, notice: null, grabbedId: null, picker: null, confirmId: null, compact: false, editing: false }
 }
 
 /** Whether `run` is laid over the design the pane shows: it was started from that design and has begun. */
@@ -158,12 +161,14 @@ export function applyMessage(design: Design | null, ui: DesignUi, message: Board
   if (message.kind === 'select') {
     const strays = message.id === UNMAPPED_ID && (context.run?.unmapped.length ?? 0) > 0
     const selectedId = message.id !== null && (strays || findNode(design, message.id)) ? message.id : null
-    return { design, ui: { ...ui, selectedId, confirmId: null, grabbedId: ui.grabbedId === selectedId ? ui.grabbedId : null }, changed: false }
+    return { design, ui: { ...ui, selectedId, confirmId: null, editing: ui.editing && selectedId === ui.selectedId, grabbedId: ui.grabbedId === selectedId ? ui.grabbedId : null }, changed: false }
   }
-  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, grabbedId: null, confirmId: null, picker: null }, changed: false }
+  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, grabbedId: null, confirmId: null, picker: null, editing: false }, changed: false }
   switch (message.kind) {
-    case 'edit':
-      return { design, ui: { ...ui, selectedId: findNode(design, message.id) ? message.id : ui.selectedId, confirmId: null }, changed: false }
+    case 'edit': {
+      const found = findNode(design, message.id) !== undefined
+      return { design, ui: { ...ui, selectedId: found ? message.id : ui.selectedId, confirmId: null, editing: found || ui.editing }, changed: false }
+    }
     case 'move':
       return settle(design, { ...ui, confirmId: null, grabbedId: null }, moveNode(design, message.id, message.to), message.id)
     case 'addAt': {
@@ -183,8 +188,9 @@ export function applyMessage(design: Design | null, ui: DesignUi, message: Board
 /** An inspector edit of one node. */
 export function patchNode(design: Design | null, ui: DesignUi, id: string, patch: NodePatch, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
-  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE }, changed: false }
-  return settle(design, ui, updateNode(design, id, patch), ui.selectedId)
+  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, editing: false }, changed: false }
+  // A field was sent: the typing is over.
+  return settle(design, { ...ui, editing: false }, updateNode(design, id, patch), ui.selectedId)
 }
 
 /** Where `a` puts a block: after the selection, as its sibling; at the end with none. */
@@ -216,7 +222,7 @@ function afterRemoval(design: Design, id: string): string | null {
  */
 export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
-  const calm: DesignUi = { ...ui, confirmId: null, notice: null }
+  const calm: DesignUi = { ...ui, confirmId: null, notice: null, editing: false }
   const node = ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
   if (context.locked && (op === 'grab' || op === 'addAfter' || op === 'addInside' || op === 'remove' || op === 'edit')) {
     return { design, ui: { ...calm, grabbedId: null, picker: null, notice: LOCK_NOTICE }, changed: false }
@@ -252,9 +258,14 @@ export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp, cont
       return settle(design, { ...calm, grabbedId: null }, removeNode(design, node.id), afterRemoval(design, node.id))
     }
     case 'edit':
-      return { design, ui: node ? calm : { ...calm, notice: 'edit: select a block first' }, changed: false }
+      return { design, ui: node ? { ...calm, editing: true } : { ...calm, notice: 'edit: select a block first' }, changed: false }
+    case 'compact':
+      return { design, ui: { ...calm, compact: !ui.compact }, changed: false }
     case 'card':
       return { design, ui: { ...calm, showCard: !ui.showCard }, changed: false }
+    case 'run':
+      // The hooks module puts the handoff command in the prompt; nothing changes here.
+      return { design, ui: calm, changed: false }
     case 'cancel':
       return { design, ui: { ...calm, grabbedId: null, picker: null }, changed: false }
   }
@@ -288,24 +299,34 @@ export function knobFields(type: NodeType): { model: boolean; effort: boolean; i
 export const INHERIT = 'inherit'
 export const MODEL_CHOICES: readonly string[] = ['haiku', 'sonnet', 'opus']
 
-/** How the board sits in the pane: which way it flows, and how many rows its region takes (legend included). */
-export type BoardView = { orientation: Orientation; columns: number; rows: number }
+/** How the board sits in the pane: which way it flows, how many rows its region takes, and the most it could have had. */
+export type BoardView = { orientation: Orientation; columns: number; rows: number; room: number }
 
-/** The room the board is sized for is never less than this: one leaf card and the legend. */
+/** The room the board is sized for is never less than this: one leaf card and a row to add under it. */
 export const BOARD_MIN_ROWS = 5
+
+/** What of the pane's state shapes the board: the run over it, the selected block (its card is taller), compact mode. */
+export type ViewState = {
+  run?: RunOverlay
+  selectedId?: string | null
+  compact?: boolean
+  /** The rows the flow's direction is decided by, when not `room`: an inline pane's board loses rows while a field is typed in, and must not turn for it. */
+  turnRoom?: number
+}
 
 /**
  * Sizes the board for the pane. A docked pane flows top to bottom, an inline one
  * left to right (unless that cannot fit the rows and top to bottom fits the
  * columns). The region is as tall as the board until that passes `room`; from
- * there it is `room` tall and the board pans inside it.
+ * there it is `room` tall and the board pans inside it. Which way it flows never
+ * depends on the selection or on the inspector opening: neither may turn the board.
  */
-export function boardView(design: Design, placement: 'dock' | 'inline', columns: number, room: number, run?: RunOverlay): BoardView {
-  const options = { run: run !== undefined, unmapped: run?.unmapped?.total ?? 0 }
+export function boardView(design: Design, placement: 'dock' | 'inline', columns: number, room: number, state: ViewState = {}): BoardView {
+  const options = { run: state.run !== undefined, unmapped: state.run?.unmapped?.total ?? 0, width: columns, compact: state.compact ?? false }
   const most = Math.max(BOARD_MIN_ROWS, room)
-  const orientation = chooseOrientation(design, placement === 'dock' ? 'vertical' : 'horizontal', columns, most - LEGEND_ROWS, options)
-  const { height } = layoutBoard(design, { ...options, orientation })
-  return { orientation, columns, rows: Math.min(most, height + LEGEND_ROWS) }
+  const orientation = chooseOrientation(design, placement === 'dock' ? 'vertical' : 'horizontal', columns, Math.max(BOARD_MIN_ROWS, state.turnRoom ?? room), options)
+  const { height } = layoutBoard(design, { ...options, orientation, selectedId: state.selectedId ?? null, noteRows: expandRows(orientation, most) })
+  return { orientation, columns, rows: Math.min(most, height), room: most }
 }
 
 /** What the board gets as props. */
@@ -320,9 +341,67 @@ export function boardProps(design: Design, ui: DesignUi, view: BoardView, run?: 
     confirmId: locked ? null : ui.confirmId,
     pickerAt: locked ? null : (ui.picker?.at ?? null),
     orientation: view.orientation,
+    compact: ui.compact,
     columns: view.columns,
     rows: view.rows,
+    room: view.room,
   }
   if (run) props.run = run
   return props
+}
+
+// ---------------------------------------------------------------------------
+// The inspector's shape
+
+/** The most rows of wrapped notes the inspector shows in a pane with `bodyRows` rows: the board keeps most of the height. */
+export function inspectorNoteRows(bodyRows: number): number {
+  return Math.max(2, Math.min(8, Math.floor(bodyRows / 6)))
+}
+
+/**
+ * The notes as the inspector shows them under the one-line field: word-wrapped
+ * to the pane, cut with a count of the lines left. Nothing when they fit the
+ * field's own line.
+ */
+export function inspectorNotes(notes: string, columns: number, bodyRows: number): { lines: string[]; more: number } {
+  const text = notes.trim()
+  // The field's line holds `notes: ` and the text.
+  if (text === '' || (text.length <= columns - 6 && !text.includes('\n'))) return { lines: [], more: 0 }
+  return cappedLines(text, Math.max(8, columns - 2), inspectorNoteRows(bodyRows))
+}
+
+/**
+ * Rows a focused notes field takes beyond its first: the engine wraps a focused
+ * field's text, so the board gives up the rows the saved notes fill and a few
+ * more to type into, within the same bound as the wrapped notes.
+ */
+export function inspectorTyping(notes: string, columns: number, bodyRows: number): number {
+  // The field's line holds `notes: ` before the text and the submit hint after it.
+  const rows = Math.max(1, wrapText(notes.trim(), Math.max(8, columns - 16)).length)
+  return Math.min(inspectorNoteRows(bodyRows), rows - 1 + 2)
+}
+
+/** The inspector as one line, for an inline pane: the block, its title, and how its notes start. */
+export function inspectorSummary(node: { id: string; type: string; title: string; notes?: string }, columns: number): string {
+  const head = `${node.id} · ${node.type} · ${node.title}`
+  const notes = (node.notes ?? '').replace(/\s+/g, ' ').trim()
+  return clip(notes === '' ? head : `${head} — ${notes}`, Math.max(8, columns))
+}
+
+/** An inline pane has few rows: its inspector is one line until a field is being typed in. */
+export function inspectorCollapsed(placement: 'dock' | 'inline', ui: Pick<DesignUi, 'editing'>): boolean {
+  return placement === 'inline' && !ui.editing
+}
+
+/** How many rows a wrapping row of items takes: `widths` in cells, `gap` cells between two, `columns` to a row. */
+export function wrapRows(widths: readonly number[], gap: number, columns: number): number {
+  let rows = 1
+  let used = 0
+  for (const cells of widths) {
+    if (used > 0 && used + gap + cells > columns) {
+      rows++
+      used = cells
+    } else used += (used > 0 ? gap : 0) + cells
+  }
+  return rows
 }

@@ -7,7 +7,8 @@ import { DESIGN_PANE_ID, DESIGN_PANE_TITLE, LOCK_NOTICE, RUN_KEYS_HINT, designFi
 import type { DesignUi } from '../src/design/session'
 import type { RunState } from '../src/run/events'
 import { REPLAY_MS } from '../src/run/tracker'
-import { UNMAPPED_ID, layoutBoard } from '../src/ui/board-layout'
+import { UNMAPPED_ID } from '../src/ui/board-layout'
+import { boardLayout } from '../src/ui/board-model'
 import type { BoardProps } from '../src/ui/board-model'
 import { PANE_ID } from '../src/ui/theme'
 
@@ -57,7 +58,7 @@ const world = (on: On): World => {
   return seen
 }
 
-// The board as drawn: one string per row, the legend last.
+// The board as drawn: one string per row.
 type Drawn = { children?: (Drawn | string)[] }
 const flat = (node: Drawn | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(flat).join(''))
 const screen = async (ui: { drawn: (query: { in: string }) => Promise<unknown> }): Promise<string[]> => ((await ui.drawn({ in: 'canvas' })) as Drawn).children?.map(flat) ?? []
@@ -98,22 +99,24 @@ for (const surface of SURFACES) {
     expect(JSON.stringify(props.run)).not.toMatch(/scout diff \d/)
 
     // Drawn on the cards: counts and tokens, the failure, the pipeline's sum on its border, the unmapped card.
-    const board = layoutBoard(seen.design ?? { version: 1, name: '', description: '', nodes: [] }, { orientation: 'vertical', run: true, unmapped: 2 })
-    const lines = await screen(ui)
+    const board = boardLayout(props)
+    const lines = (await screen(ui)).map(line => line.replace(/ +$/, ''))
     const all = lines.join('\n')
-    expect(lines[0]).toMatch(/^┏ n1 agent ━+┓$/)
-    expect(lines[2]).toMatch(/^┃ ✓ 3\/3 \d+\.\dk +┃$/)
-    expect(all).toMatch(/│ │ ✗ 2\/2 1✗ \d+\.\dk +│/)
-    expect(all).toMatch(/│ │ ✓ 3\/3 \d+\.\dk +│▒/)
-    expect(all).toMatch(/\n╰ ✗ 5\/5 1✗ \d+\.\dk ─+╯▒\n/)
-    expect(all).toMatch(/\n│ ✓ 4\/4 \d+\.\dk +│\n/)
-    expect(all).toMatch(/\n╭ unmapped ×2 ─+╮\n│ no block claims these │▒\n│ ✓ 2\/2 \d+\.\dk +│▒\n/)
+    expect(lines[0]).toMatch(/^┏━━ n1 agent ━+┓$/)
+    // Each card's count is on its bottom border, a container's sum on its own.
+    expect(all).toMatch(/\n┗ ✓ 3\/3 \d+\.\dk ━+ edit ━ del ━┛\n/)
+    expect(all).toMatch(/│ ╰ ✗ 2\/2 1✗ \d+\.\dk ─+╯ │/)
+    expect(all).toMatch(/│ ╰ ✓ 3\/3 \d+\.\dk ─+╯ │/)
+    expect(all).toMatch(/\n╰──── ✗ 5\/5 1✗ \d+\.\dk ─+╯\n/)
+    expect(all).toMatch(/\n╰ ✓ 4\/4 \d+\.\dk ─+╯\n/)
+    expect(all).toMatch(/\n╭── unmapped ×2 ─+╮\n│ no block claims these +│\n╰ ✓ 2\/2 \d+\.\dk ─+╯\n ╰─+╯$/)
+    expect(all).not.toMatch(/▒/)
     for (const line of lines) expect([...line].length).toBeLessThanOrEqual(PANE.bodyColumns)
     const failed = (await ui.findAll({ type: 'Text', in: 'canvas' })).filter(one => one.props.color === 'error').map(one => one.text)
     expect(failed).toHaveLength(2)
     expect(failed.every(text => /^ ?✗ \d\/\d 1✗/.test(text ?? ''))).toBe(true)
-    // The region is as tall as the board (unmapped card included) and its legend.
-    expect((await ui.find({ type: 'Client' }))?.props.height).toBe(board.height + 1)
+    // The region is as tall as the board (unmapped card included): no legend row under it.
+    expect((await ui.find({ type: 'Client' }))?.props.height).toBe(board.height)
 
     // The inspector lists the selected block's agents; the failed block's failure comes first.
     const agents = async () => (await ui.findAll({ type: 'Text' })).map(one => one.text ?? '').filter(AGENT_LINE)
@@ -193,11 +196,10 @@ for (const surface of SURFACES) {
     await ui.input({ key: 'design-title', text: 'renamed' })
     expect(seen.design?.nodes[0]?.title).toBe('scout diff')
     expect(seen.files.get(designFile(ROOT, NAME))).toBe(saved)
-    // The locked board offers nothing to edit: no +, no edit or del, and the legend says only what the edges mean.
+    // The locked board offers nothing to edit: no +, no edit or del; its edges still say how results pass.
     const drawn = await screen(ui)
-    expect(drawn.slice(0, -1).join('\n')).not.toMatch(/\+| edit | del /)
-    expect(drawn.at(-1)).toMatch(/^│▼ hands each result on · ║▼ waits for all/)
-    expect(drawn.at(-1)).not.toMatch(/drag a card/)
+    expect(drawn.join('\n')).not.toMatch(/\+| edit | del |hands each result|drag a card/)
+    expect(drawn.join('\n')).toMatch(/║/)
     // Selection still moves, by key and by click; a press on a card does not lift it.
     await ui.press({ key: 'key:down' })
     expect(seen.ui).toMatchObject({ selectedId: 'n2', notice: null })

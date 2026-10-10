@@ -6,9 +6,9 @@
 
 import type { Design } from '../design/model'
 import type { Place } from '../design/ops'
-import { cardAt, dropTarget, layoutBoard, slotAt } from './board-layout'
+import { cardAt, dropTarget, expandRows, layoutBoard, samePlace, slotAt } from './board-layout'
 import type { BoardLayout, DropTarget, Orientation } from './board-layout'
-import { EDGE_GLYPH, affordances } from './board-paint'
+import { affordances } from './board-paint'
 import type { RunOverlay } from './board-paint'
 import { FRAME_MS, motionActive, rowOffsets, settleMotion, stepMotion, stillMotion } from './tween'
 import type { Motion } from './tween'
@@ -17,9 +17,9 @@ import type { Motion } from './tween'
 // Props and messages
 
 /** What a key or a toolbar Button asks for. */
-export type BoardOp = 'left' | 'right' | 'up' | 'down' | 'grab' | 'addAfter' | 'addInside' | 'remove' | 'edit' | 'card' | 'cancel'
+export type BoardOp = 'left' | 'right' | 'up' | 'down' | 'grab' | 'addAfter' | 'addInside' | 'remove' | 'edit' | 'compact' | 'card' | 'run' | 'cancel'
 
-export const BOARD_OPS: readonly BoardOp[] = ['left', 'right', 'up', 'down', 'grab', 'addAfter', 'addInside', 'remove', 'edit', 'card', 'cancel']
+export const BOARD_OPS: readonly BoardOp[] = ['left', 'right', 'up', 'down', 'grab', 'addAfter', 'addInside', 'remove', 'edit', 'compact', 'card', 'run', 'cancel']
 
 /** Client → hooks module (surface.post → ui.message). One per input: two posts in a frame can drop one. */
 export type BoardMessage =
@@ -52,19 +52,27 @@ export type BoardProps = {
   /** The place the add picker is open for. */
   pickerAt: Place | null
   orientation: Orientation
-  /** The room the pane gives the board; `rows` counts the legend line. */
+  /** Every leaf that is not selected is drawn as one row. */
+  compact: boolean
+  /** The room the pane gives the board: its columns, the rows of its region, and the most rows it could have had. */
   columns: number
   rows: number
+  room: number
   /** The run of this design, drawn over its cards. */
   run?: RunOverlay
 }
 
-/** Rows of the board's region that are not the board: the legend. */
-export const LEGEND_ROWS = 1
-
 /** The layout the props describe: the hooks module sizes the region from the same call. */
-export function boardLayout(props: Pick<BoardProps, 'design' | 'orientation' | 'run'>): BoardLayout {
-  return layoutBoard(props.design, { orientation: props.orientation, run: props.run !== undefined, unmapped: props.run?.unmapped?.total ?? 0 })
+export function boardLayout(props: Pick<BoardProps, 'design' | 'orientation' | 'run' | 'columns' | 'room' | 'selectedId' | 'compact'>): BoardLayout {
+  return layoutBoard(props.design, {
+    orientation: props.orientation,
+    run: props.run !== undefined,
+    unmapped: props.run?.unmapped?.total ?? 0,
+    width: props.columns,
+    selectedId: props.selectedId,
+    compact: props.compact,
+    noteRows: expandRows(props.orientation, props.room),
+  })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -117,9 +125,12 @@ export type BoardState = {
   /** The selection the pan last made room for: the card's id and where it stood. */
   seen: string | null
   drag: BoardDrag | null
-  /** Where the cards were last drawn, and the ones still sliding to their place. */
+  /** The slot under a pointer no button holds: its `+` shows. */
+  hover: Place | null
+  /** Where the cards were last drawn and how tall, and the ones still sliding or growing. */
   motionX: Motion
   motionY: Motion
+  motionH: Motion
   /** The motion clock, in ms: moved on by the ticker, 0 while idle. */
   clock: number
   /** Whether the shared ticker runs. */
@@ -135,7 +146,7 @@ export type BoardInput = BoardKey | BoardPointer
 
 export type BoardContext = {
   layout: BoardLayout
-  /** The window, legend not counted. */
+  /** The window. */
   columns: number
   rows: number
   selectedId: string | null
@@ -147,7 +158,7 @@ export type BoardContext = {
 export type BoardResult = { state: BoardState; post?: BoardMessage }
 
 export function initialBoard(): BoardState {
-  return { panX: 0, panY: 0, seen: null, drag: null, motionX: stillMotion(), motionY: stillMotion(), clock: 0, ticking: false }
+  return { panX: 0, panY: 0, seen: null, drag: null, hover: null, motionX: stillMotion(), motionY: stillMotion(), motionH: stillMotion(), clock: 0, ticking: false }
 }
 
 function clamp(value: number, low: number, high: number): number {
@@ -166,6 +177,15 @@ export function reveal(pan: number, start: number, size: number, room: number): 
   return start + size > pan + room ? start + size - room : pan
 }
 
+/** Cells at the window's edges that the `more above` / `more below` words, a sticky header and the side marks may cover. */
+export const EDGE_ROWS = 1
+
+/** As `reveal`, keeping `pad` cells clear on either side where the span leaves room for them. */
+export function revealPadded(pan: number, start: number, size: number, room: number, pad: number): number {
+  if (size + 2 * pad > room) return reveal(pan, start, size, room)
+  return Math.max(0, reveal(pan, start - pad, size + 2 * pad, room))
+}
+
 /**
  * Brings local state in line with what is drawn now: the pan stays inside the
  * board, a new selection is scrolled into view, and a drag whose card is gone
@@ -174,43 +194,49 @@ export function reveal(pan: number, start: number, size: number, room: number): 
  */
 export function syncBoard(state: BoardState, context: BoardContext): BoardState {
   let next = state
+  if (next.hover !== null && (context.locked || !context.layout.slots.some(slot => slot.mark !== null && samePlace(slot.place, next.hover)))) next = { ...next, hover: null }
   if (next.drag?.kind === 'card') {
     const { id } = next.drag
     if (context.locked || !context.layout.cards.some(card => card.id === id)) next = { ...next, drag: null }
   }
-  // A selected card that moved (a drop, a block added before it) is followed as a new selection is.
+  // A selected card that moved or grew (a drop, a block added before it, its notes opening) is followed as a new selection is.
   const card = context.layout.cards.find(one => one.id === context.selectedId)
-  const seen = card ? `${card.id}@${card.x},${card.y}` : context.selectedId
+  const seen = card ? `${card.id}@${card.x},${card.y},${card.w},${card.h}` : context.selectedId
   if (seen !== next.seen) {
     next = { ...next, seen }
     if (card) {
-      next = { ...next, panX: reveal(next.panX, card.x, card.w + (card.shadow ? 1 : 0), context.columns), panY: reveal(next.panY, card.y, card.h, context.rows) }
+      // A cell's margin on every side: the window's edge rows and columns say what is past them.
+      next = { ...next, panX: revealPadded(next.panX, card.x, card.w, context.columns, EDGE_ROWS), panY: revealPadded(next.panY, card.y, card.h + card.stack, context.rows, EDGE_ROWS) }
     }
   }
   return clampPan(next, context)
 }
 
-const KEY_OPS: Record<string, BoardOp> = {
-  left: 'left',
+/**
+ * The keys the board answers once a click gave it the keyboard: the toolbar's
+ * hotkeys, letter for letter, so it does not matter which of the two holds the
+ * keys. The arrows and Enter are the board's own (on the toolbar they belong to
+ * the engine's focus ring, which rests on `edit`); Escape lets go of a grab.
+ */
+export const KEY_OPS: Record<string, BoardOp> = {
   h: 'left',
-  right: 'right',
-  l: 'right',
-  up: 'up',
-  k: 'up',
-  down: 'down',
   j: 'down',
+  k: 'up',
+  l: 'right',
   a: 'addAfter',
   i: 'addInside',
   x: 'remove',
-  delete: 'remove',
   g: 'grab',
-  space: 'grab',
-  ' ': 'grab',
+  e: 'edit',
+  z: 'compact',
+  c: 'card',
+  r: 'run',
+  left: 'left',
+  right: 'right',
+  up: 'up',
+  down: 'down',
   return: 'edit',
   enter: 'edit',
-  e: 'edit',
-  '?': 'card',
-  c: 'card',
   escape: 'cancel',
 }
 
@@ -235,7 +261,7 @@ function reducePointer(state: BoardState, input: BoardPointer, context: BoardCon
   const { x, y } = input
 
   if (input.event === 'down') {
-    const base: BoardState = state.drag === null ? state : { ...state, drag: null }
+    const base: BoardState = state.drag === null && state.hover === null ? state : { ...state, drag: null, hover: null }
     if (!inWindow(context, x, y)) return { state: base }
     const cx = x + base.panX
     const cy = y + base.panY
@@ -254,8 +280,14 @@ function reducePointer(state: BoardState, input: BoardPointer, context: BoardCon
   }
 
   const { drag } = state
+  if (!drag) {
+    // No button held: the slot under the pointer shows its `+`.
+    const slot = input.event === 'move' && !context.locked && inWindow(context, x, y) ? slotAt(layout, x + state.panX, y + state.panY) : undefined
+    const hover = slot?.place ?? null
+    return hover === state.hover || samePlace(hover, state.hover) ? { state } : { state: { ...state, hover } }
+  }
   // Crossing the region's edge changes nothing: the instance holds the pointer until `up`.
-  if (!drag || input.event === 'enter' || input.event === 'leave') return { state }
+  if (input.event === 'enter' || input.event === 'leave') return { state }
   if (drag.kind === 'pan') {
     if (input.event === 'up') return { state: { ...state, drag: null } }
     const moved = clampPan({ ...state, panX: drag.panX - (x - drag.downX), panY: drag.panY - (y - drag.downY) }, context)
@@ -301,7 +333,7 @@ export function dragScroll(state: Pick<BoardState, 'drag' | 'panX' | 'panY'>, co
   return { dx, dy }
 }
 
-function positions(layout: BoardLayout, axis: 'x' | 'y'): Record<string, number> {
+function positions(layout: BoardLayout, axis: 'x' | 'y' | 'h'): Record<string, number> {
   const out: Record<string, number> = {}
   for (const card of layout.cards) out[card.id] = card[axis]
   return out
@@ -311,12 +343,13 @@ function positions(layout: BoardLayout, axis: 'x' | 'y'): Record<string, number>
 export function moveBoard(state: BoardState, layout: BoardLayout): BoardState {
   const motionX = stepMotion(state.motionX, positions(layout, 'x'), state.clock)
   const motionY = stepMotion(state.motionY, positions(layout, 'y'), state.clock)
-  return motionX === state.motionX && motionY === state.motionY ? state : { ...state, motionX, motionY }
+  const motionH = stepMotion(state.motionH, positions(layout, 'h'), state.clock)
+  return motionX === state.motionX && motionY === state.motionY && motionH === state.motionH ? state : { ...state, motionX, motionY, motionH }
 }
 
 /** Whether cards are sliding. */
-export function boardMoving(state: Pick<BoardState, 'motionX' | 'motionY' | 'clock'>): boolean {
-  return motionActive(state.motionX, state.clock) || motionActive(state.motionY, state.clock)
+export function boardMoving(state: Pick<BoardState, 'motionX' | 'motionY' | 'motionH' | 'clock'>): boolean {
+  return motionActive(state.motionX, state.clock) || motionActive(state.motionY, state.clock) || motionActive(state.motionH, state.clock)
 }
 
 /** Whether the ticker should run: cards are sliding, or a drag is held at an edge that pans. */
@@ -334,35 +367,40 @@ export function tickBoard(state: BoardState, context: BoardContext): BoardState 
   const panned = step ? clampPan({ ...state, panX: state.panX + way.dx * SCROLL_STEP.x, panY: state.panY + way.dy * SCROLL_STEP.y }, context) : state
   const motionX = settleMotion(state.motionX, clock)
   const motionY = settleMotion(state.motionY, clock)
-  if (panning || motionActive(motionX, clock) || motionActive(motionY, clock)) return { ...panned, clock, motionX, motionY }
-  return { ...panned, clock: 0, motionX: { ys: motionX.ys, tweens: {} }, motionY: { ys: motionY.ys, tweens: {} }, ticking: false }
+  const motionH = settleMotion(state.motionH, clock)
+  if (panning || motionActive(motionX, clock) || motionActive(motionY, clock) || motionActive(motionH, clock)) return { ...panned, clock, motionX, motionY, motionH }
+  return { ...panned, clock: 0, motionX: { ys: motionX.ys, tweens: {} }, motionY: { ys: motionY.ys, tweens: {} }, motionH: { ys: motionH.ys, tweens: {} }, ticking: false }
 }
 
-/** Every sliding card's distance from its place, in cells. */
-export function boardOffsets(state: Pick<BoardState, 'motionX' | 'motionY' | 'clock'>): Record<string, { dx: number; dy: number }> {
+/** Every sliding or growing card's distance from its place and its size, in cells. */
+export function boardOffsets(state: Pick<BoardState, 'motionX' | 'motionY' | 'motionH' | 'clock'>): Record<string, { dx: number; dy: number; dh: number }> {
   const xs = rowOffsets(state.motionX, state.clock)
   const ys = rowOffsets(state.motionY, state.clock)
-  const out: Record<string, { dx: number; dy: number }> = {}
-  for (const id of new Set([...Object.keys(xs), ...Object.keys(ys)])) out[id] = { dx: xs[id] ?? 0, dy: ys[id] ?? 0 }
+  const hs = rowOffsets(state.motionH, state.clock)
+  const out: Record<string, { dx: number; dy: number; dh: number }> = {}
+  for (const id of new Set([...Object.keys(xs), ...Object.keys(ys), ...Object.keys(hs)])) out[id] = { dx: xs[id] ?? 0, dy: ys[id] ?? 0, dh: hs[id] ?? 0 }
   return out
 }
 
 // ---------------------------------------------------------------------------
-// The legend: the one line under the board
+// Words: what a release would do, and the legend the help card shows
 
-/** What the two edge styles mean, then what the pointer can do; during a drag, what a release would do. */
-export function legendLine(state: Pick<BoardState, 'drag' | 'panX' | 'panY'>, context: BoardContext): string {
-  const held = dragging(state)
-  if (held !== null) {
-    const target = dragTarget(state, context)
-    if (!target) return 'no slot here · release to cancel'
-    if (!target.to) return `${held} is already here · release to leave it`
-    return `release to drop ${held}${target.to.parentId === undefined ? '' : ` into ${target.to.parentId}`}`
-  }
-  const glyphs = EDGE_GLYPH[context.layout.orientation === 'horizontal' ? 'h' : 'v']
-  const parts = [`${glyphs.stream} hands each result on`, `${glyphs.barrier} waits for all`]
-  if (!context.locked) parts.push('+ add', 'drag a card to move it')
-  const more = `${state.panX > 0 ? '◀' : ''}${state.panY > 0 ? '▲' : ''}${state.panY < context.layout.height - context.rows ? '▼' : ''}${state.panX < context.layout.width - context.columns ? '▶' : ''}`
-  if (more !== '') parts.push(`${more} more: drag the background`)
-  return parts.join(' · ')
+/** What letting go of the card in hand would do, said beside it; '' with none in hand. */
+export function dragHint(state: Pick<BoardState, 'drag' | 'panX' | 'panY'>, context: BoardContext): string {
+  if (dragging(state) === null) return ''
+  const target = dragTarget(state, context)
+  if (!target) return 'no slot here: release cancels'
+  if (!target.to) return 'already here'
+  return target.to.parentId === undefined ? 'drop here' : `drop into ${target.to.parentId}`
 }
+
+/** What the board's marks mean: shown in the help card, not on the board. */
+export const LEGEND: readonly string[] = [
+  '│ ─▶  hands each result on as it arrives',
+  '║ ═▶  waits for all results first',
+  '×N and borders stacked under a box: that many run side by side',
+  'each: what a fan-out runs once for · out: what a container hands on',
+  '+ adds a block there; more + show under the pointer',
+  'drag a card to move it · drag the background to pan',
+  'keys work the same from the toolbar and after a click on the board (there the arrows and Enter work too)',
+]

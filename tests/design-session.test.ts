@@ -2,13 +2,12 @@ import { expect, test } from 'claude-code/testing'
 
 import { flatten } from '../src/design/model'
 import type { Design } from '../src/design/model'
-import { AGENT_ROWS_MAX, LOCK_NOTICE, agentTitle, agentsOf, applyMessage, applyOp, boardProps, boardView, initialUi, overlaysDesign, patchNode, pickBlock, runOverlay } from '../src/design/session'
+import { AGENT_ROWS_MAX, LOCK_NOTICE, agentTitle, agentsOf, applyMessage, applyOp, boardProps, boardView, initialUi, inspectorCollapsed, inspectorNoteRows, inspectorNotes, inspectorSummary, inspectorTyping, overlaysDesign, patchNode, pickBlock, runOverlay, wrapRows } from '../src/design/session'
 import type { DesignUi } from '../src/design/session'
 import { review } from '../src/design/templates'
 import type { RunEvent, RunState } from '../src/run/events'
 import { reduceAll } from '../src/run/reducer'
-import { UNMAPPED_ID, layoutBoard } from '../src/ui/board-layout'
-import { LEGEND_ROWS } from '../src/ui/board-model'
+import { UNMAPPED_ID, expandRows, layoutBoard } from '../src/ui/board-layout'
 
 // Review template: n1 agent, n2 pipeline [n3 agent, n4 verify], n5 agent.
 const design = review()
@@ -128,10 +127,10 @@ test('the overlay hands the board every count and the sum of what no block claim
   expect(overlaysDesign(state, 'other', ui())).toBe(false)
   expect(overlaysDesign(state, null, ui())).toBe(false)
 
-  const props = boardProps(design, ui({ grabbedId: 'n1', confirmId: 'n2', picker: { at: { index: 1 }, query: '' } }), { orientation: 'horizontal', columns: 100, rows: 9 }, overlay)
+  const props = boardProps(design, ui({ grabbedId: 'n1', confirmId: 'n2', picker: { at: { index: 1 }, query: '' } }), { orientation: 'horizontal', columns: 100, rows: 9, room: 11 }, overlay)
   // Running: locked, and nothing held is drawn.
-  expect(props).toMatchObject({ mode: 'run', grabbedId: null, confirmId: null, pickerAt: null, orientation: 'horizontal', columns: 100, rows: 9, selectedId: 'n1' })
-  const free = boardProps(design, ui({ grabbedId: 'n1', picker: { at: { index: 1 }, query: '' } }), { orientation: 'vertical', columns: 60, rows: 30 })
+  expect(props).toMatchObject({ mode: 'run', grabbedId: null, confirmId: null, pickerAt: null, orientation: 'horizontal', columns: 100, rows: 9, room: 11, compact: false, selectedId: 'n1' })
+  const free = boardProps(design, ui({ grabbedId: 'n1', picker: { at: { index: 1 }, query: '' } }), { orientation: 'vertical', columns: 60, rows: 30, room: 30 })
   expect(free).toMatchObject({ mode: 'design', grabbedId: 'n1', pickerAt: { index: 1 }, orientation: 'vertical' })
   expect('run' in free).toBe(false)
   expect(free.lints.every(one => KNOWN.has(one.nodeId))).toBe(true)
@@ -182,14 +181,75 @@ test('while a run is in progress every edit is refused with one notice; selectio
 
 test('the board is sized for the pane: sideways inline, upright in a dock, never taller than the room', () => {
   const inline = boardView(design, 'inline', 120, 20)
-  expect(inline).toEqual({ orientation: 'horizontal', columns: 120, rows: layoutBoard(design, { orientation: 'horizontal' }).height + LEGEND_ROWS })
+  expect(inline).toEqual({ orientation: 'horizontal', columns: 120, rows: layoutBoard(design, { orientation: 'horizontal' }).height, room: 20 })
   const dock = boardView(design, 'dock', 70, 40)
-  expect(dock).toEqual({ orientation: 'vertical', columns: 70, rows: layoutBoard(design, { orientation: 'vertical' }).height + LEGEND_ROWS })
+  expect(dock).toEqual({ orientation: 'vertical', columns: 70, rows: layoutBoard(design, { orientation: 'vertical', width: 70 }).height, room: 40 })
   // Less room than board: the region stops at the room and the board pans inside it.
   expect(boardView(design, 'dock', 70, 12).rows).toBe(12)
-  // Never fewer rows than a card and the legend.
+  // Never fewer rows than a card and the row to add under it.
   expect(boardView(design, 'inline', 120, 2).rows).toBe(5)
   // A run adds the unmapped card: the same call sizes it.
   const overlay = runOverlay(reduceAll(PARTIAL, KNOWN))
-  expect(boardView(design, 'dock', 70, 80, overlay).rows).toBe(layoutBoard(design, { orientation: 'vertical', run: true, unmapped: 2 }).height + LEGEND_ROWS)
+  expect(boardView(design, 'dock', 70, 80, { run: overlay }).rows).toBe(layoutBoard(design, { orientation: 'vertical', run: true, unmapped: 2, width: 70 }).height)
+  // The selected card is taller, compact mode shorter: the region follows both.
+  const picked = boardView(design, 'dock', 70, 80, { selectedId: 'n4' })
+  expect(picked.rows).toBe(layoutBoard(design, { orientation: 'vertical', width: 70, selectedId: 'n4', noteRows: expandRows('vertical', 80) }).height)
+  expect(picked.rows).toBeGreaterThan(dock.rows)
+  expect(boardView(design, 'dock', 70, 80, { compact: true }).rows).toBeLessThan(dock.rows / 2)
+  // Selecting a block never turns the board.
+  expect(boardView(design, 'inline', 120, 11, { selectedId: 'n4' }).orientation).toBe('horizontal')
+  expect(boardView(design, 'inline', 120, 11).rows).toBeLessThanOrEqual(11)
+})
+
+test('compact, editing and run are ops like the rest; editing ends with the field, the selection or any other key', () => {
+  expect(applyOp(design, ui(), 'compact').ui.compact).toBe(true)
+  expect(applyOp(design, ui({ compact: true }), 'compact')).toMatchObject({ changed: false, ui: { compact: false, selectedId: 'n1' } })
+  expect(boardProps(design, ui({ compact: true }), { orientation: 'vertical', columns: 60, rows: 30, room: 30 }).compact).toBe(true)
+  // Compact is a way of looking: a run in progress does not lock it.
+  expect(applyOp(design, ui(), 'compact', { locked: true }).ui).toMatchObject({ compact: true, notice: null })
+  // run changes nothing here: the hooks module fills the prompt.
+  expect(applyOp(design, ui(), 'run')).toEqual({ design, ui: ui(), changed: false })
+
+  const editing = applyOp(design, ui(), 'edit').ui
+  expect(editing.editing).toBe(true)
+  expect(applyOp(design, ui({ selectedId: null }), 'edit').ui).toMatchObject({ editing: false, notice: 'edit: select a block first' })
+  expect(applyOp(design, ui(), 'edit', { locked: true }).ui).toMatchObject({ editing: false, notice: LOCK_NOTICE })
+  expect(applyMessage(design, ui(), { kind: 'edit', id: 'n4' }).ui).toMatchObject({ editing: true, selectedId: 'n4' })
+  expect(applyMessage(design, ui(), { kind: 'key', op: 'edit', orientation: 'vertical' }).ui.editing).toBe(true)
+  // Over: the field was sent, another block was picked, or any other key came.
+  expect(patchNode(design, editing, 'n1', { notes: 'x' }).ui.editing).toBe(false)
+  expect(applyMessage(design, editing, { kind: 'select', id: 'n4' }).ui.editing).toBe(false)
+  expect(applyMessage(design, editing, { kind: 'select', id: 'n1' }).ui.editing).toBe(true)
+  expect(applyOp(design, editing, 'down').ui.editing).toBe(false)
+  expect(applyOp(design, editing, 'cancel').ui.editing).toBe(false)
+})
+
+test('the inspector: notes wrapped under their field, bounded; one line when the pane is inline', () => {
+  const notes = 'Asks what is missing: an angle not searched, a claim unverified, a source unread. Gaps become one more round of reading.'
+  // Short enough for the field's own line: nothing more to show.
+  expect(inspectorNotes('One reader per source.', 80, 45)).toEqual({ lines: [], more: 0 })
+  expect(inspectorNotes('', 80, 45)).toEqual({ lines: [], more: 0 })
+  const wrapped = inspectorNotes(notes, 60, 45)
+  expect(wrapped).toEqual({ lines: ['Asks what is missing: an angle not searched, a claim', 'unverified, a source unread. Gaps become one more round of', 'reading.'], more: 0 })
+  for (const line of wrapped.lines) expect(line.length).toBeLessThanOrEqual(58)
+  // Bounded by the pane's rows, so the board keeps most of them.
+  expect([inspectorNoteRows(45), inspectorNoteRows(24), inspectorNoteRows(8), inspectorNoteRows(200)]).toEqual([7, 4, 2, 8])
+  const long = inspectorNotes('word '.repeat(200), 40, 24)
+  expect(long.lines).toHaveLength(3)
+  expect(long.more).toBe(Math.ceil(200 / 7) - 3)
+  // Inline: collapsed to a line until a field is being typed in; a dock never collapses.
+  expect(inspectorCollapsed('inline', ui())).toBe(true)
+  expect(inspectorCollapsed('inline', ui({ editing: true }))).toBe(false)
+  expect(inspectorCollapsed('dock', ui())).toBe(false)
+  expect(inspectorSummary({ id: 'n7', type: 'critic', title: 'completeness critic', notes }, 70)).toBe('n7 · critic · completeness critic — Asks what is missing: an angle no…')
+  expect(inspectorSummary({ id: 'n7', type: 'critic', title: 'gaps' }, 70)).toBe('n7 · critic · gaps')
+  // A field with the ring wraps its own text: the board gives up the rows the notes fill and two more to type into, within the same bound.
+  expect(inspectorTyping('', 80, 45)).toBe(2)
+  expect(inspectorTyping(notes, 80, 45)).toBe(3)
+  expect(inspectorTyping('word '.repeat(200), 80, 45)).toBe(7)
+  // The key row and the picker's row of types wrap in a narrow pane: their rows are counted, not guessed.
+  expect(wrapRows([4, 4, 4], 1, 14)).toBe(1)
+  expect(wrapRows([4, 4, 4], 1, 13)).toBe(2)
+  expect(wrapRows([4, 4, 4], 1, 4)).toBe(3)
+  expect(wrapRows([], 1, 10)).toBe(1)
 })
