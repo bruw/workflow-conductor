@@ -195,7 +195,7 @@ The test kit checks the tree a hook returns, not the surface's paint.
 
 - **Label:** `agent.spawn` `e.description` is the workflow label. The id convention stands.
 - **Completion and tokens:** `turn.complete` carries the agent's `agentId` and `usage`; the final `stop` chunk of `turn.step` carries usage too, so a live total needs no transcript polling.
-- **Token figure shown:** `input_tokens + output_tokens`. Cache reads/writes are excluded (they dominate and mislead).
+- **Token figure shown:** the sum of all four usage counts (input, output, cache creation, cache read), so it agrees with Claude Code's own workflow view. Input + output alone showed 19 tokens where the engine showed 98.1k.
 - **Phase:** not on any event. Read it from `journal.jsonl` (`started` line, present once the spawn's `next(e)` resolves) via `$.fs.read`. `transcriptDir` is at `result.result.transcriptDir` of the Workflow `tool.call`, which resolves before the first spawn.
 - **Run end:** no signal exists. Treat a run as done when no agent is running and no spawn arrived for a quiet period (8 s); a later spawn for the same run id flips it back to running. A definitive signal can replace this later.
 - **Handoff:** a `command.run` answer with `context` does not start a model turn; the context is used on the next prompt. `/conductor run` therefore also needs `$.prompt.submit` (declared, untested) or fill-and-Enter.
