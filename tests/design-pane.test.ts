@@ -332,7 +332,7 @@ for (const surface of SURFACES) {
     expect(await ui.find({ key: 'design-card' })).toBeDefined()
     await ui.press({ key: 'design-run' })
     expect(fills).toEqual(['/conductor run demo'])
-    expect(state.ui?.notice).toMatch(/esc, then Enter/)
+    expect(state.ui?.notice).toBe('run: /conductor run demo is in the prompt · Enter sends it')
     // Sending that command spends the hint: it must not sit under the run it started.
     await $.command.run({ command: 'conductor', args: 'run demo', ...RUN })
     expect(state.ui?.notice).toBe(null)

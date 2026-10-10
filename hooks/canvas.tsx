@@ -1,8 +1,7 @@
 import type { ClientModule, JsonValue } from 'claude-code'
 
-import { animateLayout, canvasMoving, canvasReduce, hintLine, initialCanvas, moveCanvas, syncCanvas, tickCanvas, viewCanvas, windowCanvas } from '../src/ui/canvas-model'
+import { animateLayout, canvasReduce, canvasTicking, hintLine, initialCanvas, moveCanvas, rowCells, syncCanvas, tickCanvas, viewCanvas, windowCanvas } from '../src/ui/canvas-model'
 import type { CanvasInput, CanvasLine, CanvasProps, CanvasState, DesignRow } from '../src/ui/canvas-model'
-import { GLYPH } from '../src/ui/theme'
 import { FRAME_MS } from '../src/ui/tween'
 
 // The canvas: a surface module. It owns only transient view state (selection
@@ -10,19 +9,10 @@ import { FRAME_MS } from '../src/ui/tween'
 // message posted to hooks/design.tsx, which answers with new props.
 
 const HINT_ROWS = 1
-const TYPE_COLUMN_MIN = 26
-const TYPE_COLUMN_MAX = 44
 const NAME_WIDTH = 20
-// The run overlay's columns, right of the type: a small bar, settled/total, tokens.
-const TYPE_WIDTH = 20
-const BAR_WIDTH = 6
-const COUNT_WIDTH = 7
-const TOKEN_WIDTH = 7
-/** Below this width the bar is left out. */
-const BAR_MIN_COLUMNS = 72
 
-// The one shared ticker. It runs only while rows slide: started by the drawing
-// that finds motion, stopped by the tick that finds none. The handle and the
+// The one shared ticker. It runs only while rows slide or a drag held at an edge
+// scrolls: started by the drawing that finds either, stopped by the tick that finds none. The handle and the
 // tick's body live here because a drawing's closures are replaced on every
 // call; `ticking` in the instance's own state says whether this instance
 // started it. One canvas is mounted at a time.
@@ -37,10 +27,6 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
   const limit = props.maxRows > 0 ? props.maxRows : surface.rows
   const capacity = limit > 0 ? Math.max(1, limit - HINT_ROWS) : 0
   const columns = surface.columns > 0 ? surface.columns : 80
-  const withBar = columns >= BAR_MIN_COLUMNS
-  // With a run, the type column moves left to leave room for the run's columns.
-  const runWidth = props.run ? TYPE_WIDTH + (withBar ? BAR_WIDTH + 1 : 0) + COUNT_WIDTH + TOKEN_WIDTH : 0
-  const typeColumn = Math.max(TYPE_COLUMN_MIN, Math.min(TYPE_COLUMN_MAX, columns - (props.run ? runWidth + 1 : 18)))
   const locked = props.mode === 'run'
 
   let state = syncCanvas(surface.state ?? initialCanvas(), props)
@@ -63,7 +49,7 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
   // once the lines are as recorded, so a drawing never chains into a loop.
   const scene = viewCanvas(state, props, capacity)
   const moved = moveCanvas(state, scene)
-  const start = canvasMoving(moved) && (!moved.ticking || stopTicker === null)
+  const start = canvasTicking(moved, { design: props.design, capacity }) && (!moved.ticking || stopTicker === null)
   if (start) {
     stopTicker?.()
     stopTicker = surface.every(FRAME_MS, () => onTick?.())
@@ -74,7 +60,7 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
     surface.setState(state)
   }
   onTick = () => {
-    state = tickCanvas(state)
+    state = tickCanvas(state, { design: props.design, capacity })
     if (!state.ticking) {
       stopTicker?.()
       stopTicker = null
@@ -96,30 +82,17 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
       )
     }
     const { run } = row
+    const cells = rowCells(row, columns)
     if (row.kind === 'agent') {
-      // Tokens end where the node rows' tokens end.
-      const room = Math.max(4, typeColumn + runWidth - TOKEN_WIDTH - row.rail.length - 2)
-      const title = row.title.length > room ? `${row.title.slice(0, room - 1)}…` : row.title
-
       return (
         <Text wrap="truncate-end">
           <Text color="subtle">{row.rail}</Text>
           <Text color={run?.color}>{`${row.glyph} `}</Text>
-          <Text color={run?.color === 'error' ? 'error' : undefined}>{title.padEnd(room)}</Text>
-          <Text color="subtle">{(run?.tokens ?? '').padStart(TOKEN_WIDTH)}</Text>
+          <Text color={run?.color === 'error' ? 'error' : undefined}>{cells.name}</Text>
+          <Text color="subtle">{cells.tokens}</Text>
         </Text>
       )
     }
-    const fold = row.collapsed ? ` [+${row.hidden}]` : ''
-    const badge = row.badge ? `  ${row.badge}` : ''
-    const lint = row.lint ? ` ${GLYPH.lint}` : ''
-    // The unmapped group is no node: it has a name and no id.
-    const name = row.kind === 'group' ? row.title : `${row.id}  ${row.title}`
-    const used = row.rail.length + 2 + name.length + badge.length + fold.length + lint.length
-    const gap = ' '.repeat(Math.max(2, typeColumn - used))
-    // With a run the type gives way to a long title, so the run's columns stay in line.
-    const typeRoom = Math.max(0, typeColumn + TYPE_WIDTH - used - gap.length)
-    const typeName = !run ? row.typeName : (row.typeName.length > typeRoom ? `${row.typeName.slice(0, Math.max(0, typeRoom - 2))}… ` : row.typeName).slice(0, typeRoom).padEnd(typeRoom)
     const lit = row.selected || row.grabbed
     // A node the finished run never reached is dim from end to end.
     const dim = run !== undefined && run.note !== ''
@@ -132,14 +105,14 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
       <Text wrap="truncate-end" hover={{ scope, bold: true }}>
         <Text color="subtle">{row.rail}</Text>
         <Text color={run && !row.grabbed ? run.color : tint} bold={lit} inverse={row.grabbed} hover={{ scope, color: 'claude' }}>{`${run ? run.glyph : row.glyph} `}</Text>
-        <Text color={tint} bold={lit} inverse={lit} hover={{ scope, color: 'claude' }}>{name}</Text>
-        <Text color={row.grabbed ? 'claude' : 'subtle'} inverse={row.grabbed}>{`${badge}${fold}`}</Text>
-        <Text color="warning">{lint}</Text>
-        <Text color="inactive">{`${gap}${typeName}`}</Text>
-        {run && run.note !== '' && <Text color="inactive">{run.note}</Text>}
-        {run && run.note === '' && withBar && <Text color={run.color}>{`${run.bar.padEnd(BAR_WIDTH)} `}</Text>}
-        {run && run.note === '' && <Text color={run.color}>{run.counts.padStart(COUNT_WIDTH)}</Text>}
-        {run && run.note === '' && <Text color="subtle">{run.tokens.padStart(TOKEN_WIDTH)}</Text>}
+        <Text color={tint} bold={lit} inverse={lit} hover={{ scope, color: 'claude' }}>{cells.name}</Text>
+        <Text color={row.grabbed ? 'claude' : 'subtle'} inverse={row.grabbed}>{`${cells.badge}${cells.fold}`}</Text>
+        <Text color="warning">{cells.lint}</Text>
+        <Text color="inactive">{cells.type}</Text>
+        {cells.note !== '' && <Text color="inactive">{cells.note}</Text>}
+        {cells.bar !== '' && <Text color={run?.color}>{cells.bar}</Text>}
+        {cells.counts !== '' && <Text color={run?.color}>{cells.counts}</Text>}
+        {cells.tokens !== '' && <Text color="subtle">{cells.tokens}</Text>}
       </Text>
     )
   }

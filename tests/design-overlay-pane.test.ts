@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { flatten } from '../src/design/model'
 import type { Design } from '../src/design/model'
-import { DESIGN_PANE_ID, DESIGN_PANE_TITLE, LOCK_NOTICE, designFile } from '../src/design/session'
+import { DESIGN_PANE_ID, DESIGN_PANE_TITLE, LOCK_NOTICE, RUN_KEYS_HINT, designFile } from '../src/design/session'
 import type { DesignUi } from '../src/design/session'
 import type { RunState } from '../src/run/events'
 import { REPLAY_MS } from '../src/run/tracker'
@@ -152,6 +152,8 @@ for (const surface of SURFACES) {
     const lit = async () => (await ui.findAll({ type: 'Text' })).filter(one => (one.text === 'design' || one.text === 'run') && one.props.color === 'claude').map(one => one.text)
     expect(await lit()).toEqual(['run'])
     expect(await ui.find({ type: 'Text', text: LOCK_NOTICE })).toBe(undefined)
+    // While the run is active a dim line says how the keyboard comes back to the pane.
+    expect((await ui.find({ type: 'Text', text: RUN_KEYS_HINT }))?.props.color).toBe('subtle')
 
     // The toolbar's delete and add change nothing and say why, in one dim line.
     await ui.press({ key: 'key:remove' })
@@ -174,6 +176,8 @@ for (const surface of SURFACES) {
     // Selection still moves; a click on a row opens its agents instead of selecting for edit.
     await ui.press({ key: 'key:down' })
     expect(seen.ui).toMatchObject({ selectedId: 'n2', notice: null })
+    // The inspector has the fanout knob in full; the row shows only its count.
+    expect(await ui.find({ type: 'Text', text: 'fanout: ×4 dimensions' })).toBeDefined()
     await ui.pointer({ type: 'down', x: 10, y: 0, button: 'left' })
     await ui.pointer({ type: 'up', x: 10, y: 0, button: 'left' })
     expect(seen.ui).toMatchObject({ selectedId: 'n1', runUi: { expanded: ['n1'], collapsed: [] } })
@@ -186,6 +190,7 @@ for (const surface of SURFACES) {
     expect(await props()).toMatchObject({ mode: 'design', run: { status: 'done' } })
     expect(await lit()).toEqual(['design'])
     expect(await ui.find({ type: 'Text', text: LOCK_NOTICE })).toBe(undefined)
+    expect(await ui.find({ type: 'Text', text: RUN_KEYS_HINT })).toBe(undefined)
     await ui.press({ key: 'key:remove' })
     expect(ids()).toEqual(['n2', 'n3', 'n4', 'n5'])
     expect(seen.files.get(designFile(ROOT, NAME))).not.toBe(saved)

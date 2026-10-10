@@ -214,7 +214,7 @@ test('fixtures carry no result payloads', async () => {
   }
 })
 
-test('sumUsage totals input and output tokens once per message', async () => {
+test('sumUsage totals all four usage counts once per message', async () => {
   const usage = (input_tokens: number, output_tokens: number) => ({ input_tokens, output_tokens, cache_read_input_tokens: 9000, cache_creation_input_tokens: 500 })
   const text = jsonl(
     { type: 'user', message: { role: 'user', content: 'hi' } },
@@ -228,7 +228,8 @@ test('sumUsage totals input and output tokens once per message', async () => {
     { type: 'assistant', message: { usage: usage(1, 1) } },
   )
 
-  expect(sumUsage(text)).toBe(50 + 10 + 2 + 2)
+  // Each counted message also carries 9500 cache tokens.
+  expect(sumUsage(text)).toBe(50 + 10 + 2 + 2 + 4 * 9500)
 })
 
 test('sumUsage survives malformed transcripts', async () => {

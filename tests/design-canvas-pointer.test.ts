@@ -10,6 +10,9 @@ import {
   buildDesignRows,
   canvasMoving,
   canvasReduce,
+  canvasTicking,
+  DRAG_SCROLL_MS,
+  dragScroll,
   dropTarget,
   hintLine,
   initialCanvas,
@@ -208,6 +211,59 @@ test('the instance keeps the drag when the pointer leaves; a key or a new select
   // Moves with no drag, and a press that ends keyboard grab mode.
   expect(run(start, [point('move', 3, 3), point('up', 3, 3)])).toEqual({ state: start, posts: [] })
   expect(run({ ...start, grabbedId: 'n1' }, [point('down', TITLE, 9)]).state.grabbedId).toBe(null)
+})
+
+test('a drag held on the first or last visible row scrolls the window a row per tick, as far as there are rows', () => {
+  // Three lines of room for six: n1 is held and taken to the last visible row.
+  const capacity = 3
+  const context = { design, capacity }
+  let state = run(start, [point('down', TITLE, 0), point('move', TITLE, 1)], design, capacity).state
+  expect(dragScroll(state, design, capacity)).toBe(0)
+  expect(canvasTicking(state, context)).toBe(canvasMoving(state))
+  state = run(state, [point('move', TITLE, 2)], design, capacity).state
+  expect(dragScroll(state, design, capacity)).toBe(1)
+  expect(canvasTicking(state, context)).toBe(true)
+
+  const frames = DRAG_SCROLL_MS / FRAME_MS
+  const hold = (from: CanvasState, ticks: number): CanvasState => {
+    let next = from
+    for (let i = 0; i < ticks; i++) next = tickCanvas(next, context)
+    return next
+  }
+  // Nothing before a tick's worth of frames, then one row per tick.
+  state = { ...state, ticking: true }
+  expect(hold(state, frames - 1).drag?.top).toBe(0)
+  state = hold(state, frames)
+  expect(state.drag?.top).toBe(1)
+  expect(state.ticking).toBe(true)
+  expect(shown(state, design, capacity)).toEqual(['n2', 'n3', 'n4', '[n1]', 'n5', ADD_ROW_ID])
+  // The window ends at the last line (rows without the held one, plus it): top 3 of 6.
+  state = hold(state, frames * 10)
+  expect(state.drag?.top).toBe(3)
+  expect(dragScroll(state, design, capacity)).toBe(0)
+  expect(state.ticking).toBe(false)
+  // The drop lands where the pointer now is: at the end.
+  const down = run(state, [point('up', TITLE, 2)], design, capacity)
+  expect(down.posts).toEqual([{ kind: 'move', id: 'n1', to: { index: 2 } }])
+
+  // And up: n5 is held in a window scrolled to the end, and taken to the first visible row.
+  const low: CanvasState = { ...start, selectedId: 'n5', top: 3 }
+  let up = run(low, [point('down', TITLE, 1), point('move', TITLE, 0)], design, capacity).state
+  expect(up.drag).toMatchObject({ id: 'n5', top: 3, active: true })
+  expect(dragScroll(up, design, capacity)).toBe(-1)
+  up = hold({ ...up, ticking: true }, frames * 2)
+  expect(up.drag?.top).toBe(1)
+  up = hold(up, frames * 10)
+  expect(up.drag?.top).toBe(0)
+  expect(up.ticking).toBe(false)
+  expect(run(up, [point('up', TITLE, 0)], design, capacity).posts).toEqual([{ kind: 'move', id: 'n5', to: { index: 0 } }])
+
+  // Everything in view, or no drag: nothing scrolls, and a tick without a context never does.
+  const roomy = run(start, [point('down', TITLE, 0), point('move', TITLE, 5)], design, 6).state
+  expect(dragScroll(roomy, design, 6)).toBe(0)
+  expect(dragScroll(roomy, design, 0)).toBe(0)
+  expect(dragScroll(start, design, capacity)).toBe(0)
+  expect(hold(state, 1).drag?.top).toBe(3)
 })
 
 test('rows slide to their new lines and the ticker flag drops when they have arrived', () => {

@@ -13,6 +13,8 @@ import { replayDue } from './replay'
 export const TICK_MS = 96
 /** No agent running and no spawn for this long: the run is held finished. */
 export const QUIET_MS = 8000
+/** A handoff waits this long for its run; a run that starts later is not the design's. */
+export const HANDOFF_MS = 180_000
 /** A slow replay spreads its events over this long. */
 export const REPLAY_MS = 10_000
 
@@ -68,6 +70,7 @@ export function createTracker() {
   /** The handoff waiting for its run, and the one the tracked run came from. */
   let pending: { name: string; ids: ReadonlySet<string> } | undefined
   let active: { name: string; ids: ReadonlySet<string> } | undefined
+  let expiry: Timer | undefined
 
   const dirs = new Map<string, string>()
   /** Agents of the tracked run still running, with their token total so far. */
@@ -222,6 +225,12 @@ export function createTracker() {
     else startTicker()
   }
 
+  const dropPending = (): void => {
+    expiry?.cancel()
+    expiry = undefined
+    pending = undefined
+  }
+
   /** Forgets the run held so far so that `runId` can start clean. */
   const begin = (runId: string): void => {
     replaying?.cancel()
@@ -233,7 +242,7 @@ export function createTracker() {
     if (pending !== undefined || state.runId !== runId) {
       const before = active
       active = pending
-      pending = undefined
+      dropPending()
       if (active?.name !== before?.name) {
         const name = active?.name ?? null
         call(h => h.design?.(name))
@@ -249,12 +258,14 @@ export function createTracker() {
 
     /**
      * Gives the tracker its host. `stored` is the state a previous load of the module
-     * left behind: a run in it is picked up where it was.
+     * left behind: a run in it is picked up where it was, with `claim` as the design it
+     * came from (the node ids are not stored; the caller reads them from the design file).
      */
-    attach(next: TrackerHost, stored?: RunState): void {
+    attach(next: TrackerHost, stored?: RunState, claim?: Handoff): void {
       host = next
       if (stored && state.status === 'idle' && Object.keys(state.agents).length === 0) {
         state = stored
+        if (claim && state.status !== 'idle') active = { name: claim.name, ids: new Set(claim.nodeIds) }
         for (const agent of Object.values(state.agents)) {
           if (agent.status === 'running') totals.set(agent.agentId, agent.tokens)
         }
@@ -264,9 +275,14 @@ export function createTracker() {
       startTicker()
     },
 
-    /** A design was handed off: the next run to start is counted against its node ids. */
+    /**
+     * A design was handed off: the first run to start within HANDOFF_MS is counted against
+     * its node ids. After that the claim is dropped, so a later unrelated run is not taken.
+     */
     handoff(next: Handoff): void {
+      dropPending()
       pending = { name: next.name, ids: new Set(next.nodeIds) }
+      expiry = host?.after(HANDOFF_MS, dropPending)
     },
 
     /** The design the tracked run was started from, if any. */

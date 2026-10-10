@@ -3,12 +3,14 @@ import type { On } from 'claude-code'
 
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
-import { DESIGN_PANE_ID } from '../src/design/session'
+import { flatten, parseDesign } from '../src/design/model'
+import { DESIGN_PANE_ID, designFile } from '../src/design/session'
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
+import { USAGE_KEYS } from '../src/run/journal'
 import { replayEvents } from '../src/run/replay'
 import type { ReplayFixture } from '../src/run/replay'
-import type { Tracker } from '../src/run/tracker'
+import type { Handoff, Tracker } from '../src/run/tracker'
 import { buildRunRows, togglePhase } from '../src/ui/rail'
 import type { Part, Row } from '../src/ui/rail'
 import { GLYPH, PANE_ID, PANE_TITLE } from '../src/ui/theme'
@@ -43,12 +45,12 @@ const text = (value: unknown): string | undefined => (typeof value === 'string' 
 
 const count = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0)
 
-/** The figure shown for a request or a turn: input plus output; cache reads and writes are left out. */
+/** The figure shown for a request or a turn: all four usage counts, as the built-in workflow row totals them. */
 const tokensOf = (usage: unknown): number | undefined => {
   if (usage === null || typeof usage !== 'object') return undefined
-  const { input_tokens, output_tokens } = usage as { input_tokens?: unknown; output_tokens?: unknown }
+  const counts = usage as Record<string, unknown>
 
-  return count(input_tokens) + count(output_tokens)
+  return USAGE_KEYS.reduce((sum, key) => sum + count(counts[key]), 0)
 }
 
 export const registerRun = (on: On, tracker: Tracker): void => {
@@ -58,6 +60,17 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       description: 'Workflow designer and run view: no argument opens the run view; design [name], run <name>, list, replay <fixture>',
       argumentHint: '[design [name] | run <name> | list | replay <fixture>]',
     })
+
+    // A run a previous load of the module was following: when it came from a design, its
+    // node ids are read from the design file again (they are not stored).
+    const stored = await read($, runAtom)
+    const attached = stored.status === 'idle' ? null : await read($, runDesignAtom)
+    let claim: Handoff | undefined
+    if (attached !== null) {
+      const body = await $.fs.read(designFile(await $.session.root(), attached)).catch(() => '')
+      const parsed = parseDesign(typeof body === 'string' ? body : '')
+      if (parsed.ok) claim = { name: attached, nodeIds: flatten(parsed.design).map(row => row.node.id) }
+    }
 
     // The tracker's only way out: every `$` call it causes is spelled here. Its timers
     // outlive this hook, as a `$.clock` callback does.
@@ -78,7 +91,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         status: line => $.ui.status(line),
         toast: line => $.ui.toast(line),
       },
-      await read($, runAtom),
+      stored,
+      claim,
     )
 
     return next(e)

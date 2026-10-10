@@ -101,7 +101,13 @@ test('badges come from fanout, votes and until', async () => {
   const node = (knobs: object) => ({ id: 'n1', type: 'agent' as const, title: 't', knobs })
 
   expect(badgeOf(node({ fanout: '×4 dimensions' }))).toBe('×4')
-  expect(badgeOf(node({ fanout: 'changed files' }))).toBe('× changed files')
+  // Free text shows only when short; the inspector has the rest.
+  expect(badgeOf(node({ fanout: 'open PRs' }))).toBe('× open PRs')
+  expect(badgeOf(node({ fanout: 'changed files' }))).toBe('')
+  expect(badgeOf(node({ fanout: 'the two words alpha and beta', votes: 2 }))).toBe('×2 votes')
+  // A title that carries its own count is not repeated.
+  expect(badgeOf({ ...node({ fanout: '×2 words' }), title: 'echo ×2' })).toBe('')
+  expect(badgeOf({ ...node({ fanout: 'two words', votes: 3 }), title: 'echo ×2' })).toBe('×3 votes')
   expect(badgeOf(node({ votes: 3 }))).toBe('×3 votes')
   expect(badgeOf(node({ until: '2 dry rounds' }))).toBe('until 2 dry rounds')
   expect(badgeOf(node({ fanout: 'x12', until: 'budget < 50k' }))).toBe('×12 until budget < 50k')

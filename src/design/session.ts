@@ -58,6 +58,8 @@ export type RunContext = {
 }
 
 export const LOCK_NOTICE = 'run in progress · editing locked'
+/** Shown while a run is active: the handoff left the keyboard in the prompt, and the command reopens the pane with it. */
+export const RUN_KEYS_HINT = 'keys in the prompt? /conductor brings them back here'
 
 /** What a toolbar key asks for. The canvas sends the same edits as messages. */
 export type ToolbarOp = 'down' | 'up' | 'grab' | 'addAfter' | 'addInside' | 'remove' | 'card' | 'cancel' | 'agents'

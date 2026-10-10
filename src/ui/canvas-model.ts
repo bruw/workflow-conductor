@@ -263,13 +263,20 @@ function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
 
-/** The knobs worth a glance on the row itself. */
+/** A free-text fanout longer than this is left to the inspector; a longer badge is the first thing a narrow row cuts. */
+export const BADGE_SHORT = 12
+
+/**
+ * The knobs worth a glance on the row itself. A fanout shows as its count (`×4`), or as
+ * its text when that is short; never when the title already carries a `×N`.
+ */
 export function badgeOf(node: DesignNode): string {
   const knobs = node.knobs ?? {}
   const parts: string[] = []
-  if (knobs.fanout) {
+  if (knobs.fanout && !/×\s*\d+/.test(node.title)) {
     const count = /^[×x]\s*(\d+)/.exec(knobs.fanout)
-    parts.push(count ? `×${count[1]}` : `× ${clip(knobs.fanout, BADGE_TEXT_MAX)}`)
+    if (count) parts.push(`×${count[1]}`)
+    else if (knobs.fanout.trim().length <= BADGE_SHORT) parts.push(`× ${knobs.fanout.trim()}`)
   }
   if (knobs.votes !== undefined) parts.push(`×${knobs.votes} votes`)
   if (knobs.until) parts.push(`until ${clip(knobs.until, BADGE_TEXT_MAX)}`)
@@ -736,6 +743,23 @@ export function dragView(design: Design, state: Pick<CanvasState, 'drag' | 'coll
   return { lifted, rest, target: outside ? null : dropTarget(rest, drag.top + drag.y, depth) }
 }
 
+/** A drag held on the first or last visible row scrolls the window one row per this long. */
+export const DRAG_SCROLL_MS = 96
+
+/**
+ * Which way a drag in flight should scroll the window: -1 while the pointer rests on the
+ * first visible row with rows cut off above, 1 on the last with rows cut off below, else 0.
+ */
+export function dragScroll(state: Pick<CanvasState, 'drag' | 'collapsed'>, design: Design, capacity: number): -1 | 0 | 1 {
+  const { drag } = state
+  if (drag === null || !drag.active || drag.settling !== null || capacity <= 0) return 0
+  // The lines of a drag: the rows without the dragged subtree, and the lifted row.
+  const lines = buildDesignRows(removeNode(design, drag.id).design, { collapsed: state.collapsed }).length + 1
+  if (drag.y === 0 && drag.top > 0) return -1
+  if (drag.y === capacity - 1 && drag.top < lines - capacity) return 1
+  return 0
+}
+
 function reducePointer(state: CanvasState, input: CanvasPointer, context: CanvasContext): CanvasResult {
   const { design } = context
   const capacity = context.capacity ?? 0
@@ -856,6 +880,105 @@ export function windowCanvas(layout: CanvasLayout, top: number, capacity: number
 }
 
 // ---------------------------------------------------------------------------
+// One row's cells: what fits a width, and what gives way when it does not
+
+const TYPE_COLUMN_MIN = 26
+const TYPE_COLUMN_MAX = 44
+// The run overlay's columns, right of the type: a small bar, settled/total, tokens.
+const TYPE_WIDTH = 20
+const COUNT_WIDTH = 7
+const TOKEN_WIDTH = 7
+/** Below this width the bar is left out. */
+export const BAR_MIN_COLUMNS = 72
+/** A type name is cut no shorter than this; with less room it is left out. */
+const TYPE_CLIP_MIN = 6
+/** A title is cut no shorter than this while a badge still stands beside it. */
+const TITLE_MIN = 8
+
+/** The texts of one row, left to right. With a run, `name` to `type` fill the width left of the run's columns exactly. */
+export type RowCells = {
+  /** `id  title` (the title alone for a group or an agent), cut to fit as a last resort. */
+  name: string
+  /** With its leading spaces; '' when there is none or no room. */
+  badge: string
+  fold: string
+  lint: string
+  /** The gap and the type name. */
+  type: string
+  /** The bar and the space after it; '' below BAR_MIN_COLUMNS. */
+  bar: string
+  counts: string
+  tokens: string
+  note: string
+}
+
+/**
+ * Fits a row into `columns`. As the width shrinks, in this order: the bar goes, a long
+ * badge is cut (and goes when the title would be cut for it), the type name is cut and
+ * then left out, the title is cut. Counts and
+ * tokens keep their width and end at the row's last cell.
+ */
+export function rowCells(row: DesignRow, columns: number): RowCells {
+  const { run } = row
+  const width = columns > 0 ? columns : 80
+  const withBar = run !== undefined && width >= BAR_MIN_COLUMNS
+  const right = run ? (withBar ? MINI_BAR + 1 : 0) + COUNT_WIDTH + TOKEN_WIDTH : 0
+  // With a run, the type column moves left to leave room for the run's columns.
+  const typeColumn = Math.max(TYPE_COLUMN_MIN, Math.min(TYPE_COLUMN_MAX, width - (run ? TYPE_WIDTH + right + 1 : 18)))
+  const total = run ? Math.min(width, typeColumn + TYPE_WIDTH + right) : width
+  const blank = { badge: '', fold: '', lint: '', type: '', bar: '', counts: '', note: '' }
+
+  if (row.kind === 'agent') {
+    // Tokens end where the node rows' tokens end.
+    const room = Math.max(4, total - TOKEN_WIDTH - row.rail.length - 2)
+    return { ...blank, name: clip(row.title, room).padEnd(room), tokens: (run?.tokens ?? '').padStart(TOKEN_WIDTH) }
+  }
+
+  const middle = Math.max(0, total - right)
+  const fold = row.collapsed ? ` [+${row.hidden}]` : ''
+  const lint = row.lint ? ` ${GLYPH.lint}` : ''
+  const fixed = row.rail.length + 2 + fold.length + lint.length
+  // The unmapped group is no node: it has a name and no id.
+  let name = row.kind === 'group' ? row.title : `${row.id}  ${row.title}`
+  let badge = row.badge
+  const lead = (): number => (badge === '' ? 0 : badge.length + 2)
+  // With a run, a cell stays free between the type and the run's columns.
+  const after = run ? 1 : 0
+
+  // A long badge is cut before the type gives way; a short one (a count) never is.
+  const spare = middle - 2 - fixed - name.length - Math.min(row.typeName.length, TYPE_WIDTH) - after
+  if (badge.length > BADGE_SHORT && lead() > spare) badge = clip(badge, Math.max(BADGE_SHORT, spare - 2))
+  // The title is cut last: a badge already cut goes before that, and so does a short one
+  // that would leave the title almost nothing.
+  const reserve = run ? 2 : 0
+  const titleRoom = (): number => middle - reserve - fixed - lead()
+  if (name.length > titleRoom()) {
+    if (row.badge.length > BADGE_SHORT || titleRoom() < TITLE_MIN) badge = ''
+    name = clip(name, Math.max(1, titleRoom()))
+  }
+
+  const used = fixed + name.length + lead()
+  const left = Math.max(0, middle - used)
+  const gap = Math.min(left, Math.max(2, typeColumn - used))
+  const room = left - gap - after
+  const typeName = row.typeName.length <= room ? row.typeName : room >= TYPE_CLIP_MIN ? `${row.typeName.slice(0, room - 1)}…` : ''
+  const type = `${' '.repeat(gap)}${typeName}`
+  const live = run !== undefined && run.note === ''
+
+  return {
+    name,
+    badge: badge === '' ? '' : `  ${badge}`,
+    fold,
+    lint,
+    type: run ? type.padEnd(left) : typeName === '' ? '' : type,
+    bar: live && withBar ? `${run.bar.padEnd(MINI_BAR)} ` : '',
+    counts: live ? run.counts.padStart(COUNT_WIDTH) : '',
+    tokens: live ? run.tokens.padStart(TOKEN_WIDTH) : '',
+    note: run?.note ?? '',
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The whole view: what canvas.tsx draws for a state, and its motion
 
 function liftedRail(depth: number): string {
@@ -911,16 +1034,28 @@ export function moveCanvas(state: CanvasState, view: Pick<CanvasView, 'layout' |
   return motion === state.motion ? state : { ...state, motion }
 }
 
-/** Whether rows are sliding: the only time the ticker should run. */
+/** Whether rows are sliding. */
 export function canvasMoving(state: Pick<CanvasState, 'motion' | 'clock'>): boolean {
   return motionActive(state.motion, state.clock)
 }
 
-/** One tick of the shared ticker: the clock moves a frame; when every row has arrived, `ticking` goes false and the clock rests. */
-export function tickCanvas(state: CanvasState): CanvasState {
+/** Whether the ticker should run: rows are sliding, or a drag is held at an edge that scrolls. */
+export function canvasTicking(state: CanvasState, context: Pick<CanvasContext, 'design' | 'capacity'>): boolean {
+  return canvasMoving(state) || dragScroll(state, context.design, context.capacity ?? 0) !== 0
+}
+
+/**
+ * One tick of the shared ticker: the clock moves a frame, and a drag held at an edge
+ * scrolls a row every DRAG_SCROLL_MS. When every row has arrived and nothing scrolls,
+ * `ticking` goes false and the clock rests.
+ */
+export function tickCanvas(state: CanvasState, context?: Pick<CanvasContext, 'design' | 'capacity'>): CanvasState {
   const clock = state.clock + FRAME_MS
+  const way = context ? dragScroll(state, context.design, context.capacity ?? 0) : 0
+  const drag = state.drag !== null && way !== 0 && clock % DRAG_SCROLL_MS === 0 ? { ...state.drag, top: state.drag.top + way } : state.drag
   const motion = settleMotion(state.motion, clock)
-  return motionActive(motion, clock) ? { ...state, clock, motion } : { ...state, clock: 0, motion: { ys: motion.ys, tweens: {} }, ticking: false }
+  if (way !== 0 || motionActive(motion, clock)) return { ...state, drag, clock, motion }
+  return { ...state, clock: 0, motion: { ys: motion.ys, tweens: {} }, ticking: false }
 }
 
 /** The layout with every sliding row on the line it is passing; emptied lines are blank. */

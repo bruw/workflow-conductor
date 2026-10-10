@@ -9,9 +9,9 @@ const RUN = { plugin: 'conductor', key: 'run' } as const
 const usage = (input: number, output: number) => ({
   input_tokens: input,
   output_tokens: output,
-  // Cache counts dwarf the rest in real runs and must not reach the figure shown.
-  cache_read_input_tokens: 50_000,
-  cache_creation_input_tokens: 30_000,
+  // Prompt tokens mostly arrive as cache counts: they are part of the figure, as in the built-in view.
+  cache_read_input_tokens: 5,
+  cache_creation_input_tokens: 3,
   model: 'claude-haiku-5-5',
 })
 
@@ -127,8 +127,8 @@ test('a workflow run is followed from launch to the quiet end', async ($, on) =>
   await step(stray.agentId)
   await clock.advance(600)
   state = await stored()
-  expect(state.agents[a]?.tokens).toBe(240)
-  expect(state.byPhase.Alpha?.tokens).toBe(240)
+  expect(state.agents[a]?.tokens).toBe(256)
+  expect(state.byPhase.Alpha?.tokens).toBe(256)
   expect(Object.keys(state.agents).length).toBe(3)
 
   await complete(a)
@@ -137,7 +137,7 @@ test('a workflow run is followed from launch to the quiet end', async ($, on) =>
   await complete(stray.agentId)
   await clock.advance(200)
   state = await stored()
-  expect(state.agents[a]).toMatchObject({ status: 'done', tokens: 240, durationMs: 1136 })
+  expect(state.agents[a]).toMatchObject({ status: 'done', tokens: 248, durationMs: 1136 })
   expect(state.agents[b]).toMatchObject({ status: 'failed' })
   expect(state.status).toBe('running')
   expect(statuses.at(-1)).toBe('wf 2/3 ▸ Beta')
@@ -155,7 +155,7 @@ test('a workflow run is followed from launch to the quiet end', async ($, on) =>
   state = await stored()
   expect(state.status).toBe('done')
   expect(statuses.at(-1)).toBe(undefined)
-  expect(toasts).toEqual(['wf demo done: 2/3 agents · 1 failed · 720 tokens'])
+  expect(toasts).toEqual(['wf demo done: 2/3 agents · 1 failed · 744 tokens'])
 
   // A late spawn for the same run reopens it, and the next quiet period closes it again.
   const late = await $.agent.spawn({ ...SPAWN, description: 'n2: four', workflow: { runId: 'wf_1', agentIndex: 4 } })

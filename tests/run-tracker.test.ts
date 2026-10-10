@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { RunState } from '../src/run/events'
 import { replayDue, replayEvents } from '../src/run/replay'
-import { createTracker, QUIET_MS, REPLAY_MS, TICK_MS } from '../src/run/tracker'
+import { createTracker, HANDOFF_MS, QUIET_MS, REPLAY_MS, TICK_MS } from '../src/run/tracker'
 import type { TrackerHost } from '../src/run/tracker'
 import * as review41 from '../fixtures/review-41'
 
@@ -190,6 +190,68 @@ test('a stored run is picked up after a reload', async () => {
 
   expect(second.state().agents.a1).toMatchObject({ status: 'done', tokens: 400 })
   expect(second.state().status).toBe('done')
+})
+
+test('a run picked up after a reload keeps its design and the known node ids', async () => {
+  const first = createTracker()
+  const one = fakeHost()
+  first.attach(one.host)
+  first.handoff({ name: 'demo', nodeIds: ['n1', 'n2'] })
+  first.runStarted({ runId: 'wf_1' })
+  first.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'n1: one' })
+  await one.advance(1000)
+
+  // Without the claim the reloaded tracker would take any `nN` label as a node.
+  const two = fakeHost()
+  const second = createTracker()
+  second.attach(two.host, one.log.writes.at(-1), { name: 'demo', nodeIds: ['n1', 'n2'] })
+  second.agentSpawned({ runId: 'wf_1', agentId: 'a2', label: 'n2: two' })
+  second.agentSpawned({ runId: 'wf_1', agentId: 'a3', label: 'n7: stray' })
+  expect(second.design()).toBe('demo')
+  expect(second.state().agents.a2?.nodeId).toBe('n2')
+  expect(second.state().agents.a3?.nodeId).toBe(undefined)
+
+  // Nothing stored, nothing claimed.
+  const third = createTracker()
+  third.attach(fakeHost().host, undefined, { name: 'demo', nodeIds: ['n1'] })
+  expect(third.design()).toBe(undefined)
+})
+
+test('a handoff holds until the first run starts or three minutes pass', async () => {
+  const designs: (string | null)[] = []
+  const taken = fakeHost()
+  const tracker = createTracker()
+  tracker.attach({ ...taken.host, design: name => void designs.push(name) })
+  tracker.handoff({ name: 'demo', nodeIds: ['n1'] })
+  await taken.advance(HANDOFF_MS - 1)
+  tracker.runStarted({ runId: 'wf_1' })
+  expect(tracker.design()).toBe('demo')
+  expect(designs).toEqual(['demo'])
+  // Spent: the run after it is not the design's.
+  tracker.runStarted({ runId: 'wf_2' })
+  expect(tracker.design()).toBe(undefined)
+  expect(designs).toEqual(['demo', null])
+
+  const late = fakeHost()
+  const other = createTracker()
+  other.attach(late.host)
+  other.handoff({ name: 'demo', nodeIds: ['n1'] })
+  await late.advance(HANDOFF_MS)
+  other.runStarted({ runId: 'wf_9' })
+  other.agentSpawned({ runId: 'wf_9', agentId: 'a1', label: 'n5: other' })
+  expect(other.design()).toBe(undefined)
+  expect(other.state().agents.a1?.nodeId).toBe('n5')
+
+  // A second handoff replaces the first and starts the three minutes again.
+  const again = fakeHost()
+  const third = createTracker()
+  third.attach(again.host)
+  third.handoff({ name: 'one', nodeIds: [] })
+  await again.advance(HANDOFF_MS - 1000)
+  third.handoff({ name: 'two', nodeIds: [] })
+  await again.advance(HANDOFF_MS - 1000)
+  third.runStarted({ runId: 'wf_3' })
+  expect(third.design()).toBe('two')
 })
 
 test('a slow replay spreads the fixture over ten seconds; a fast one lands at once', async () => {

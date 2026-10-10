@@ -9,6 +9,7 @@ import type { NodePatch } from '../src/design/ops'
 import {
   BLANK_TEMPLATE_ID,
   LOCK_NOTICE,
+  RUN_KEYS_HINT,
   overlaysDesign,
   runOverlay,
   DESIGN_DIR,
@@ -408,7 +409,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const handOff = async (): Promise<void> => {
       const line = `/${COMMAND} run ${ui.name}`
       const filled = await $.prompt.fill({ text: line }).catch(() => ({ isFilled: false }))
-      const notice = filled.isFilled ? `run: ${line} is in the prompt: esc, then Enter sends it` : `run: type ${line} in the prompt`
+      const notice = filled.isFilled ? `run: ${line} is in the prompt · Enter sends it` : `run: type ${line} in the prompt`
       await update($, uiAtom, held => ({ ...held, notice }))
     }
     const rows = flatten(design)
@@ -482,6 +483,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
               .map(one => (
                 <Text color="warning">{`${GLYPH.lint} ${one.message}`}</Text>
               ))}
+            {node.knobs?.fanout && <Text color="subtle" wrap="truncate-end">{`fanout: ${node.knobs.fanout}`}</Text>}
             {ui.showCard && (
               <Box key="design-card" flexDirection="column">
                 {TEACH[node.type].card.map(line => (
@@ -551,6 +553,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         )}
         {ui.notice !== null && ui.notice !== LOCK_NOTICE && <Text color="warning">{ui.notice}</Text>}
         {ui.notice === LOCK_NOTICE && locked && <Text color="subtle">{LOCK_NOTICE}</Text>}
+        {locked && <Text color="subtle" wrap="truncate-end">{RUN_KEYS_HINT}</Text>}
         <Text color="subtle" wrap="truncate-end">
           {ui.grabbedId !== null ? `${ui.grabbedId} grabbed: j/k move it, g drops it · ` : ''}
           {`${file}${'Client' in els ? ' · click the canvas for the pointer · esc hands the keys back' : ''}`}
