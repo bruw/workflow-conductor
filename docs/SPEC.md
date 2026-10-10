@@ -100,7 +100,7 @@ type NodeRun  = { total: number; running: number; done: number; failed: number; 
 ## Run data sources
 
 Live (primary), mod hook events:
-- `agent.spawn`: `agentId`, `description` (label), `prompt`, `workflow.{runId, agentIndex}` (present only for workflow agents). A hook may only observe or deny.
+- `agent.spawn`: `description` (the label, confirmed), `prompt`, `workflow.{runId, agentIndex}` (present only for workflow agents). No `agentId` and no phase on the event: `agentId` is what `await next(e)` resolves to. Parallel spawns arrive out of order. A hook may only observe or deny.
 - `turn.complete`: `agentId`, `durationMs`, `usage`, `isAborted`.
 - `tool.call` on `{ tool: 'Workflow' }`: result has `runId`, `transcriptDir`, `scriptPath`, `workflowName`, `taskId`.
 
@@ -189,3 +189,15 @@ The test kit checks the tree a hook returns, not the surface's paint.
 - `types/index.d.ts` must not contain `export {}`; validate refuses it.
 - With a single pane open the engine draws no title; the mod draws its own.
 - Dev session debug log: `.capture/debug.log` (pinned by `scripts/dev-session.sh`).
+
+## Spike outcomes (details and evidence: docs/API-NOTES.md — read it before writing hooks)
+
+- **Label:** `agent.spawn` `e.description` is the workflow label. The id convention stands.
+- **Completion and tokens:** `turn.complete` carries the agent's `agentId` and `usage`; the final `stop` chunk of `turn.step` carries usage too, so a live total needs no transcript polling.
+- **Token figure shown:** `input_tokens + output_tokens`. Cache reads/writes are excluded (they dominate and mislead).
+- **Phase:** not on any event. Read it from `journal.jsonl` (`started` line, present once the spawn's `next(e)` resolves) via `$.fs.read`. `transcriptDir` is at `result.result.transcriptDir` of the Workflow `tool.call`, which resolves before the first spawn.
+- **Run end:** no signal exists. Treat a run as done when no agent is running and no spawn arrived for a quiet period (8 s); a later spawn for the same run id flips it back to running. A definitive signal can replace this later.
+- **Handoff:** a `command.run` answer with `context` does not start a model turn; the context is used on the next prompt. `/conductor run` therefore also needs `$.prompt.submit` (declared, untested) or fill-and-Enter.
+- **Pointer:** SGR mouse sequences injected through tmux reach a `Client` (fullscreen session). Clicking a Client gives it the keyboard until Escape.
+- **Tick:** `surface.every` runs on 16 ms frames (~60 Hz); ask for multiples of 16.
+- **Rules:** `$` may not be passed to a helper function (validate refuses it): spell every `$` call at the call site inside the hook. `$.fs` has no append. The test runner refuses `node:fs` and non-code imports (fixtures are generated `.ts` modules). Idle hot reload lags; `/reload-plugins` forces it.

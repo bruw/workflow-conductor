@@ -11,12 +11,22 @@ ROWS="${CONDUCTOR_ROWS:-50}"
 # a fixed path lets capture.sh find it.
 DEBUG_LOG="$REPO/.capture/debug.log"
 
+# Extra mods to load beside this one, colon-separated paths (e.g. the probe:
+# CONDUCTOR_EXTRA_PLUGIN_DIRS=spikes/probe scripts/dev-session.sh).
+EXTRA=""
+IFS=':' read -ra EXTRA_DIRS <<< "${CONDUCTOR_EXTRA_PLUGIN_DIRS:-}"
+for dir in "${EXTRA_DIRS[@]}"; do
+  [ -n "$dir" ] || continue
+  case "$dir" in /*) ;; *) dir="$REPO/$dir" ;; esac
+  EXTRA="$EXTRA --plugin-dir '$dir'"
+done
+
 mkdir -p "$REPO/.capture"
 : > "$DEBUG_LOG"
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 tmux new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS" -c "$REPO" \
-  "claude --plugin-dir '$REPO' --debug --debug-file '$DEBUG_LOG'"
+  "claude --plugin-dir '$REPO'$EXTRA --debug --debug-file '$DEBUG_LOG'"
 
 echo "session:   $SESSION (${COLS}x${ROWS})"
 echo "debug log: $DEBUG_LOG"
