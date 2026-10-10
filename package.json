@@ -1,0 +1,11 @@
+{
+  "name": "conductor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "claude plugin validate . && tsc -p . && claude plugin test ."
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
