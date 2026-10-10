@@ -9,7 +9,9 @@ import type { NodePatch } from '../src/design/ops'
 import {
   BLANK_TEMPLATE_ID,
   LOCK_NOTICE,
+  PICKER_MAX,
   RUN_KEYS_HINT,
+  agentsOf,
   overlaysDesign,
   runOverlay,
   DESIGN_DIR,
@@ -19,7 +21,8 @@ import {
   MODEL_CHOICES,
   applyMessage,
   applyOp,
-  canvasProps,
+  boardProps,
+  boardView,
   designFile,
   designName,
   initialUi,
@@ -36,42 +39,51 @@ import { TEMPLATES } from '../src/design/templates'
 import { emptyRunState } from '../src/run/events'
 import { replayDesignEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
-import { PICKER_MAX, parseCanvasMessage } from '../src/ui/canvas-model'
+import { UNMAPPED_ID } from '../src/ui/board-layout'
+import { parseBoardMessage } from '../src/ui/board-model'
+import { FAILED, fmtTokens } from '../src/ui/rail'
 import { GLYPH } from '../src/ui/theme'
 
-// The designer: the hooks module owns the Design, applies ops, saves the file
-// and draws the inspector and toolbar. The canvas (./canvas.tsx) is a Client
-// that owns only view state and posts messages here.
+// The designer: the hooks module owns the Design and everything chosen on it
+// (selection, grab, picker), applies ops, saves the file and draws the toolbar
+// and inspector. The flow board (./canvas.tsx) is a Client that draws the
+// design from props, owns only its pan and a drag in flight, and posts here.
 
 const COMMAND = 'conductor'
 const CANVAS_KEY = 'canvas'
 const TITLE_KEY = 'design-title'
 const PICKER_KEY = 'design-add'
 /** Where the ring rests: on a Button, so letters are hotkeys; on an Input they would be typed. */
-const HOME_KEY = 'key:down'
+const HOME_KEY = 'key:left'
 /** How long after the command's answer the handoff prompt is submitted. */
 export const SUBMIT_DELAY_MS = 64
 /** A redraw's worth of wait before the ring moves to an element just drawn. */
 export const FOCUS_DELAY_MS = 48
 /** What /conductor this module answers: its verbs, `replay design`, and no argument at all (a run shown on its design); run.tsx answers the rest. */
 export const DESIGN_VERBS = /^\s*((design|run|list)(\s|$)|replay\s+design(\s|$)|$)/
-/** One digit or one lowercase letter each: all a Button's `hotkey` takes (no space, no `?`). */
-const TOOLBAR: readonly { op: ToolbarOp | 'edit'; hotkey: string; label: string }[] = [
-  { op: 'down', hotkey: 'j', label: 'down' },
-  { op: 'up', hotkey: 'k', label: 'up' },
-  { op: 'grab', hotkey: 'g', label: 'grab' },
+/** One digit or one lowercase letter each: all a Button's `hotkey` takes (no space, no `?`). One row of them. */
+const TOOLBAR: readonly { op: ToolbarOp; hotkey: string; label: string }[] = [
+  { op: 'left', hotkey: 'h', label: '←' },
+  { op: 'down', hotkey: 'j', label: '↓' },
+  { op: 'up', hotkey: 'k', label: '↑' },
+  { op: 'right', hotkey: 'l', label: '→' },
   { op: 'addAfter', hotkey: 'a', label: 'add' },
-  { op: 'addInside', hotkey: 'i', label: 'inside' },
-  { op: 'remove', hotkey: 'x', label: 'delete' },
+  { op: 'addInside', hotkey: 'i', label: 'in' },
+  { op: 'remove', hotkey: 'x', label: 'del' },
+  { op: 'grab', hotkey: 'g', label: 'grab' },
   { op: 'edit', hotkey: 'e', label: 'edit' },
-  { op: 'card', hotkey: 'h', label: 'help' },
+  { op: 'card', hotkey: 'c', label: '?' },
 ]
-const CANVAS_MIN_ROWS = 8
-// The open picker: its own line and its matches.
-const PICKER_ROWS = PICKER_MAX + 1
 const EDIT_HINT = 'click the title field, or press tab to reach it'
-// Rows of the pane that are not canvas: header, inspector, toolbar, pane chrome.
-const RESERVED_ROWS = 20
+/** Rows of the pane that are not the board: header, toolbar, rule, inspector, the file line. */
+const RESERVED_ROWS = 11
+/** The board gets at least this many rows (a container around a card, and the legend): the inspector scrolls before the board shrinks further. */
+const BOARD_ROOM_MIN = 9
+/** Rows asked for when the pane sits inline above the prompt: a nested container and the inspector under it. */
+export const PANE_ROWS = 28
+/** Columns asked for when the pane is docked beside the transcript: a card inside two containers, and the toolbar on one row. */
+export const PANE_COLUMNS = 76
+const PANE_OPEN = { id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, focus: true, rows: PANE_ROWS, columns: PANE_COLUMNS } as const
 
 // The run's state. Both hooks modules declare these (an atom must be spelled in the
 // file that reads it): run.tsx writes them through the tracker, design.tsx reads them.
@@ -110,10 +122,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       } else {
         await $.fs.write(path, serializeDesign(made)).catch(() => undefined)
       }
-      const held = await read($, uiAtom)
       await update($, designAtom, () => made)
-      await update($, uiAtom, () => ({ ...initialUi(), name, status: 'ready' as const, selectedId: made.nodes[0]?.id ?? null, rev: held.rev + 1 }))
-      await $.ui.open({ id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, focus: true })
+      await update($, uiAtom, () => ({ ...initialUi(), name, status: 'ready' as const, selectedId: made.nodes[0]?.id ?? null }))
+      await $.ui.open(PANE_OPEN)
       tracker.handoff({ name, nodeIds: flatten(made).map(row => row.node.id) })
       tracker.replay(replayDesignEvents(made, name), speed ?? 'fast')
 
@@ -181,14 +192,14 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const previous = await read($, uiAtom)
     // The run's design is often the one already open: it is shown as it stands.
     if (shown !== null && previous.name === name && previous.status === 'ready' && (await read($, designAtom)) !== null) {
-      await $.ui.open({ id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, focus: true })
+      await $.ui.open(PANE_OPEN)
 
       return { text: `Design ${name} opened with its run.` }
     }
-    let step = openDesign(name, undefined, previous.rev)
+    let step = openDesign(name, undefined)
     if (await $.fs.exists(path)) {
       try {
-        step = openDesign(name, await $.fs.read(path), previous.rev)
+        step = openDesign(name, await $.fs.read(path))
       } catch (error) {
         // Unreadable is not absent: never offer a template over a file that is there.
         step = { ...step, ui: { ...step.ui, status: 'error', error: `could not be read: ${reason(error)}` } }
@@ -197,7 +208,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     await update($, designAtom, () => step.design)
     await update($, uiAtom, () => step.ui)
     // With the keyboard, the toolbar's hotkeys work at once: no click on the canvas.
-    await $.ui.open({ id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, focus: true })
+    await $.ui.open(PANE_OPEN)
 
     if (step.ui.status === 'error') return { text: `Design ${name} could not be opened: ${step.ui.error}` }
 
@@ -205,14 +216,15 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   })
 
   on('ui.message', { requestId: DESIGN_PANE_ID, element: CANVAS_KEY }, async ($, e, next) => {
-    const message = parseCanvasMessage(e.data)
+    const message = parseBoardMessage(e.data)
     if (!message) return next(e)
 
     const design = await read($, designAtom)
     const ui = await read($, uiAtom)
     const run = await read($, runAtom)
     const over = overlaysDesign(run, await read($, runDesignAtom), ui)
-    const step = applyMessage(design, ui, message, over ? { run, locked: run.status === 'running' } : {})
+    const locked = over && run.status === 'running'
+    const step = applyMessage(design, ui, message, over ? { run, locked } : {})
     let nextUi = step.ui
     if (step.changed && step.design) {
       try {
@@ -222,13 +234,20 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       }
     }
     // "Edit" hands the keyboard to the inspector's title field, where the engine lets it.
-    if (message.kind === 'edit' && step.ui.notice !== LOCK_NOTICE) {
+    const edits = message.kind === 'edit' || (message.kind === 'key' && message.op === 'edit')
+    if (edits && !locked && nextUi.selectedId !== null && nextUi.selectedId !== UNMAPPED_ID) {
       const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key: TITLE_KEY }).catch((error: unknown) => ({ deny: reason(error) }))
       if (moved.deny !== undefined) nextUi = { ...nextUi, notice: `edit: ${EDIT_HINT}` }
     }
-    // Writing the atoms redraws the pane, which hands the canvas its next props.
+    // Writing the atoms redraws the pane, which hands the board its next props.
     if (step.design !== design) await update($, designAtom, () => step.design)
     if (nextUi !== ui) await update($, uiAtom, () => nextUi)
+    // A `+` opened the picker: its field exists once that is drawn, so the ring moves there a frame later.
+    if (nextUi.picker && !ui.picker) {
+      $.clock.after(FOCUS_DELAY_MS, () => {
+        void $.ui.focus({ requestId: DESIGN_PANE_ID, key: PICKER_KEY }).catch(() => undefined)
+      })
+    }
 
     return {}
   })
@@ -239,18 +258,25 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const ui = await read($, uiAtom)
     const design = await read($, designAtom)
     const file = `${DESIGN_DIR}/${ui.name}.json`
-    const columns = Math.max(20, Math.min(e.props.bodyColumns || 80, 100) - 2)
+    const columns = Math.max(20, (e.props.bodyColumns || 80) - 2)
     // The run laid over this design, when it was started from it.
     const run = await read($, runAtom)
     const over = overlaysDesign(run, await read($, runDesignAtom), ui)
     const locked = over && run.status === 'running'
     // The tick clock is read only while it matters, so an idle pane is not redrawn by it.
-    const overlay = over ? runOverlay(run, ui, locked ? await read($, clockAtom) : 0) : undefined
+    const overlay = over ? runOverlay(run, locked ? await read($, clockAtom) : 0) : undefined
+    const placement = e.props.placement === 'inline' ? 'inline' : 'dock'
+    // The board's region is as tall as the board until that passes the room
+    // there is; from there its height is fixed and the board pans inside it.
+    const room = Math.max(BOARD_ROOM_MIN, (e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 48) - RESERVED_ROWS)
     const context = async (): Promise<RunContext> => {
       const now = await read($, runAtom)
       const held = overlaysDesign(now, await read($, runDesignAtom), await read($, uiAtom))
+      const shown = await read($, designAtom)
+      // The arrows mean what they do on the board as it is drawn now.
+      const orientation = shown ? boardView(shown, placement, columns, room, held ? runOverlay(now) : undefined).orientation : undefined
 
-      return held ? { run: now, locked: now.status === 'running' } : {}
+      return held ? { run: now, locked: now.status === 'running', orientation } : { orientation }
     }
     // The mode marker: the side that is live is lit.
     const header = (
@@ -327,11 +353,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
 
     const node = ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
     const lints = lint(design)
-    // The canvas is as tall as what it draws until that passes the room there
-    // is; from there its height is fixed and it scrolls inside it.
-    const room = Math.max(CANVAS_MIN_ROWS, (e.viewport?.rows ?? 48) - RESERVED_ROWS)
-    const need = flatten(design).length + 2 + PICKER_ROWS
-    const canvasHeight = need > room ? room : undefined
+    const view = boardView(design, placement, columns, room, overlay)
+    const agents = over && ui.selectedId !== null ? agentsOf(run, ui.selectedId) : null
 
     // An inspector edit: read the state as it is now, patch, save, write back.
     const edit = async (id: string, patch: NodePatch): Promise<void> => {
@@ -371,19 +394,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
       if (moved.deny !== undefined) await update($, uiAtom, held => ({ ...held, notice: hint }))
     }
-    const press = async (op: ToolbarOp | 'edit'): Promise<void> => {
-      if (op === 'edit') {
-        if ((await context()).locked) {
-          await update($, uiAtom, held => ({ ...held, notice: LOCK_NOTICE }))
-          return
-        }
-        if (!node) {
-          await update($, uiAtom, held => ({ ...held, notice: 'edit: select a block first' }))
-          return
-        }
-        return focus(TITLE_KEY, `edit: ${EDIT_HINT}`)
-      }
+    const press = async (op: ToolbarOp): Promise<void> => {
       const step = await commit((before, held, ctx) => applyOp(before, held, op, ctx))
+      if (op === 'edit') return step.ui.notice === null && node ? focus(TITLE_KEY, `edit: ${EDIT_HINT}`) : undefined
       if (op === 'cancel') home()
       // The picker's field exists once the update above is drawn, so the ring
       // is moved to it a frame later, from the clock.
@@ -422,7 +435,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       <Box flexDirection="column" paddingLeft={1}>
         {header}
         {'Client' in els ? (
-          <els.Client key={CANVAS_KEY} module="./canvas.tsx" width="100%" height={canvasHeight} props={canvasProps(design, ui, room, overlay)} />
+          <els.Client key={CANVAS_KEY} module="./canvas.tsx" width="100%" height={view.rows} props={boardProps(design, ui, view, overlay)} />
         ) : (
           <Box flexDirection="column">
             {rows.map(row => (
@@ -455,7 +468,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             <Button key="design-add-cancel" plain dimColor label="cancel" onPress={() => press('cancel')} />
           </Box>
         ) : (
-          <Box key="design-toolbar" flexDirection="row" flexWrap="wrap" columnGap={2}>
+          <Box key="design-toolbar" flexDirection="row" flexWrap="wrap" columnGap={1}>
             {TOOLBAR.map(one => (
               <Button
                 key={`key:${one.op}`}
@@ -463,11 +476,10 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
                 autoFocus={one === TOOLBAR[0] ? true : undefined}
                 plain
                 dimColor
-                label={one.op === 'grab' && ui.grabbedId !== null ? 'drop' : one.label}
+                label={one.op === 'grab' && ui.grabbedId !== null ? 'drop' : one.op === 'remove' && ui.confirmId !== null ? 'del all?' : one.label}
                 onPress={() => press(one.op)}
               />
             ))}
-            {over && <Button key="key:agents" hotkey="o" plain dimColor label="agents" onPress={() => press('agents')} />}
             <Button key="design-run" hotkey="r" plain dimColor label="run" onPress={handOff} />
           </Box>
         )}
@@ -548,15 +560,30 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
               </Box>
             )}
           </Box>
+        ) : ui.selectedId === UNMAPPED_ID && agents ? (
+          <Text wrap="truncate-end">
+            <Text color="claude" bold>unmapped</Text>
+            <Text color="subtle">: agents whose label names no block of this design</Text>
+          </Text>
         ) : (
-          <Text color="subtle">{design.nodes.length === 0 ? 'Empty design: press a on the canvas to add the first block.' : 'Press a to add a block at the end.'}</Text>
+          <Text color="subtle">{design.nodes.length === 0 ? 'Empty design: click + on the board, or press a, to add the first block.' : 'Click a card to select it, or + to add a block there.'}</Text>
+        )}
+        {agents && agents.shown.length > 0 && (
+          <Box key="design-agents" flexDirection="column">
+            {agents.shown.map(agent => (
+              <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : undefined}>
+                {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${agent.title}  ${fmtTokens(agent.tokens)}`}
+              </Text>
+            ))}
+            {agents.rest > 0 && <Text color="subtle">{`… ${agents.rest} more`}</Text>}
+          </Box>
         )}
         {ui.notice !== null && ui.notice !== LOCK_NOTICE && <Text color="warning">{ui.notice}</Text>}
         {ui.notice === LOCK_NOTICE && locked && <Text color="subtle">{LOCK_NOTICE}</Text>}
         {locked && <Text color="subtle" wrap="truncate-end">{RUN_KEYS_HINT}</Text>}
         <Text color="subtle" wrap="truncate-end">
-          {ui.grabbedId !== null ? `${ui.grabbedId} grabbed: j/k move it, g drops it · ` : ''}
-          {`${file}${'Client' in els ? ' · click the canvas for the pointer · esc hands the keys back' : ''}`}
+          {ui.grabbedId !== null ? `${ui.grabbedId} grabbed: the arrows move it, g drops it · ` : ''}
+          {`${file}${'Client' in els ? ' · a click on the board gives it the keys · esc hands them back' : ''}`}
         </Text>
       </Box>
     )

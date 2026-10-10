@@ -29,13 +29,11 @@ export type ConductorDesignUi = {
   status: 'closed' | 'pick' | 'ready' | 'error'
   error: string | null
   selectedId: string | null
-  rev: number
   showCard: boolean
   notice: string | null
   grabbedId: string | null
   picker: { at: { parentId?: string; index: number }; query: string } | null
   confirmId: string | null
-  runUi: { expanded: string[]; collapsed: string[] }
 }
 
 declare module 'claude-code' {

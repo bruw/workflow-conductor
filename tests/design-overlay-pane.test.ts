@@ -7,13 +7,14 @@ import { DESIGN_PANE_ID, DESIGN_PANE_TITLE, LOCK_NOTICE, RUN_KEYS_HINT, designFi
 import type { DesignUi } from '../src/design/session'
 import type { RunState } from '../src/run/events'
 import { REPLAY_MS } from '../src/run/tracker'
-import type { CanvasProps } from '../src/ui/canvas-model'
+import { UNMAPPED_ID, layoutBoard } from '../src/ui/board-layout'
+import type { BoardProps } from '../src/ui/board-model'
 import { PANE_ID } from '../src/ui/theme'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const ROOT = '/project'
 const NAME = 'replay-review'
-const PANE = { title: DESIGN_PANE_TITLE, isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
+const PANE = { title: DESIGN_PANE_TITLE, isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 48 }, view: {} } as const
 const RUN = { command: 'conductor', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as const
 
 type Seen = { design: Design | null; ui: DesignUi | undefined; run: RunState | undefined; runDesign: string | null | undefined }
@@ -56,6 +57,14 @@ const world = (on: On): World => {
   return seen
 }
 
+// The board as drawn: one string per row, the legend last.
+type Drawn = { children?: (Drawn | string)[] }
+const flat = (node: Drawn | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(flat).join(''))
+const screen = async (ui: { drawn: (query: { in: string }) => Promise<unknown> }): Promise<string[]> => ((await ui.drawn({ in: 'canvas' })) as Drawn).children?.map(flat) ?? []
+
+// One agent in the inspector's list: its mark, its title, two spaces, its tokens.
+const AGENT_LINE = (text: string): boolean => /^[✓✗●] .+ {2}\d[\d.]*k?$/.test(text)
+
 const settle = async (clock: World['clock'], ms: number): Promise<void> => {
   await clock.advance(ms)
   for (let turn = 0; turn < 50; turn++) await Promise.resolve()
@@ -80,39 +89,49 @@ for (const surface of SURFACES) {
     expect(seen.toasts[0]).toMatch(/^wf replay-review done: 13\/14 agents · 1 failed/)
 
     const ui = await $.ui.mount({ plugin: 'conductor', surface, component: 'Pane', requestId: DESIGN_PANE_ID, props: PANE })
-    const props = (await ui.find({ type: 'Client' }))?.props.props as unknown as CanvasProps
-    // Done: the overlay stays, the canvas is back in design mode.
+    const props = (await ui.find({ type: 'Client' }))?.props.props as unknown as BoardProps
+    // Done: the overlay stays, the board is back in design mode.
     expect(props.mode).toBe('design')
     expect(props.run).toMatchObject({ status: 'done', byNode: { n1: { total: 3, done: 3 }, n3: { total: 2, failed: 1 }, n4: { total: 3 }, n5: { total: 4 } } })
-    expect(props.run?.unmapped).toHaveLength(2)
-    // Only the agents an open row lists: n3's (it failed) and the unmapped ones.
-    expect(Object.values(props.run?.agents ?? {}).map(agent => agent.nodeId ?? '-').sort()).toEqual(['-', '-', 'n3', 'n3'])
+    expect(props.run?.unmapped).toMatchObject({ total: 2, done: 2 })
+    // The agents themselves are not the board's business: the inspector lists them.
+    expect(JSON.stringify(props.run)).not.toMatch(/scout diff \d/)
 
-    // Drawn: a counted node, the failed node opened to its agents, the unmapped group.
-    const texts = async () => (await ui.findAll({ type: 'Text', in: 'canvas' })).filter(one => one.props.wrap === 'truncate-end').map(one => one.text ?? '')
-    const lines = await texts()
-    expect(lines[0]).toMatch(/^✓ n1 {2}scout diff +agent +█+ +3\/3 +\d+\.\dk$/)
-    expect(lines[1]).toMatch(/^✗ n2 {2}review {2}×4 +pipeline +█+ +5\/5 +\d+\.\dk$/)
-    expect(lines[2]).toMatch(/^│ {2}├ ✗ n3 {2}review +agent +█+ +2\/2 +\d+\.\dk$/)
-    expect(lines[3]).toMatch(/^│ {2}│ {2}├ ✗ review 2 +\d+\.\dk$/)
-    expect(lines[4]).toMatch(/^│ {2}│ {2}╰ ✓ review 1 +\d+\.\dk$/)
-    expect(lines[5]).toMatch(/^│ {2}╰ ✓ n4 {2}adversarial verify {2}×3 votes +adversarial ver… █+ +3\/3 +\d+\.\dk$/)
-    expect(lines[7]).toMatch(/^✓ unmapped {2}×2 +█+ +2\/2 +\d+\.\dk$/)
-    expect(lines.at(-1)).toBe('╰─ + add')
-    // Every count column ends at the same cell, a long title's too: its type gives way.
-    const ends = [lines[0], lines[1], lines[2], lines[3], lines[5], lines[7]].map(line => [...(line ?? '')].length)
-    expect(new Set(ends).size).toBe(1)
-    expect(ends[0]).toBeLessThanOrEqual(PANE.bodyColumns)
-    const mark = (await ui.findAll({ type: 'Text', in: 'canvas' })).find(one => one.text === '✗ ' && one.props.color === 'error')
-    expect(mark).toBeDefined()
+    // Drawn on the cards: counts and tokens, the failure, the pipeline's sum on its border, the unmapped card.
+    const board = layoutBoard(seen.design ?? { version: 1, name: '', description: '', nodes: [] }, { orientation: 'vertical', run: true, unmapped: 2 })
+    const lines = await screen(ui)
+    const all = lines.join('\n')
+    expect(lines[0]).toMatch(/^┏ n1 agent ━+┓$/)
+    expect(lines[2]).toMatch(/^┃ ✓ 3\/3 \d+\.\dk +┃$/)
+    expect(all).toMatch(/│ │ ✗ 2\/2 1✗ \d+\.\dk +│/)
+    expect(all).toMatch(/│ │ ✓ 3\/3 \d+\.\dk +│▒/)
+    expect(all).toMatch(/\n╰ ✗ 5\/5 1✗ \d+\.\dk ─+╯▒\n/)
+    expect(all).toMatch(/\n│ ✓ 4\/4 \d+\.\dk +│\n/)
+    expect(all).toMatch(/\n╭ unmapped ×2 ─+╮\n│ no block claims these │▒\n│ ✓ 2\/2 \d+\.\dk +│▒\n/)
+    for (const line of lines) expect([...line].length).toBeLessThanOrEqual(PANE.bodyColumns)
+    const failed = (await ui.findAll({ type: 'Text', in: 'canvas' })).filter(one => one.props.color === 'error').map(one => one.text)
+    expect(failed).toHaveLength(2)
+    expect(failed.every(text => /^ ?✗ \d\/\d 1✗/.test(text ?? ''))).toBe(true)
+    // The region is as tall as the board (unmapped card included) and its legend.
+    expect((await ui.find({ type: 'Client' }))?.props.height).toBe(board.height + 1)
 
-    // The agents key opens the selected node's list; again closes it.
-    expect((await ui.findAll({ type: 'Button' })).map(one => one.key)).toContain('key:agents')
-    await ui.press({ key: 'key:agents' })
-    expect(seen.ui?.runUi).toEqual({ expanded: ['n1'], collapsed: [] })
-    expect((await texts()).filter(line => /^│ {2}[├╰] ✓ scout diff \d/.test(line))).toHaveLength(3)
-    await ui.press({ key: 'key:agents' })
-    expect((await texts()).filter(line => /scout diff \d/.test(line))).toHaveLength(0)
+    // The inspector lists the selected block's agents; the failed block's failure comes first.
+    const agents = async () => (await ui.findAll({ type: 'Text' })).map(one => one.text ?? '').filter(AGENT_LINE)
+    expect(await agents()).toHaveLength(3)
+    expect((await agents()).every(line => /^✓ scout diff \d {2}\d+\.\dk$/.test(line))).toBe(true)
+    await ui.press({ key: 'key:down' })
+    expect(await ui.find({ key: 'design-agents' })).toBe(undefined)
+    await ui.press({ key: 'key:right' })
+    expect(seen.ui?.selectedId).toBe('n3')
+    expect((await agents()).map(line => line.slice(0, 10))).toEqual(['✗ review 2', '✓ review 1'])
+    // A click on the unmapped card selects it: its agents are the ones no block claims.
+    const stray = board.cards.find(card => card.id === UNMAPPED_ID)
+    expect(stray?.header).toBe('unmapped ×2')
+    await ui.post({ kind: 'select', id: UNMAPPED_ID })
+    expect(seen.ui?.selectedId).toBe(UNMAPPED_ID)
+    expect(await agents()).toHaveLength(2)
+    expect(await ui.find({ type: 'Text', text: /agents whose label names no block/ })).toBeDefined()
+    expect(await ui.find({ type: 'Input', key: 'design-title' })).toBe(undefined)
 
     // No argument: the run is shown where its design is, not in the phase view.
     seen.opened.length = 0
@@ -126,9 +145,9 @@ for (const surface of SURFACES) {
     seen.opened.length = 0
     expect((await $.command.run({ ...RUN, args: '' })).text).toBe('Conductor pane opened.')
     expect(seen.opened).toEqual([PANE_ID])
-    const bare = (await ui.find({ type: 'Client' }))?.props.props as unknown as CanvasProps
+    const bare = (await ui.find({ type: 'Client' }))?.props.props as unknown as BoardProps
     expect(bare.run).toBe(undefined)
-    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).not.toContain('key:agents')
+    expect(await ui.find({ key: 'design-agents' })).toBe(undefined)
 
     const usage = await $.command.run({ ...RUN, args: 'replay design nope' })
     expect(usage.text).toBe('Usage: /conductor replay design <review|research|migrate|judge-panel> [fast|slow]')
@@ -146,7 +165,7 @@ for (const surface of SURFACES) {
     expect(seen.runDesign).toBe(NAME)
     const ids = () => flatten(seen.design ?? { version: 1, name: '', description: '', nodes: [] }).map(row => row.node.id)
     const saved = seen.files.get(designFile(ROOT, NAME))
-    const props = async () => (await ui.find({ type: 'Client' }))?.props.props as unknown as CanvasProps
+    const props = async () => (await ui.find({ type: 'Client' }))?.props.props as unknown as BoardProps
     expect(await props()).toMatchObject({ mode: 'run', grabbedId: null, run: { status: 'running' } })
     // The mode marker lights the side that is live.
     const lit = async () => (await ui.findAll({ type: 'Text' })).filter(one => (one.text === 'design' || one.text === 'run') && one.props.color === 'claude').map(one => one.text)
@@ -165,23 +184,31 @@ for (const surface of SURFACES) {
     expect(await ui.find({ type: 'Input', key: 'design-add' })).toBe(undefined)
     await ui.press({ key: 'key:grab' })
     expect(seen.ui?.grabbedId).toBe(null)
-    // So do the canvas's own keys, and a rename from the inspector.
+    // So do the board's own keys, and a rename from the inspector.
     await ui.key({ key: 'x' })
+    expect(seen.ui?.notice).toBe(LOCK_NOTICE)
     await ui.key({ key: 'a' })
     expect(ids()).toEqual(['n1', 'n2', 'n3', 'n4', 'n5'])
-    expect(await ui.find({ type: 'Text', text: 'type a block name', in: 'canvas' })).toBe(undefined)
+    expect(seen.ui?.picker).toBe(null)
     await ui.input({ key: 'design-title', text: 'renamed' })
     expect(seen.design?.nodes[0]?.title).toBe('scout diff')
     expect(seen.files.get(designFile(ROOT, NAME))).toBe(saved)
-    // Selection still moves; a click on a row opens its agents instead of selecting for edit.
+    // The locked board offers nothing to edit: no +, no edit or del, and the legend says only what the edges mean.
+    const drawn = await screen(ui)
+    expect(drawn.slice(0, -1).join('\n')).not.toMatch(/\+| edit | del /)
+    expect(drawn.at(-1)).toMatch(/^│▼ hands each result on · ║▼ waits for all/)
+    expect(drawn.at(-1)).not.toMatch(/drag a card/)
+    // Selection still moves, by key and by click; a press on a card does not lift it.
     await ui.press({ key: 'key:down' })
     expect(seen.ui).toMatchObject({ selectedId: 'n2', notice: null })
-    // The inspector has the fanout knob in full; the row shows only its count.
+    // The inspector has the fanout knob in full; the card's header shows only its count.
     expect(await ui.find({ type: 'Text', text: 'fanout: ×4 dimensions' })).toBeDefined()
-    await ui.pointer({ type: 'down', x: 10, y: 0, button: 'left' })
-    await ui.pointer({ type: 'up', x: 10, y: 0, button: 'left' })
-    expect(seen.ui).toMatchObject({ selectedId: 'n1', runUi: { expanded: ['n1'], collapsed: [] } })
-    expect(Object.values((await props()).run?.agents ?? {}).filter(agent => agent.nodeId === 'n1')).toHaveLength(3)
+    await ui.pointer({ type: 'down', x: 4, y: 1, button: 'left' })
+    await ui.pointer({ type: 'move', x: 4, y: 12, button: 'left' })
+    await ui.pointer({ type: 'up', x: 4, y: 12, button: 'left' })
+    expect(seen.ui).toMatchObject({ selectedId: 'n1' })
+    expect(ids()).toEqual(['n1', 'n2', 'n3', 'n4', 'n5'])
+    expect((await ui.findAll({ type: 'Text' })).map(one => one.text ?? '').filter(AGENT_LINE)).toHaveLength(3)
 
     // The run ends: one toast, design mode, and the same key now deletes.
     await settle(seen.clock, REPLAY_MS)

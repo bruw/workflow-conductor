@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { FRAME_MS, TWEEN_MS, ease, motionActive, placeRows, rowOffset, rowOffsets, settleMotion, stepMotion, stillMotion, tweenValue } from '../src/ui/tween'
+import { FRAME_MS, TWEEN_MS, ease, motionActive, rowOffset, rowOffsets, settleMotion, stepMotion, stillMotion, tweenValue } from '../src/ui/tween'
 
 test('ease is clamped to 0..1, rises all the way, and is fastest at first', () => {
   expect(ease(-1)).toBe(0)
@@ -87,13 +87,4 @@ test('motion is inactive once every offset has decayed, and settleMotion drops t
   expect(done.tweens).toEqual({})
   expect(done.ys).toEqual({ b: 0, a: 1 })
   expect(rowOffsets(moved, TWEEN_MS)).toEqual({})
-})
-
-test('placeRows draws travelling rows at their offset, under the rows in place', () => {
-  expect(placeRows(['a', 'b', 'c'], () => 0)).toEqual(['a', 'b', 'c'])
-  // b and c were one line down: the line they are heading for is blank until they arrive.
-  expect(placeRows(['a', 'b', 'c'], item => (item === 'a' ? 0 : 1))).toEqual(['a', null, 'b', 'c'])
-  // A row in place wins the line a travelling row is passing.
-  expect(placeRows(['a', 'b', 'c'], item => (item === 'c' ? -1 : 0))).toEqual(['a', 'b', null])
-  expect(placeRows(['a', 'b', 'c'], item => (item === 'a' ? 2 : 0))).toEqual([null, 'b', 'c'])
 })

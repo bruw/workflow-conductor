@@ -1,5 +1,5 @@
-// Motion: a tiny tween utility and the per-row offset animator the canvas
-// uses. Pure TypeScript: time is a number handed in, never read from a clock.
+// Motion: a tiny tween utility and the per-item offset animator the flow
+// board uses, once for its cards' columns and once for their rows. Pure TypeScript: time is a number handed in, never read from a clock.
 //
 // Rows are whole cells, so a row's motion is an integer offset from where it
 // now belongs, starting at (old y - new y) and decaying to 0.
@@ -85,24 +85,5 @@ export function rowOffsets(motion: Motion, nowMs: number, durationMs: number = T
     const offset = rowOffset(tween, nowMs, durationMs)
     if (offset !== 0) out[id] = offset
   }
-  return out
-}
-
-/**
- * The items at their animated lines: item i is drawn at line i + its offset.
- * Travelling rows are laid first and the rows in place over them, so what has
- * just appeared is seen at once and the rest slides out from under it. A line
- * nothing is on is null (drawn blank); the list is as long as its furthest row.
- */
-export function placeRows<T>(items: readonly T[], offsetOf: (item: T) => number): (T | null)[] {
-  const out: (T | null)[] = items.map(() => null)
-  for (const [at, item] of items.entries()) {
-    const offset = offsetOf(item)
-    const line = at + offset
-    if (offset === 0 || line < 0) continue
-    while (out.length <= line) out.push(null)
-    out[line] = item
-  }
-  for (const [at, item] of items.entries()) if (offsetOf(item) === 0) out[at] = item
   return out
 }
