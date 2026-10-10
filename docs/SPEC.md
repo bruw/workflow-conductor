@@ -202,3 +202,14 @@ The test kit checks the tree a hook returns, not the surface's paint.
 - **Pointer:** SGR mouse sequences injected through tmux reach a `Client` (fullscreen session). Clicking a Client gives it the keyboard until Escape.
 - **Tick:** `surface.every` runs on 16 ms frames (~60 Hz); ask for multiples of 16.
 - **Rules:** `$` may not be passed to a helper function (validate refuses it): spell every `$` call at the call site inside the hook. `$.fs` has no append. The test runner refuses `node:fs` and non-code imports (fixtures are generated `.ts` modules). Idle hot reload lags; `/reload-plugins` forces it.
+
+## Findings from P3 and P5a
+
+- **Canvas focus:** no API focuses a `Client`; it gets the keyboard only after a click, and Escape or ctrl+c hand the keys back to the prompt. `$.ui.focus` works for `Button`/`Input`/`Select` only, and only while that site holds the keyboard. A pane opened with `focus: true` plus an `autoFocus` element does take the keys (the template picker works this way).
+- **Consequence:** keyboard-first cannot rest on the Client alone. Keyboard commands also need a route through the hooks tree (`Button` hotkeys in a focused pane); the Client stays the pointer surface and handles keys once clicked.
+- **Commands today:** `/conductor` (run view), `/conductor replay <fixture> [fast|slow|clear]`, `/conductor-design [name]` (designer, pane id `conductor-design`). To be unified under `/conductor`.
+- **Hooks:** validate allows one unmatched hook per event per plugin. `run.tsx` holds the unmatched `session.start`; `design.tsx` uses the always-true matcher `{ cwd: /^/ }`.
+- **Contract:** `types/index.d.ts` cannot import, so it re-declares the run and design shapes; `tsc` catches drift.
+- **Test kit:** it cannot read `$.state`; tests observe `state.set`. Tests of run hooks must raise `session.start` first (timers are built there).
+- **Canvas:** messages discriminate on `kind`; two posts in one frame can drop one, so send one message per input. The canvas takes a `maxRows` prop.
+- **Run view:** counts are settled/total; replay token counts are synthetic; a quiet end always marks `done`, failures show as counts.

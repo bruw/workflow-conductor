@@ -1,6 +1,38 @@
 // The $.state contract. Every $.state key the mod uses is declared here.
-// Self-contained by rule (no imports): the run shapes mirror src/run/events.ts, and
-// `tsc` fails where the two drift apart.
+// Self-contained by rule (no imports), so shapes are spelled out again: the run
+// shapes mirror src/run/events.ts, the design shapes mirror src/design/model.ts and
+// src/design/session.ts. `tsc` fails where a mirror drifts from its source.
+
+export type ConductorDesignNode = {
+  id: string
+  type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'verify' | 'judge-panel' | 'loop-until-dry' | 'sweep' | 'critic'
+  title: string
+  notes?: string
+  knobs?: {
+    prompt?: string
+    schema?: string
+    model?: string
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+    isolation?: 'worktree'
+    agentType?: string
+    fanout?: string
+    votes?: number
+    until?: string
+  }
+  children?: ConductorDesignNode[]
+}
+
+export type ConductorDesign = { version: 1; name: string; description: string; nextId?: number; nodes: ConductorDesignNode[] }
+
+export type ConductorDesignUi = {
+  name: string
+  status: 'closed' | 'pick' | 'ready' | 'error'
+  error: string | null
+  selectedId: string | null
+  rev: number
+  showCard: boolean
+  notice: string | null
+}
 
 declare module 'claude-code' {
   interface PluginState {
@@ -30,6 +62,8 @@ declare module 'claude-code' {
       runUi: { expanded: string[]; collapsed: string[] }
       /** The run's tick clock in ms; advances only while an agent runs. */
       runClock: number
+      design: ConductorDesign | null
+      designUi: ConductorDesignUi
     }
   }
 }
