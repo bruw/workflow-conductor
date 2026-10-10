@@ -11,6 +11,7 @@ import type { Design, NodeType } from './model'
 import { addNode, moveNode, nextIdNumber, removeNode, retypeNode, updateNode } from './ops'
 import type { NodePatch, Place } from './ops'
 import { FLASH_MS } from '../ui/board-model'
+import { UNDO_HINT } from './history'
 import { DESIGN_DIR, carryUi, initialUi } from './session'
 import type { DesignUi } from './session'
 import { KNOB_HELP, TEACH } from './teach'
@@ -40,8 +41,8 @@ function knobLine(): string {
 export function toolDescription(): string {
   return [
     `Reads and edits the user's Conductor workflow design: the board of blocks they see, saved at ${DESIGN_DIR_HINT}. Use it whenever the user asks to draft, add, change, move or remove workflow blocks or steps ("add a verify after n3", "this block"); do not edit that file by hand. A design is a spec the user reviews, not a script: never run it from here.`,
-    'Actions: read = the design JSON, the block selected on the board ("this block") and the lints; read first unless you just did. apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures): keep the id of every block that stays, leave id off new ones. guide = the long help card of every type. `name` defaults to the design open on the board. An edit shows on the board at once and returns the lints: fix them or tell the user.',
-    "Block: { id, type, title, notes?, knobs?, children? }. Ids (n1, n2…) are assigned for you and never change. title is a short label; notes is free text saying what the block should do. Order is execution order. Only containers hold children. The design's `description` is the goal of the whole workflow: set it when drafting, keep it true.",
+    'Actions: read = the design JSON, the block selected on the board ("this block") and the lints. Always read before you describe, review or edit a design: the user changes the board by hand between your turns, so what you read or wrote earlier may be gone (every answer names the revision it shows). apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures): keep the id of every block that stays, leave id off new ones. guide = the long help card of every type. `name` defaults to the design open on the board. An edit shows on the board at once and returns the lints: fix them or tell the user.',
+    "Block: { id, type, title, notes?, knobs?, children? }. Ids (n1, n2…) are assigned for you and never change. title is a short label; notes is free text saying what the block should do. Order is execution order. Only containers hold children. Blocks directly inside a branch are its arms (one of them runs), and directly inside a parallel or sweep they run side by side: to run two blocks one after the other there, put both in a pipeline. The design's `description` is the goal of the whole workflow: set it when drafting, keep it true.",
     'Types:',
     ...typeLines(),
     `Knobs, all optional: ${knobLine()}.`,
@@ -110,7 +111,8 @@ export function draftBrief(name: string, description: string): string[] {
 // ---------------------------------------------------------------------------
 // Edits
 
-export type Change = { added: string[]; changed: string[]; removed: string[] }
+/** `notes` are things the edit did that the caller may not have meant, said in the answer. */
+export type Change = { added: string[]; changed: string[]; removed: string[]; notes?: string[] }
 
 export type Edit = ({ ok: true; design: Design } & Change) | { ok: false; error: string }
 
@@ -160,14 +162,27 @@ export function diffDesigns(before: Design | null, after: Design): Change {
 }
 
 // The last gate: whatever was assembled is read back by the model's own parser.
-function checked(before: Design, candidate: Design, touched: Iterable<string> = []): Edit {
+function checked(before: Design, candidate: Design, touched: Iterable<string> = [], notes: string[] = []): Edit {
   const parsed = parseDesign(serializeDesign(candidate))
   if (!parsed.ok) return { ok: false, error: explain(parsed.error) }
   const change = diffDesigns(before, parsed.design)
   for (const id of touched) {
     if (!change.added.includes(id) && !change.changed.includes(id) && findNode(parsed.design, id)) change.changed.push(id)
   }
-  return { ok: true, design: parsed.design, ...change }
+  return { ok: true, design: parsed.design, ...change, ...(notes.length > 0 ? { notes } : {}) }
+}
+
+/**
+ * What an `add` beside a sibling did when that sibling stands directly in a branch, a parallel or a sweep:
+ * the new block is not a step after it but another arm, or another block run at the same time. Null elsewhere.
+ */
+export function armNote(design: Design, id: string, beside: string): string | null {
+  const row = flatten(design).find(one => one.node.id === id)
+  const parent = row?.parentId === undefined ? undefined : findNode(design, row.parentId)
+  if (!parent) return null
+  if (parent.type === 'branch') return `${id} was added as a new arm of branch ${parent.id} (a branch runs one of its arms), not as a step after ${beside}. To run it after ${beside} in the same arm, wrap the two in a pipeline: add a pipeline in ${parent.id}, then move ${beside} and ${id} into it.`
+  if (parent.type === 'parallel' || parent.type === 'sweep') return `${id} was added beside ${beside} in ${parent.type} ${parent.id}: the two run at the same time, not one after the other. To run it after ${beside}, wrap the two in a pipeline inside ${parent.id}.`
+  return null
 }
 
 /**
@@ -277,6 +292,7 @@ export function applyOps(before: Design, rawOps: unknown, description?: unknown)
   if (!Array.isArray(ops)) return { ok: false, error: 'apply needs `ops`: an array of { op: add | update | move | remove, … }' }
   let design: Design = description === undefined ? before : { ...before, description }
   const touched: string[] = []
+  const notes: string[] = []
 
   for (const [index, op] of ops.entries()) {
     const kind = isRecord(op) ? op.op : undefined
@@ -288,6 +304,9 @@ export function applyOps(before: Design, rawOps: unknown, description?: unknown)
       const grown = grow(design, op, at)
       if ('error' in grown) return refuse(grown.error)
       design = grown.design
+      const beside = op.after ?? op.before
+      const note = typeof beside === 'string' && grown.ids[0] !== undefined ? armNote(design, grown.ids[0], beside) : null
+      if (note !== null) notes.push(note)
       continue
     }
     const id = op.id
@@ -321,7 +340,7 @@ export function applyOps(before: Design, rawOps: unknown, description?: unknown)
     if (updated.error) return refuse(updated.error)
     design = updated.design
   }
-  return checked(before, design, touched)
+  return checked(before, design, touched, notes)
 }
 
 // ---------------------------------------------------------------------------
@@ -333,26 +352,32 @@ function lintLines(design: Design): string[] {
   return ['Lints (advisory: fix them, or tell the user why they stand):', ...lints.map(one => `- ${one.nodeId} [${one.rule}]: ${one.message}`)]
 }
 
-export type ReadState = { open: boolean; selectedId: string | null; locked: boolean }
+/** `revision` counts every change to the design this session, by hand or from chat: an answer that names an older one is stale. */
+export type ReadState = { open: boolean; selectedId: string | null; locked: boolean; revision?: number }
+
+function revisionWords(revision: number | undefined): string {
+  return revision === undefined ? '' : ` Revision ${revision}: the user edits the board by hand, so read again before relying on this later.`
+}
 
 export function readReport(design: Design, state: ReadState): string {
   const selected = state.selectedId === null ? undefined : findNode(design, state.selectedId)
   const where = state.open ? `open on the board; selected block ("this block"): ${selected ? `${selected.id} (${selected.type} "${selected.title}")` : 'none'}` : 'not open on the board'
   return [
-    `Design "${design.name}" (${where})${state.locked ? '. A run of it is in progress: editing is locked until it ends' : ''}.`,
+    `Design "${design.name}" as it is on the board now (${where})${state.locked ? '. A run of it is in progress: editing is locked until it ends' : ''}.${revisionWords(state.revision)}`,
     serializeDesign(design).trimEnd(),
     ...lintLines(design),
   ].join('\n')
 }
 
-export function editReport(design: Design, change: Change): string {
+export function editReport(design: Design, change: Change, revision?: number): string {
   const parts = [
     change.added.length > 0 ? `added ${change.added.join(', ')}` : '',
     change.changed.length > 0 ? `changed ${change.changed.join(', ')}` : '',
     change.removed.length > 0 ? `removed ${change.removed.join(', ')}` : '',
   ].filter(Boolean)
   return [
-    `Design "${design.name}" saved and shown on the board: ${parts.length > 0 ? parts.join('; ') : 'nothing differs from before'}.`,
+    `Design "${design.name}" saved and shown on the board: ${parts.length > 0 ? parts.join('; ') : 'nothing differs from before'}.${revisionWords(revision)}`,
+    ...(change.notes ?? []).map(note => `Note: ${note}`),
     'Now:',
     ...outline(design),
     ...lintLines(design),
@@ -376,6 +401,17 @@ export function designOfPath(root: string, cwd: string, path: string): string | 
   return /^[a-z0-9-]+\.json$/.test(file) ? file.slice(0, -'.json'.length) : null
 }
 
+/** A change in a few words, for the line under the board and the undo history: `added n12; changed n3, n4`. '' for none. */
+export function changeWords(change: Change): string {
+  const list = (ids: string[]): string => (ids.length > 4 ? `${ids.slice(0, 4).join(', ')} and ${ids.length - 4} more` : ids.join(', '))
+  return [change.added.length > 0 ? `added ${list(change.added)}` : '', change.changed.length > 0 ? `changed ${list(change.changed)}` : '', change.removed.length > 0 ? `removed ${list(change.removed)}` : ''].filter(Boolean).join('; ')
+}
+
+/** What the model is told, unseen, with a prompt sent after the board changed by hand since it last read the design. */
+export function staleNote(name: string, revision: number): string {
+  return `Conductor: the user changed the "${name}" workflow design on the board by hand since you last read or edited it (it is now revision ${revision}). What you know of it is out of date: call ${TOOL_FULL_NAME} with action "read" before you describe, review or edit it.`
+}
+
 /** When the hooks module takes the mark's ids back: once the board has shown it. */
 export const FLASH_CLEAR_MS = FLASH_MS + 400
 
@@ -392,7 +428,9 @@ export function showEdit(ui: DesignUi, name: string, design: Design, change: Cha
   const base: DesignUi = same ? { ...ui, grabbedId: null, picker: null, confirmId: null, editing: false, describing: false, freshId: null, drafting: false, notice: null, runCleared: true } : { ...carryUi(ui, initialUi()), name, status: 'ready' }
   const still = same && ui.selectedId !== null && findNode(design, ui.selectedId) ? ui.selectedId : null
   const selectedId = change.added[0] ?? still ?? change.changed[0] ?? design.nodes[0]?.id ?? null
-  return { ...base, selectedId, flash: { ids: [...change.added, ...change.changed], seq: (ui.flash?.seq ?? 0) + 1 } }
+  // Said under the board, with the way back: an edit from chat is undone like any other.
+  const said = changeWords(change)
+  return { ...base, selectedId, notice: said !== '' ? `Claude ${said} · ${UNDO_HINT}` : base.notice, flash: { ids: [...change.added, ...change.changed], seq: (ui.flash?.seq ?? 0) + 1 } }
 }
 
 /** The mark is spent: the ids go, the count stays. */

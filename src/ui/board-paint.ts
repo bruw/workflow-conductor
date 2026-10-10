@@ -171,13 +171,14 @@ function accentOf(type: NodeType | 'unmapped'): string {
 /** What the window's edges say of the board past them. */
 export function edgeMarks(layout: BoardLayout, window: Pick<PaintOptions, 'columns' | 'rows' | 'panX' | 'panY'>): { above: string; below: string; left: boolean; right: boolean } {
   const bottom = window.panY + window.rows
-  const count = (hidden: (card: BoardCard) => boolean, glyph: string, where: string): string => {
+  // Always a count: the blocks wholly out of view, or with none (part of one is cut) the rows.
+  const count = (hidden: (card: BoardCard) => boolean, rows: number, glyph: string, where: string): string => {
     const blocks = layout.cards.filter(hidden).length
-    return blocks > 0 ? `${glyph} ${blocks} more ${where}` : `${glyph} more ${where}`
+    return blocks > 0 ? `${glyph} ${blocks} more ${where}` : `${glyph} ${rows} more ${rows === 1 ? 'row' : 'rows'} ${where}`
   }
   return {
-    above: window.panY > 0 ? count(card => card.y + card.h <= window.panY, '▲', 'above') : '',
-    below: bottom < layout.height ? count(card => card.y >= bottom, '▼', 'below') : '',
+    above: window.panY > 0 ? count(card => card.y + card.h <= window.panY, window.panY, '▲', 'above') : '',
+    below: bottom < layout.height ? count(card => card.y >= bottom, layout.height - bottom, '▼', 'below') : '',
     left: window.panX > 0,
     right: window.panX + window.columns < layout.width,
   }
@@ -355,6 +356,14 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
         // One row of line; its head sits on the next card's top border.
         put(edge.x, edge.y, glyph.slice(0, 1), style)
         put(edge.x, edge.y + 1, glyph.slice(1), style)
+      }
+    }
+    // Between two blocks that do not follow one another: `or` (a branch's arms), `∥` (run at the same time).
+    for (const rule of layout.rules) {
+      if (rule.axis === 'h') put(rule.x, rule.y, ` ${rule.label} `.slice(0, rule.w), look({ color: 'subtle', bold: true }))
+      else {
+        put(rule.x, rule.y, '╌'.repeat(Math.max(0, rule.w)), subtle)
+        put(rule.x + 2, rule.y, ` ${rule.label} `, look({ color: 'subtle', bold: true }))
       }
     }
     const drafting = options.emptyNote !== undefined && options.emptyNote !== '' && layout.cards.length === 0

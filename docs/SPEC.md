@@ -273,7 +273,7 @@ The tree showed containment; a workflow is flow. The designer draws the design a
 - The region is as tall as the board up to the pane's room; past that it pans (drag the background; the selection is scrolled into view; a card held at the edge pans).
 - Agents no block claims are one `unmapped ×N` card after the design.
 
-**Pane chrome**
+**Pane chrome** (the order of the rows, the key rows, the type picker and who holds the keyboard changed in Review round 3, last section; where the two differ, that section stands)
 - Header row, the board, a **message row** when there is something to say, **one key row**, the inspector. No legend row, no file row: both are in the help card (`c`). While a card is dragged, what a release does is said beside it (`n6 critic · drop into n2`).
 - **Header (see Review round 2: one row, lint count, goal):** `wf: <name>`, and at the right the plain word `design` (a label; the old `design ▸ run` looked pressable and was not) or, with a run laid over the design, its summary (`runSummary`): `run running · 5/9 agents done · 1 failed · 57.4k tokens · 4.5s`, `run finished · …` after. On a second row where it does not fit beside the name.
 - **Message row**, directly under the board: `designUi.notice` (a refused edit, the delete question, `run: <preflight> · Enter sends /conductor run <name>`), else what a grab's keys do, else while locked `run in progress · editing locked · keys in the prompt? /conductor returns them`. Nothing is said below the inspector any more.
@@ -286,7 +286,7 @@ The tree showed containment; a workflow is flow. The designer draws the design a
 - **Template picker** ends with the chat route: `or type: /conductor draft <name> <what you want>`.
 - **Empty board:** while `designUi.drafting` (set by `/conductor draft`, cleared by the first edit that lands or a block added by hand) the board and the inspector line say `Claude is drafting this design: …` in place of `+ add the first block`.
 
-**Editing model**
+**Editing model** (round 3 changed what a drag and a click do, and added undo: see the last section)
 - Single source of truth: selection, grab, picker place, the delete question, `compact` and `editing` live in `designUi` (hooks). The Client keeps only pan, a drag in flight, the hovered slot and card motion.
 - Messages: `select`, `move {id, to}`, `addAt {at}`, `remove {id}`, `edit {id}`, `key {op, orientation}`. One per input.
 - Click a card: select. Click a `+`: the hooks-tree type picker opens for that place. Drag: the card is drawn dashed where it stood, a bar marks the nearest slot within reach, release posts one `move`; no slot near, off the board, or its own place cancels.
@@ -350,7 +350,7 @@ Claude drafts and changes a design; the board follows live. Pure logic in `src/d
 - In the dev session (auto mode) no permission question was asked for the tool. Other permission modes were not tried; `tool.check` can allow it if they ask.
 - A matcher's array is any-of: `{ tool: ['Write', 'Edit'] }` is one hook for both.
 - Real use, one session: a draft was one `write` call with no retry (6 blocks, no lints); "add a completeness critic after n4" was one `apply`; "set this block to low effort, and make n1 fan out over changed files" was a `read` then one `apply`, which also reworded two blocks' notes nobody asked about.
-- Not built: following a design file changed outside Claude's tools (no file watch), undo of a chat edit, a diff shown before applying.
+- Not built: following a design file changed outside Claude's tools (no file watch), a diff shown before applying. (Undo of a chat edit: round 3.)
 
 ## Review round 2
 
@@ -392,3 +392,62 @@ Claude drafts and changes a design; the board follows live. Pure logic in `src/d
 - A `prompt.submit` matcher takes `text` as a regular expression; context attached on the way down reached the model (it read the design file named there).
 - An `Input`'s `⏎ <submitLabel>` is not counted in the field's width: with a long value the label wrapped under the field. `submitLabel=""` draws the `⏎` alone, on the same row. In a row beside its label a focused field is cut with `…` and does not wrap; alone on its rows it wraps (the goal's field).
 - `$.fs.list` entries are read one by one for the picker and `/conductor list` (at most `SAVED_MAX` 60).
+
+## Review round 3: safety and coherence
+
+Nothing done by accident may damage a design, and the screen holds still.
+
+**Who has the keyboard** (`hooks/design.tsx`)
+- **What a mod can know.** `e.props.isFocused` of the Pane render is true only while the pane's own ring holds the keys (its Buttons, fields); the pane is redrawn when that changes (Escape, a chat turn, a reload, a resize were all seen to redraw it with `false`). It is **false while a clicked `Client` holds the keys**, and nothing tells a hook when the Client loses them again (Escape never reaches `onKey`, no event is raised, the pane is not redrawn). `$.ui.panes()` asked right after `$.ui.open({ focus: true })` still says `isFocused: false`. `$.ui.focus` is refused (`{ deny }`) in a site that does not hold the keys: that is the probe.
+- **So the board never keeps the keyboard.** Every pointer release posts one message (`select`, `move`, `addAt`, or `touch` when it asked for nothing), and the `ui.message` hook answers a pointer message with `$.ui.open(paneArgs(true))` and, a redraw later, `$.ui.focus` onto the home key (or the field an `edit` / `+` needs). The keys are then the pane's, and `isFocused` tells the truth from there on. Cost: the arrows and Enter no longer act on the board after a click (they are the ring's); `h j k l e` do.
+- **Refused** (the engine gives a pane the keys only over an empty prompt box): the Client keeps the keyboard. `designUi.handed` is set, the board gets `hold` and answers no key (`reduceKey`), `applyOp` does nothing but say `HANDED_NOTICE` (`keys are off here while the prompt box holds text · Esc returns to the prompt`). Cleared by the next pointer message whose probe succeeds, by `prompt.submit`, by any `/conductor`.
+- **`r` and `v` hand the keys to the prompt.** No call moves the keyboard from a pane to the prompt. After `$.prompt.fill` took the request, the pane is closed and opened again without `focus` (`$.ui.close`, `$.ui.open(paneArgs(false))`): the keys are then the prompt's and the pane is still shown (the Client remounts: its pan is lost, the selection is scrolled back into view). A probe follows; if the ring can still be moved, `handed` is set as above. Seen live: `r`, then `xj the diff` typed at once, all of it in the prompt box, no block touched.
+- **The cue.** Pane focused: each key is a `Button` with its `hotkey` (the letter in the accent colour). Not focused: the same Buttons without `hotkey`, `dimColor`, label `e: edit` (still clickable), and `KEYS_CUE` (`keys are in the prompt · click the board or /conductor`) on the message row when nothing else is said there (inline: at the end of the status line).
+- **Escape** always hands the keys to the prompt and cannot be heard. The add / type picker is drawn only while the pane is focused (`picking`), so Escape closes it to the eye and the board is back; `/conductor`, a click on the board or any key op clears `designUi.picker`.
+
+**Undo** (`src/design/history.ts`, held in `hooks/design.tsx`)
+- `History = { undo, redo }` of `{ design, what }`, per design name, `HISTORY_MAX` 50, in a module variable (`histories`): not state (fifty designs), so it is lost on a plugin reload.
+- One choke point: a `Step` that changed the design carries `what` (the change in words); `store` (pane handlers) and the `ui.message` hook call `record(name, before, what)`; the tool hook and the Write/Edit follow-up record `Claude added n12; changed n3` / `the file …`.
+- `u` / `y` (`undo`, `redo` in `BoardOp`, on the first key row): `timeTravel` → `travel` → `restoreDesign`. The selection goes to a block the step brought back. `nextId` never goes back, so ids are not reused after an undone add.
+- Every announcement of a change ends `· u: undo` (`settle` builds it from `what`): `deleted n7 "verify" · u: undo`, `moved n7 after n11 · u: undo` (`whereIs`; drag and grab alike), `added n12 agent after n4`, `n3 changed: title, notes`, `n6 is now a verify`, `goal changed`, `Claude added n10`. After `u`: `undone: … · y: redo`. `noticeInforms` draws these plain; a refusal or a question stays `warning`.
+- An edit that changes nothing (Enter on an untouched field) is no change: `settle` compares the designs, nothing is saved or recorded.
+- A single block is deleted at once; a container that holds blocks still asks (`x again deletes them all (u undoes it)`).
+
+**Claude reads the board as it is** (the cause of a review of a deleted block: the tool said "read first unless you just did", and Claude had)
+- `revisions[name]` counts every change this load (by hand, chat, undo); `seenByClaude[name]` is the count at Claude's last `read` or own edit. `readReport` / `editReport` name the revision.
+- `prompt.submit` (now matched on every prompt, `{ text: /^/ }`): when the open design's revision differs from what Claude saw, `staleNote` is attached as context, once per revision. The same hook still attaches the hand-off conventions.
+- An `apply` / `write` from an older revision is denied (`The user changed design … Call read, then send the edit again`). Not exercised live: in the one real turn Claude read first.
+- The tool description says to always read first; `reviewPrompt` says `as it is on the board now (read it first, it may have changed by hand)`.
+- Seen live: chat edit, then `n6` deleted by hand, `v`, send: Claude called `read` (revision 2) and answered `n6 is gone (removed by hand)`.
+
+**Pointer** (`board-model.ts`)
+- Only the **selected** card is picked up by a drag (`BoardDrag` `card`). A press on any other card, a container's body or the background is `pan`; released on the cell it went down on, a card pressed is selected (`select` is posted on release, no longer on press).
+- A `+` is `slot`: its picker opens only when the release is on the same `+`.
+- `edit` / `del` on the selected card still act on press.
+
+**Layout** (`hooks/design.tsx` render, `boardView`)
+- Docked, top to bottom: header; goal (wrapped, up to `GOAL_ROWS` 3); the board (`fill`: every row the rest leaves, so the pane is always `bodyRows` tall); a rule; the inspector; the message row (always one row, a second when the text needs it); two key rows. Only the board changes size. One row at the pane's bottom stays blank: `scroll.bodyRows` is one less than what the frame shows.
+- Key rows (`BLOCK_KEYS`, `DESIGN_KEYS`): `h j k l a i x g e u y` act on the block, `d z n v r c q` on the design. Each key stands in a `Box` as wide as its longest label (`cells`); a key that does not apply now (`n` with no lint, `q` with no results, most of them while locked) leaves its cell blank, so no key shifts. `?` cannot be a Button hotkey (one digit or lowercase letter): help is `c`.
+- Inline: header, board, lines said in the board's free rows (below), the status line (what was just said, else the block's summary), the fields while `editing`, one key row. Labels are short (`v: ask`, `c: ?`, `n: lint`, `q: clear`), keys that cannot work now are left out, and `INLINE_DROP` (redo, next lint, goal, clear run, in, help) goes until the row fits: it never wraps. A key not drawn has no hotkey.
+- `z` does not turn an inline board: `chooseOrientation` is asked for the compact board whatever `z` says.
+- **Free rows** (`room - view.height`, the board shorter than its region) are used, and the region shrinks by as many: docked the headline wraps and a long `notes` / `prompt` continues under its field, dim, from the word the field cut (`overflow`, `WRAP_EXTRA` 3 rows each; an `Input` at rest is one line and cannot wrap); inline the selected block's lints and, after a run, `✗ failed: <labels>`.
+- **Type picker.** The engine's `Select` shows eight options and scrolls the rest with no marker. The block's type is picked from the add picker instead (`designUi.picker.retypeId`, `openRetype`, `pickBlock` → `retypeBlock`): docked all twelve types with their hints, none scrolled; inline four and `… N more types: type to narrow`.
+
+**Branch arms**
+- `armNote`: an `add` with `after` / `before` whose target stands directly in a `branch` answers `Note: n10 was added as a new arm of branch n7 … wrap the two in a pipeline` (`parallel` / `sweep`: `run at the same time`). The tool description states the rule in one sentence.
+- Board: `layout.rules`. Top to bottom, side by side: the word in the gap (`stackGap`: 4 cells for `or`, 3 for `∥`). Compact (one under the other): a dotted row with the word between two blocks. Left to right a stack stands across the flow and gets no rule (the arrows tell the sequence).
+
+**Small things**
+- Preflight: `agentsText`: `12 agents` when every count is stated, else `12+ agents (more: 2 blocks fan out over an unknown number, 1 loop repeats, 1 subworkflow starts its own)`.
+- Header: `running · …` / `finished · …`. `unmapped` card: no `×`, no double border; its title says the count.
+- `▼ N more below` always has a number: the blocks wholly out of view, or `N more rows` when only part of one is.
+- A retyped block still titled after its old type takes the new type's name. `TEACH[type].name` is the type's id everywhere.
+- `startDesign` writes nothing: a template is saved by its first edit, by `r` / a hand-off prompt, or by `/conductor run`.
+- `/conductor delete <name> [confirm]`: `$.fs` has no delete, the file is removed with `$.process.run(['rm', '--', path])`.
+
+**Findings**
+- A burst of text sent to a focused pane whose first character is no hotkey lands in the prompt box whole.
+- `ui.open` from a `ui.message` hook is logged `unasked`; it was placed (175 columns) for a pane the person had opened; narrower terminals were not tried for that path.
+- First real hand-off by prompt (`r`, finish the sentence, Enter), design of three `agent` blocks (`haiku`, `low`): Claude read the file, loaded the workflow skill, wrote the script with labels `n1: prime` … and one phase per block; the overlay showed `1/1 done` on each block, none unmapped; the header went `running · 3/3 agents done` → `finished · 3/3 agents done · 105k tokens · 15s` (the 15 s include the 8 s quiet period that ends a run).
+- Tests were not touched in this round and were not run: those that drive the old pointer rules (select on press, `+` on press), the old key row and the confirm text will need updating.
+

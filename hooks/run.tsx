@@ -19,12 +19,13 @@ const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
 const MAX_ROWS = 400
 const HELP = [
-  'Usage: /conductor [design [name] | draft <name> <description> | run <name> | list | replay <fixture>]',
+  'Usage: /conductor [design [name] | draft <name> <description> | run <name> | list | delete <name> | replay <fixture>]',
   '  /conductor                  open the run (on its design, when it came from one); with no run, the design last opened',
   '  /conductor design [name]    open a design; with no name, pick a saved design or start one from a template',
   '  /conductor draft <name> <description>   have Claude draft a design for the description, on the board',
   '  /conductor run <name>       hand the saved design to Claude to implement and run',
   '  /conductor list             the saved designs, each with its block count and what it is for',
+  '  /conductor delete <name>    delete a saved design (asks once more before it does)',
   '  /conductor replay <fixture|clear> [fast|slow]   replay a recorded run (dev)',
   '  /conductor replay design <template> [fast|slow]   replay a made-up run over a design (dev)',
 ].join('\n')
@@ -63,8 +64,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'conductor',
-      description: 'Workflow designer and run view: no argument opens the run view; design [name], draft <name> <description>, run <name>, list, replay <fixture>',
-      argumentHint: '[design [name] | draft <name> <description> | run <name> | list | replay <fixture>]',
+      description: 'Workflow designer and run view: no argument opens the run view; design [name], draft <name> <description>, run <name>, list, delete <name>, replay <fixture>',
+      argumentHint: '[design [name] | draft <name> <description> | run <name> | list | delete <name> | replay <fixture>]',
     })
 
     // A run a previous load of the module was following: when it came from a design, its
@@ -136,7 +137,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       return { text: 'Conductor pane opened.' }
     }
     // design.tsx answers these, whichever of the two hooks the engine asks first.
-    if (verb === 'design' || verb === 'draft' || verb === 'run' || verb === 'list' || (verb === 'replay' && name === 'design')) return next(e)
+    if (verb === 'design' || verb === 'draft' || verb === 'run' || verb === 'list' || verb === 'delete' || (verb === 'replay' && name === 'design')) return next(e)
     if (verb !== 'replay') return { text: HELP }
 
     if (name === 'clear') {

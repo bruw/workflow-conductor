@@ -241,12 +241,41 @@ function leastAgents(node: DesignNode): number {
   return times
 }
 
-export type Preflight = { blocks: number; agents: number; lints: number; lintIds: string[] }
+/** Why the count of agents cannot be known from the drawing: what each kind of open end is, and how many blocks have it. */
+export type Unknowns = { fanouts: number; loops: number; subworkflows: number }
 
-/** What a hand-off is about to start: how many blocks, the fewest agents they imply, and how many lints stand. */
+function unknownsOf(design: Design): Unknowns {
+  const out: Unknowns = { fanouts: 0, loops: 0, subworkflows: 0 }
+  for (const { node } of flatten(design)) {
+    // A fan-out said in words (`changed files`) names no number.
+    if (node.knobs?.fanout && !/^\s*[×x]?\s*\d+\b/.test(node.knobs.fanout)) out.fanouts++
+    if ((node.type === 'loop' || node.type === 'loop-until-dry') && (node.children?.length ?? 0) > 0) out.loops++
+    if (node.type === 'subworkflow') out.subworkflows++
+  }
+  return out
+}
+
+export type Preflight = { blocks: number; agents: number; lints: number; lintIds: string[]; unknowns: Unknowns }
+
+/** What a hand-off is about to start: how many blocks, the fewest agents they imply (and what makes the real count larger), and how many lints stand. */
 export function preflight(design: Design): Preflight {
   const lints = lint(design)
-  return { blocks: flatten(design).length, agents: design.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lints: lints.length, lintIds: lintIds(lints) }
+  return { blocks: flatten(design).length, agents: design.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lints: lints.length, lintIds: lintIds(lints), unknowns: unknownsOf(design) }
+}
+
+/**
+ * The agents a design starts, as far as the drawing says. Every count known: `12 agents`. Otherwise the
+ * floor is marked as one and the reason follows: `12+ agents (more: 2 blocks fan out over an unknown number)`.
+ */
+export function agentsText(agents: number, unknowns: Unknowns): string {
+  const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`
+  const why = [
+    unknowns.fanouts > 0 ? `${plural(unknowns.fanouts, 'block fans', 'blocks fan')} out over an unknown number` : '',
+    unknowns.loops > 0 ? `${plural(unknowns.loops, 'loop repeats', 'loops repeat')}` : '',
+    unknowns.subworkflows > 0 ? `${plural(unknowns.subworkflows, 'subworkflow starts', 'subworkflows start')} its own` : '',
+  ].filter(part => part !== '')
+  if (why.length === 0) return `${agents} ${agents === 1 ? 'agent' : 'agents'}`
+  return `${agents}+ agents (more: ${why.join(', ')})`
 }
 
 /** The blocks that carry a lint, each once, in the order the lints were raised. */
@@ -258,13 +287,13 @@ export function lintIds(lints: readonly Lint[]): string[] {
 export const LINT_IDS_MAX = 6
 
 /**
- * `6 blocks · at least 14 agents · 2 lints (n3, n5)`. It informs; nothing is blocked.
+ * `6 blocks · 14 agents · 2 lints (n3, n5)`, or `12+ agents (more: …)` where a count is not stated. It informs; nothing is blocked.
  * `blocks: false` leaves the first part out, where the count is already said.
  */
 export function preflightLine(design: Design, options: { blocks?: boolean } = {}): string {
-  const { blocks, agents, lints, lintIds: ids } = preflight(design)
+  const { blocks, agents, lints, lintIds: ids, unknowns } = preflight(design)
   const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
   const named = `${ids.slice(0, LINT_IDS_MAX).join(', ')}${ids.length > LINT_IDS_MAX ? ', …' : ''}`
-  const parts = [`at least ${plural(agents, 'agent')}`, lints === 0 ? 'no lints' : `${plural(lints, 'lint')} (${named})`]
+  const parts = [agentsText(agents, unknowns), lints === 0 ? 'no lints' : `${plural(lints, 'lint')} (${named})`]
   return (options.blocks === false ? parts : [plural(blocks, 'block'), ...parts]).join(' · ')
 }

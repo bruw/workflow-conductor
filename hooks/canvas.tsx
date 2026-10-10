@@ -30,7 +30,7 @@ const Board: ClientModule<JsonValue, BoardState> = (raw, surface) => {
   const rows = Math.max(1, props.rows > 0 ? props.rows : 12)
   const locked = props.mode === 'run'
   const layout = boardLayout(props)
-  const context: BoardContext = { layout, columns, rows, selectedId: props.selectedId, confirmId: props.confirmId, locked, placement: props.placement }
+  const context: BoardContext = { layout, columns, rows, selectedId: props.selectedId, confirmId: props.confirmId, locked, placement: props.placement, hold: props.hold === true }
 
   let state = syncBoard(surface.state ?? initialBoard(), context)
 

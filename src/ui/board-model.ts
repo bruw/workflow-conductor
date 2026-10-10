@@ -17,9 +17,9 @@ import type { Motion } from './tween'
 // Props and messages
 
 /** What a key or a toolbar Button asks for. */
-export type BoardOp = 'left' | 'right' | 'up' | 'down' | 'grab' | 'addAfter' | 'addInside' | 'remove' | 'edit' | 'compact' | 'card' | 'run' | 'cancel' | 'describe' | 'nextLint' | 'review' | 'clearRun'
+export type BoardOp = 'left' | 'right' | 'up' | 'down' | 'grab' | 'addAfter' | 'addInside' | 'remove' | 'edit' | 'compact' | 'card' | 'run' | 'cancel' | 'describe' | 'nextLint' | 'review' | 'clearRun' | 'undo' | 'redo'
 
-export const BOARD_OPS: readonly BoardOp[] = ['left', 'right', 'up', 'down', 'grab', 'addAfter', 'addInside', 'remove', 'edit', 'compact', 'card', 'run', 'cancel', 'describe', 'nextLint', 'review', 'clearRun']
+export const BOARD_OPS: readonly BoardOp[] = ['left', 'right', 'up', 'down', 'grab', 'addAfter', 'addInside', 'remove', 'edit', 'compact', 'card', 'run', 'cancel', 'describe', 'nextLint', 'review', 'clearRun', 'undo', 'redo']
 
 /** Client → hooks module (surface.post → ui.message). One per input: two posts in a frame can drop one. */
 export type BoardMessage =
@@ -31,6 +31,8 @@ export type BoardMessage =
   /** A click on `del`: a container that holds blocks is asked about first. */
   | { kind: 'remove'; id: string }
   | { kind: 'edit'; id: string }
+  /** A press let go that asked for nothing else: the click still gave the board the keyboard, and the hooks module must hear of it. */
+  | { kind: 'touch' }
   /** A key pressed while the board has the keyboard; arrows mean what they do in this orientation, `z` is for this placement. */
   | { kind: 'key'; op: BoardOp; orientation: Orientation; placement: Placement }
 
@@ -68,6 +70,8 @@ export type BoardProps = {
   run?: RunOverlay
   /** Blocks an edit from chat just touched: marked for FLASH_MS. A new `seq` is a new edit. */
   flash?: { ids: string[]; seq: number }
+  /** A request waits in the prompt box and the keys could not be handed to it: the board answers no key until the person takes them there. */
+  hold?: boolean
 }
 
 /** The layout the props describe: the hooks module sizes the region from the same call. */
@@ -99,6 +103,7 @@ function readPlace(value: unknown): Place | undefined {
 export function parseBoardMessage(data: unknown): BoardMessage | undefined {
   if (!isRecord(data)) return undefined
   const { kind, id } = data
+  if (kind === 'touch') return { kind }
   if (kind === 'select') return id === null || typeof id === 'string' ? { kind, id } : undefined
   if (kind === 'addAt') {
     const at = readPlace(data.at)
@@ -121,10 +126,15 @@ export function parseBoardMessage(data: unknown): BoardMessage | undefined {
 // Local state and its reducer
 
 export type BoardDrag =
-  /** A card under a held button: a click until the pointer leaves the cell it went down on. */
+  /** The selected card under a held button: nothing until the pointer leaves the cell it went down on, then the card is in hand. */
   | { kind: 'card'; id: string; downX: number; downY: number; x: number; y: number; active: boolean }
-  /** The background under a held button: the board pans with the pointer. */
-  | { kind: 'pan'; downX: number; downY: number; panX: number; panY: number }
+  /**
+   * Anything else under a held button (the background, a card that is not selected, a container's body):
+   * the board pans with the pointer. `select` is the card pressed: released on the cell it went down on, it is selected.
+   */
+  | { kind: 'pan'; downX: number; downY: number; panX: number; panY: number; select?: string; moved?: boolean }
+  /** A `+` under a held button: released on the same `+`, its picker opens; anywhere else, nothing. */
+  | { kind: 'slot'; place: Place }
 
 export type BoardState = {
   /** The board cell at the window's top left. */
@@ -166,6 +176,8 @@ export type BoardContext = {
   /** A run is in progress: a press selects and pans, nothing is edited. */
   locked?: boolean
   placement?: Placement
+  /** A request waits in the prompt box: no key is answered. */
+  hold?: boolean
 }
 
 export type BoardResult = { state: BoardState; post?: BoardMessage }
@@ -248,6 +260,9 @@ export const KEY_OPS: Record<string, BoardOp> = {
   n: 'nextLint',
   v: 'review',
   q: 'clearRun',
+  u: 'undo',
+  y: 'redo',
+  '?': 'card',
   left: 'left',
   right: 'right',
   up: 'up',
@@ -286,14 +301,16 @@ function reducePointer(state: BoardState, input: BoardPointer, context: BoardCon
       const selected = layout.cards.find(card => card.id === context.selectedId)
       const act = selected ? affordances(selected, context.confirmId === selected.id).find(one => cy === one.y && cx >= one.x && cx < one.x + one.w) : undefined
       if (selected && act) return { state: base, post: { kind: act.kind, id: selected.id } }
+      // A `+` is pressed, not yet used: it takes the release on the same `+`.
       const slot = slotAt(layout, cx, cy)
-      if (slot) return { state: base, post: { kind: 'addAt', at: slot.place } }
+      if (slot) return { state: { ...base, drag: { kind: 'slot', place: slot.place } } }
     }
     const pan: BoardDrag = { kind: 'pan', downX: x, downY: y, panX: base.panX, panY: base.panY }
     const card = cardAt(layout, cx, cy)
     if (!card) return { state: { ...base, drag: pan } }
-    const next: BoardState = { ...base, drag: context.locked || card.type === 'unmapped' ? pan : { kind: 'card', id: card.id, downX: x, downY: y, x, y, active: false } }
-    return card.id === context.selectedId ? { state: next } : { state: next, post: { kind: 'select', id: card.id } }
+    // Only the selected card is picked up by a drag; any other press pans, and selects when it was a plain click.
+    if (card.id === context.selectedId && !context.locked && card.type !== 'unmapped') return { state: { ...base, drag: { kind: 'card', id: card.id, downX: x, downY: y, x, y, active: false } } }
+    return { state: { ...base, drag: card.id === context.selectedId ? pan : { ...pan, select: card.id } } }
   }
 
   const { drag } = state
@@ -305,10 +322,18 @@ function reducePointer(state: BoardState, input: BoardPointer, context: BoardCon
   }
   // Crossing the region's edge changes nothing: the instance holds the pointer until `up`.
   if (input.event === 'enter' || input.event === 'leave') return { state }
+  if (drag.kind === 'slot') {
+    if (input.event !== 'up') return { state }
+    const slot = inWindow(context, x, y) ? slotAt(layout, x + state.panX, y + state.panY) : undefined
+    const let_go: BoardState = { ...state, drag: null }
+    return slot && samePlace(slot.place, drag.place) ? { state: let_go, post: { kind: 'addAt', at: drag.place } } : { state: let_go, post: { kind: 'touch' } }
+  }
   if (drag.kind === 'pan') {
-    if (input.event === 'up') return { state: { ...state, drag: null } }
-    const moved = clampPan({ ...state, panX: drag.panX - (x - drag.downX), panY: drag.panY - (y - drag.downY) }, context)
-    return moved.panX === state.panX && moved.panY === state.panY ? { state } : { state: moved }
+    const still = !drag.moved && x === drag.downX && y === drag.downY
+    if (input.event === 'up') return { state: { ...state, drag: null }, post: drag.select !== undefined && still ? { kind: 'select', id: drag.select } : { kind: 'touch' } }
+    if (still) return { state }
+    const moved = clampPan({ ...state, drag: drag.moved ? drag : { ...drag, moved: true }, panX: drag.panX - (x - drag.downX), panY: drag.panY - (y - drag.downY) }, context)
+    return moved.panX === state.panX && moved.panY === state.panY && moved.drag === state.drag ? { state } : { state: moved }
   }
   const held: BoardDrag = { ...drag, x, y, active: drag.active || x !== drag.downX || y !== drag.downY }
   if (input.event === 'move') return held.x === drag.x && held.y === drag.y ? { state } : { state: { ...state, drag: held } }
@@ -316,13 +341,14 @@ function reducePointer(state: BoardState, input: BoardPointer, context: BoardCon
   // up: a click was settled at `down`; a drag commits with one move, or cancels.
   const target = dragTarget({ ...state, drag: held }, context)
   const dropped: BoardState = { ...state, drag: null }
-  return target?.to ? { state: dropped, post: { kind: 'move', id: drag.id, to: target.to } } : { state: dropped }
+  return target?.to ? { state: dropped, post: { kind: 'move', id: drag.id, to: target.to } } : { state: dropped, post: { kind: 'touch' } }
 }
 
 function reduceKey(state: BoardState, input: BoardKey, context: BoardContext): BoardResult {
   // A key lets go of whatever the pointer holds.
   const base: BoardState = state.drag === null ? state : { ...state, drag: null }
-  if (input.ctrl || input.meta) return { state: base }
+  // A request waits in the prompt box: whatever is typed is meant for it, never for the board.
+  if (input.ctrl || input.meta || context.hold) return { state: base }
   const op = KEY_OPS[input.key]
   return op ? { state: base, post: { kind: 'key', op, orientation: context.layout.orientation, placement: context.placement ?? 'dock' } } : { state: base }
 }
@@ -436,7 +462,8 @@ export const LEGEND: readonly string[] = [
   '×N and a double bottom border ╘═══╛: a fan-out, the block runs once per item, N of them (×n: the count is not stated)',
   'each: the items a fan-out runs once for · 3 votes: how many checkers or judges · out: what the block hands on',
   'in a run: 2/4 done · 1 failed = agents ended well of agents started, then the ones that failed',
+  'or between the arms of a branch (one of them runs) · ∥ between blocks that run at the same time',
   '+ adds a block there; more + show under the pointer',
-  'drag a card to move it · drag the background to pan',
+  'drag the selected card to move it · drag anything else to pan · u undoes any change, y redoes it',
   'keys work the same from the toolbar and after a click on the board (there the arrows and Enter work too)',
 ]

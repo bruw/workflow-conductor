@@ -10,6 +10,7 @@ import { LEGEND } from '../ui/board-model'
 import type { BoardMessage, BoardOp, BoardProps, Placement } from '../ui/board-model'
 import type { RunOverlay } from '../ui/board-paint'
 import { fmtDuration, fmtTokens } from '../ui/rail'
+import { REDO_HINT, UNDO_HINT } from './history'
 import { lint, lintIds } from './lints'
 import { NODE_TYPES, canHoldChildren, emptyDesign, findNode, flatten, parseDesign, toKebab } from './model'
 import type { Design, NodeType } from './model'
@@ -46,8 +47,8 @@ export type DesignUi = {
   notice: string | null
   /** The node the keyboard's grab holds: arrows move it instead of the selection. */
   grabbedId: string | null
-  /** The add picker: where the block will go and what was typed. */
-  picker: { at: Place; query: string } | null
+  /** The add picker: where the block will go and what was typed. With `retypeId` it picks that block's type instead. */
+  picker: { at: Place; query: string; retypeId?: string } | null
   /** The container a first delete asked about; a second one on it removes it. */
   confirmId: string | null
   /** Compact mode (every card that is not selected is one row), for each placement of the pane. Kept across designs. */
@@ -70,6 +71,8 @@ export type DesignUi = {
   runCleared: boolean
   /** The saved designs, as read when the picker was opened: it lists them above the templates. */
   saved: SavedDesign[]
+  /** A request (`r`, `v`) waits in the prompt box and the pane still holds the keyboard: no key is acted on until the person takes the keys to the prompt. */
+  handed: boolean
 }
 
 /** A saved design as the picker and `/conductor list` name it. */
@@ -126,7 +129,18 @@ export const RUN_KEYS_HINT = 'type /conductor to use the keys here'
 /** What a toolbar key asks for. The board sends the same as `key` messages. */
 export type ToolbarOp = BoardOp
 
-export type Step = { design: Design | null; ui: DesignUi; changed: boolean }
+/** `what` says a change in words (`deleted n7 "verify"`): the undo history keeps it. */
+export type Step = { design: Design | null; ui: DesignUi; changed: boolean; what?: string }
+
+/** What is said while a request waits in the prompt box and the pane could not hand the keys over. */
+export const HANDED_NOTICE = 'keys are off here while the prompt box holds text · Esc returns to the prompt'
+/** The cue drawn while the pane does not hold the keyboard. */
+export const KEYS_CUE = 'keys are in the prompt · click the board or /conductor'
+
+/** Whether a notice only informs (a change that was made, a request filled): drawn plain; anything else is a refusal or a question. */
+export function noticeInforms(text: string): boolean {
+  return text.endsWith(UNDO_HINT) || text.endsWith(REDO_HINT) || /^(run|ask|undone|redone): /.test(text)
+}
 
 /** Inline the pane is short, so it starts compact; docked it has the height for whole cards. */
 export const COMPACT_DEFAULT: DesignUi['compact'] = { dock: false, inline: true }
@@ -152,6 +166,7 @@ export function initialUi(): DesignUi {
     describing: false,
     runCleared: false,
     saved: [],
+    handed: false,
   }
 }
 
@@ -247,28 +262,64 @@ export function startDesign(ui: DesignUi, templateId: string): Step {
   return {
     design,
     ui: { ...ui, status: 'ready', error: null, notice: null, selectedId: design.nodes[0]?.id ?? null },
-    changed: true,
+    // Nothing is written until the first edit: a template looked at and left is not a saved design.
+    changed: false,
   }
 }
 
-function settle(design: Design, ui: DesignUi, result: OpResult, selectedId: string | null): Step {
+/** Where a block stands, in words: `after n4 (in n2)`, `first in n2`, `at the start`. */
+export function whereIs(design: Design, id: string): string {
+  const row = flatten(design).find(one => one.node.id === id)
+  if (!row) return ''
+  const parent = row.parentId === undefined ? undefined : findNode(design, row.parentId)
+  const before = (parent ? (parent.children ?? []) : design.nodes)[row.index - 1]
+  if (before) return parent ? `after ${before.id} (in ${parent.id})` : `after ${before.id}`
+  return parent ? `first in ${parent.id}` : 'to the start'
+}
+
+function settle(design: Design, ui: DesignUi, result: OpResult, selectedId: string | null, what: string | ((after: Design) => string) = ''): Step {
   if (result.error) return { design, ui: { ...ui, notice: result.error }, changed: false }
-  const kept = selectedId !== null && findNode(result.design, selectedId) ? selectedId : null
-  const changed = result.design !== design
+  // An edit that leaves every block as it was (Enter on a field nobody changed) is no change: nothing to save, nothing to undo.
+  const changed = result.design !== design && JSON.stringify(result.design) !== JSON.stringify(design)
+  const after = changed ? result.design : design
+  const kept = selectedId !== null && findNode(after, selectedId) ? selectedId : null
+  const said = !changed ? '' : typeof what === 'string' ? what : what(after)
   // The first edit after a run puts its results away: nothing is edited under stale counts. (While it runs, no edit gets here.)
-  return { design: result.design, ui: { ...ui, selectedId: kept, notice: null, runCleared: changed ? true : ui.runCleared }, changed }
+  // Every change is announced, and the announcement ends with the way back.
+  return { design: after, ui: { ...ui, selectedId: kept, notice: said === '' ? null : `${said} · ${UNDO_HINT}`, runCleared: changed ? true : ui.runCleared }, changed, ...(said === '' ? {} : { what: said }) }
+}
+
+/**
+ * The design as it was a step back or forward (`target`), shown: the selection stays where it can, else
+ * goes to a block the step brought back, so the board scrolls to what changed.
+ */
+export function restoreDesign(design: Design | null, ui: DesignUi, target: Design, way: 'undo' | 'redo', what: string, context: RunContext = {}): Step {
+  if (!design || ui.status !== 'ready') return { design, ui, changed: false }
+  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE }, changed: false }
+  const had = new Set(flatten(design).map(row => row.node.id))
+  const back = flatten(target).find(row => !had.has(row.node.id))?.node.id
+  const selectedId = back ?? (ui.selectedId !== null && findNode(target, ui.selectedId) ? ui.selectedId : (target.nodes[0]?.id ?? null))
+  const notice = way === 'undo' ? `undone: ${what} · ${REDO_HINT}` : `redone: ${what} · ${UNDO_HINT}`
+  return { design: target, ui: { ...ui, selectedId, notice, grabbedId: null, confirmId: null, picker: null, editing: false, freshId: null, describing: false, runCleared: true }, changed: true }
+}
+
+/** What `u` or `y` says with nothing that way. */
+export function nothingToRestore(ui: DesignUi, way: 'undo' | 'redo'): DesignUi {
+  return { ...ui, confirmId: null, notice: way === 'undo' ? 'nothing to undo' : 'nothing to redo' }
 }
 
 /** Applies one message from the board. A refused edit leaves the design as it was and sets `notice`. */
 export function applyMessage(design: Design | null, ui: DesignUi, message: BoardMessage, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
   if (message.kind === 'key') return applyOp(design, ui, message.op, { ...context, orientation: message.orientation, placement: message.placement })
+  // A press that asked for nothing: the hooks module only needed to hear of it (the click gave the board the keyboard).
+  if (message.kind === 'touch') return { design, ui, changed: false }
   if (message.kind === 'select') {
     const strays = message.id === UNMAPPED_ID && (context.run?.unmapped.length ?? 0) > 0
     const selectedId = message.id !== null && (strays || findNode(design, message.id)) ? message.id : null
     const same = selectedId === ui.selectedId
     // The person chose a block: the selection stops following the run.
-    return { design, ui: { ...ui, selectedId, follow: false, confirmId: null, describing: false, notice: same ? ui.notice : null, editing: ui.editing && same, freshId: same ? ui.freshId : null, grabbedId: ui.grabbedId === selectedId ? ui.grabbedId : null }, changed: false }
+    return { design, ui: { ...ui, selectedId, follow: false, confirmId: null, describing: false, picker: null, notice: same ? ui.notice : null, editing: ui.editing && same, freshId: same ? ui.freshId : null, grabbedId: ui.grabbedId === selectedId ? ui.grabbedId : null }, changed: false }
   }
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, grabbedId: null, confirmId: null, picker: null, editing: false, freshId: null }, changed: false }
   switch (message.kind) {
@@ -277,7 +328,7 @@ export function applyMessage(design: Design | null, ui: DesignUi, message: Board
       return { design, ui: { ...ui, selectedId: found ? message.id : ui.selectedId, confirmId: null, editing: found || ui.editing }, changed: false }
     }
     case 'move':
-      return settle(design, { ...ui, confirmId: null, grabbedId: null }, moveNode(design, message.id, message.to), message.id)
+      return settle(design, { ...ui, confirmId: null, grabbedId: null }, moveNode(design, message.id, message.to), message.id, after => `moved ${message.id} ${whereIs(after, message.id)}`)
     case 'addAt': {
       const parent = message.at.parentId === undefined ? undefined : findNode(design, message.at.parentId)
       if (message.at.parentId !== undefined && (!parent || !canHoldChildren(parent.type))) {
@@ -297,14 +348,19 @@ export function patchNode(design: Design | null, ui: DesignUi, id: string, patch
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, editing: false, freshId: null }, changed: false }
   // A field was sent: the typing is over.
-  return settle(design, { ...ui, editing: false, freshId: null }, updateNode(design, id, patch), ui.selectedId)
+  const fields = [...(patch.title !== undefined ? ['title'] : []), ...('notes' in patch ? ['notes'] : []), ...Object.keys(patch.knobs ?? {})]
+  return settle(design, { ...ui, editing: false, freshId: null }, updateNode(design, id, patch), ui.selectedId, `${id} changed${fields.length > 0 && fields.length <= 3 ? `: ${fields.join(', ')}` : ''}`)
 }
 
 /** The inspector's type picker: the block becomes another type, keeping its title, notes, knobs and what it holds. */
 export function retypeBlock(design: Design | null, ui: DesignUi, id: string, type: NodeType, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, editing: false, freshId: null }, changed: false }
-  return settle(design, { ...ui, editing: false, freshId: null }, retypeNode(design, id, type), ui.selectedId)
+  const node = findNode(design, id)
+  const retyped = retypeNode(design, id, type)
+  // A block still called after its old type (the title it was added with) takes the new type's name.
+  const renamed = !retyped.error && node && node.type !== type && node.title === node.type ? updateNode(retyped.design, id, { title: type }) : retyped
+  return settle(design, { ...ui, editing: false, freshId: null, picker: null }, renamed, ui.selectedId, `${id} is now ${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`)
 }
 
 /** The types a block may become: all of them, or only containers while it holds blocks. */
@@ -318,7 +374,7 @@ export function describeDesign(design: Design | null, ui: DesignUi, text: string
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, describing: false }, changed: false }
   const description = text.replace(/\s+/g, ' ').trim()
   const calm: DesignUi = { ...ui, describing: false, notice: null }
-  return description === design.description ? { design, ui: calm, changed: false } : { design: { ...design, description }, ui: calm, changed: true }
+  return description === design.description ? { design, ui: calm, changed: false } : { design: { ...design, description }, ui: { ...calm, notice: `goal changed · ${UNDO_HINT}`, runCleared: true }, changed: true, what: 'goal changed' }
 }
 
 /**
@@ -350,7 +406,7 @@ export function placeAfter(design: Design, selectedId: string | null): Place {
 
 function confirmText(design: Design, id: string): string {
   const inside = flatten({ ...design, nodes: findNode(design, id)?.children ?? [] }).length
-  return `${id} holds ${inside} ${inside === 1 ? 'block' : 'blocks'}: delete again removes them all (no undo)`
+  return `${id} holds ${inside} ${inside === 1 ? 'block' : 'blocks'}: x again deletes them all (u undoes it)`
 }
 
 /** The row the selection lands on once `id` and what it holds are gone: the next one, else the one before. */
@@ -370,10 +426,12 @@ function afterRemoval(design: Design, id: string): string | null {
  */
 export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
-  const calm: DesignUi = { ...ui, confirmId: null, notice: null, editing: false, freshId: null, describing: false }
+  // A request waits in the prompt box: a key typed now is meant for it. Nothing is done, and the way out is said.
+  if (ui.handed) return { design, ui: ui.notice === HANDED_NOTICE ? ui : { ...ui, notice: HANDED_NOTICE }, changed: false }
+  const calm: DesignUi = { ...ui, confirmId: null, notice: null, editing: false, freshId: null, describing: false, picker: null }
   const placement = context.placement ?? 'dock'
   const node = ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
-  if (context.locked && (op === 'grab' || op === 'addAfter' || op === 'addInside' || op === 'remove' || op === 'edit' || op === 'describe')) {
+  if (context.locked && (op === 'grab' || op === 'addAfter' || op === 'addInside' || op === 'remove' || op === 'edit' || op === 'describe' || op === 'undo' || op === 'redo')) {
     return { design, ui: { ...calm, grabbedId: null, picker: null, notice: LOCK_NOTICE }, changed: false }
   }
   // Nothing is grabbed while locked, so the arrows move the selection.
@@ -384,7 +442,8 @@ export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp, cont
     case 'up':
     case 'down': {
       if (calm.grabbedId !== null && findNode(design, calm.grabbedId)) {
-        return settle(design, calm, moveBy(design, calm.grabbedId, op === 'right' || op === 'down' ? 1 : -1), calm.grabbedId)
+        const id = calm.grabbedId
+        return settle(design, calm, moveBy(design, id, op === 'right' || op === 'down' ? 1 : -1), id, after => `moved ${id} ${whereIs(after, id)}`)
       }
       const selectedId = navigate(design, node?.id ?? null, op, context.orientation ?? 'horizontal', compactOf(ui, placement))
       // The person moved the selection: it stops following the run.
@@ -405,8 +464,13 @@ export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp, cont
       if (held > 0 && ui.confirmId !== node.id) {
         return { design, ui: { ...calm, confirmId: node.id, notice: confirmText(design, node.id) }, changed: false }
       }
-      return settle(design, { ...calm, grabbedId: null }, removeNode(design, node.id), afterRemoval(design, node.id))
+      // A single block goes at once: `u` brings it back.
+      return settle(design, { ...calm, grabbedId: null }, removeNode(design, node.id), afterRemoval(design, node.id), `deleted ${node.id} "${clip(node.title, 24)}"${held > 0 ? ` and what it held` : ''}`)
     }
+    case 'undo':
+    case 'redo':
+      // The hooks module holds the history: it answers these before they get here.
+      return { design, ui: calm, changed: false }
     case 'edit':
       return { design, ui: node ? { ...calm, editing: true } : { ...calm, notice: 'edit: select a block first' }, changed: false }
     case 'compact':
@@ -436,6 +500,13 @@ export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp, cont
 }
 
 /** The picker's query as the person types it. */
+/** Opens the picker on a block's type: the same list as adding, narrowed to what the block may become. */
+export function openRetype(design: Design | null, ui: DesignUi, id: string, context: RunContext = {}): Step {
+  if (!design || ui.status !== 'ready' || !findNode(design, id)) return { design, ui, changed: false }
+  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE }, changed: false }
+  return { design, ui: { ...ui, notice: null, confirmId: null, grabbedId: null, editing: false, freshId: null, describing: false, picker: { at: { index: 0 }, query: '', retypeId: id } }, changed: false }
+}
+
 export function typePicker(ui: DesignUi, query: string): DesignUi {
   return ui.picker ? { ...ui, picker: { ...ui.picker, query } } : ui
 }
@@ -444,10 +515,13 @@ export function typePicker(ui: DesignUi, query: string): DesignUi {
 export function pickBlock(design: Design | null, ui: DesignUi, choice: { type?: NodeType; query?: string }, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready' || !ui.picker) return { design, ui, changed: false }
   if (context.locked) return { design, ui: { ...ui, picker: null, notice: LOCK_NOTICE }, changed: false }
-  const type = choice.type ?? fuzzy(choice.query ?? ui.picker.query)[0]
+  const retypeId = ui.picker.retypeId
+  const allowed = retypeId === undefined ? undefined : retypeChoices(findNode(design, retypeId) ?? { type: 'agent' })
+  const type = choice.type ?? fuzzy(choice.query ?? ui.picker.query).find(one => allowed === undefined || allowed.includes(one))
   if (type === undefined) return { design, ui: { ...ui, notice: 'no block matches that' }, changed: false }
+  if (retypeId !== undefined) return retypeBlock(design, ui, retypeId, type, context)
   const result = addNode(design, { type }, ui.picker.at)
-  const step = settle(design, ui, result, result.id ?? ui.selectedId)
+  const step = settle(design, ui, result, result.id ?? ui.selectedId, after => `added ${result.id ?? ''} ${type} ${placeLabel(after, ui.picker?.at ?? { index: 0 }).replace(/ \(at the end\)$/, '')}`)
   // The new block is selected and its title is the next thing typed.
   return step.changed ? { ...step, ui: { ...step.ui, picker: null, editing: true, freshId: result.id ?? null, drafting: false } } : step
 }
@@ -462,7 +536,7 @@ export const TEXT_KNOBS = ['prompt', 'fanout', 'until', 'schema', 'agentType'] a
 export type TextKnob = (typeof TEXT_KNOBS)[number]
 
 /** How the board sits in the pane: which way it flows, how many rows its region takes, and the most it could have had. */
-export type BoardView = { orientation: Orientation; columns: number; rows: number; room: number }
+export type BoardView = { orientation: Orientation; columns: number; rows: number; room: number; /** The rows the whole board takes, in view or not. */ height: number }
 
 /** The room the board is sized for is never less than this: one leaf card and a row to add under it. */
 export const BOARD_MIN_ROWS = 5
@@ -489,9 +563,10 @@ export function boardView(design: Design, placement: 'dock' | 'inline', columns:
   const options = { run: state.run !== undefined, unmapped: state.run?.unmapped?.total ?? 0, width: columns, compact: state.compact ?? false }
   // The caller keeps `room` at BOARD_MIN_ROWS or more, except under an inline help card, where three rows hold the place.
   const most = Math.max(3, room)
-  const orientation = chooseOrientation(design, placement === 'dock' ? 'vertical' : 'horizontal', columns, Math.max(BOARD_MIN_ROWS, state.turnRoom ?? room), options)
+  // Decided for the compact board, whatever `z` is set to: switching compact must not turn the flow.
+  const orientation = chooseOrientation(design, placement === 'dock' ? 'vertical' : 'horizontal', columns, Math.max(BOARD_MIN_ROWS, state.turnRoom ?? room), { ...options, compact: true })
   const { height } = layoutBoard(design, { ...options, orientation, selectedId: state.selectedId ?? null, noteRows: expandRows(orientation, most) })
-  return { orientation, columns, rows: state.fill ? most : Math.min(most, height), room: most }
+  return { orientation, columns, rows: state.fill ? most : Math.min(most, height), room: most, height }
 }
 
 /** What an empty board says while Claude drafts the design. */
@@ -507,7 +582,7 @@ export function boardProps(design: Design, ui: DesignUi, view: BoardView, run?: 
     selectedId: ui.selectedId,
     grabbedId: locked ? null : ui.grabbedId,
     confirmId: locked ? null : ui.confirmId,
-    pickerAt: locked ? null : (ui.picker?.at ?? null),
+    pickerAt: locked || ui.picker?.retypeId !== undefined ? null : (ui.picker?.at ?? null),
     orientation: view.orientation,
     placement,
     compact: compactOf(ui, placement),
@@ -516,6 +591,7 @@ export function boardProps(design: Design, ui: DesignUi, view: BoardView, run?: 
     room: view.room,
   }
   if (ui.flash && ui.flash.ids.length > 0) props.flash = ui.flash
+  if (ui.handed) props.hold = true
   if (ui.drafting && design.nodes.length === 0) props.emptyNote = DRAFTING_NOTE
   if (run) props.run = run
   return props
@@ -573,8 +649,8 @@ export const HELP_PAGES = 3
 
 /** One page of the help card, as lines no wider than `columns`. `page` counts from 1. */
 export function helpPage(page: number, type: NodeType | undefined, file: string, columns: number): string[] {
-  const marks = LEGEND.slice(0, 5)
-  const hands = LEGEND.slice(5)
+  const marks = LEGEND.slice(0, 6)
+  const hands = LEGEND.slice(6)
   const lines =
     page === 1
       ? type
@@ -584,7 +660,7 @@ export function helpPage(page: number, type: NodeType | undefined, file: string,
         ? marks
         : [
             ...hands,
-            'd: the goal (the design\'s description) · n: next block with a lint · z: compact, one row a card · c: this card',
+            'd: the goal (the design\'s description) · n: next block with a lint · z: compact, one row a card · c: this help',
             'r: puts the request to run the design in the prompt: add what to run it on, then Enter · v: asks Claude to review the design',
             'q: puts away the results of a run that is over (the first edit does too)',
             `file: ${file}`,
@@ -608,7 +684,7 @@ export function runSummary(run: RunState, elapsedMs: number | null, room: number
   const time = elapsedMs !== null && elapsedMs >= 0 ? [fmtDuration(elapsedMs)] : []
   const count = `${done}/${agents.length}`
   const wordings = [
-    [`run ${status}`, `${count} agents done`, ...fails, `${fmtTokens(tokens)} tokens`, ...time],
+    [status, `${count} agents done`, ...fails, `${fmtTokens(tokens)} tokens`, ...time],
     [status, `${count} done`, ...fails, fmtTokens(tokens), ...time],
     [status, `${count} done`, ...fails, fmtTokens(tokens)],
     [status, `${count} done`, ...fails],

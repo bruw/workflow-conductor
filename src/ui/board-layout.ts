@@ -98,6 +98,13 @@ export type BoardSlot = Rect & {
   mark: { x: number; y: number; label: string } | null
 }
 
+/**
+ * What stands between two blocks that do not follow one another: `or` between the arms of a
+ * branch, `∥` between blocks run at the same time. `axis` is the list's: `h` puts the word in the
+ * gap between two cards side by side, `v` on a dotted row of its own between two listed one under the other.
+ */
+export type BoardRule = { x: number; y: number; w: number; axis: Axis; label: string }
+
 export type BoardLayout = {
   orientation: Orientation
   width: number
@@ -106,6 +113,22 @@ export type BoardLayout = {
   cards: BoardCard[]
   edges: BoardEdge[]
   slots: BoardSlot[]
+  rules: BoardRule[]
+}
+
+/** The word between two blocks of a stack: one arm of a branch runs, the blocks of a parallel or a sweep all do. */
+export function ruleLabel(type: NodeType | undefined): string {
+  return type === 'branch' ? 'or' : '∥'
+}
+
+/**
+ * The cells between two blocks of a stack. Top to bottom they stand side by side with the word between
+ * them, or (compact) one under the other with a row for it: either way they cannot be read as a sequence.
+ * Left to right they are stacked across the flow, which the arrows already tell apart: no cells.
+ */
+export function stackGap(type: NodeType | undefined, axis: Axis, orientation: Orientation): number {
+  if (orientation !== 'vertical') return axis === 'h' ? 1 : 0
+  return axis === 'h' ? ruleLabel(type).length + 2 : 1
 }
 
 export type LayoutOptions = {
@@ -302,7 +325,7 @@ type Measured = {
 type Arranged = { w: number; h: number; at: { x: number; y: number }[]; end: { x: number; y: number } }
 
 /** What a list is laid out by: which way the board runs, and whether the list is the top level (which has no box to carry its last `+`). */
-type ListShape = { flow: Flow; axis: Axis; orientation: Orientation; top: boolean }
+type ListShape = { flow: Flow; axis: Axis; orientation: Orientation; top: boolean; gap: number }
 
 
 /** Where the cards of one list go, from the list's own corner, and where its end slot starts. */
@@ -317,10 +340,10 @@ function arrange(sizes: readonly { w: number; h: number }[], shape: ListShape): 
     const last = i === sizes.length - 1
     at.push({ x, y })
     if (axis === 'h') {
-      x += size.w + (last ? 0 : flow === 'chain' ? GAP_H : 1)
+      x += size.w + (last ? 0 : flow === 'chain' ? GAP_H : shape.gap)
       h = Math.max(h, size.h)
     } else {
-      y += size.h + (last ? 0 : flow === 'chain' ? GAP_V : 0)
+      y += size.h + (last ? 0 : flow === 'chain' ? GAP_V : shape.gap)
       w = Math.max(w, size.w)
     }
   }
@@ -388,11 +411,11 @@ function measure(node: DesignNode, width: number, ctx: Ctx): Measured {
   else if (axis === 'v') kids = kin.map(child => measure(child, width - 4, ctx))
   else {
     // Branches side by side share the columns; the last takes what the division leaves over.
-    const room = width - 4 - Math.max(0, kin.length - 1)
+    const room = width - 4 - Math.max(0, kin.length - 1) * stackGap(node.type, axis, ctx.orientation)
     const share = Math.max(BRANCH_MIN_W, Math.floor(room / Math.max(1, kin.length)))
     kids = kin.map((child, i) => measure(child, i === kin.length - 1 ? Math.max(share, room - share * (kin.length - 1)) : share, ctx))
   }
-  const list = arrange(kids, { flow, axis, orientation: ctx.orientation, top: false })
+  const list = arrange(kids, { flow, axis, orientation: ctx.orientation, top: false, gap: stackGap(node.type, axis, ctx.orientation) })
   const w = vertical ? Math.max(width, list.w + 4) : Math.max(CONTAINER_MIN_W, list.w + 4, Math.min(header.length + (title === '' || title === node.type ? 0 : 3 + Math.min(title.length, 18)), 44) + 4)
   // A selected container says its notes above what it holds.
   const lines = selected ? noteLines(node, w - 4, { ...ctx, noteRows: Math.min(ctx.noteRows, vertical ? 4 : 1) }) : []
@@ -406,6 +429,7 @@ export function layoutBoard(design: Design, options: LayoutOptions): BoardLayout
   const cards: BoardCard[] = []
   const edges: BoardEdge[] = []
   const slots: BoardSlot[] = []
+  const rules: BoardRule[] = []
   const { orientation } = options
   const vertical = orientation === 'vertical'
   const span = vertical ? Math.max(BOARD_MIN_W, Math.min(BOARD_MAX_W, Math.trunc(options.width ?? BOARD_DEFAULT_W))) : 0
@@ -419,7 +443,9 @@ export function layoutBoard(design: Design, options: LayoutOptions): BoardLayout
 
   const placeList = (kids: Measured[], flow: Flow, ox: number, oy: number, box: BoardCard | undefined, depth: number): Arranged => {
     const axis = flowAxis(flow, orientation, ctx.compact)
-    const list = arrange(kids, { flow, axis, orientation, top: box === undefined })
+    const boxType = box === undefined || box.type === 'unmapped' ? undefined : box.type
+    const stackCells = stackGap(boxType, axis, orientation)
+    const list = arrange(kids, { flow, axis, orientation, top: box === undefined, gap: stackCells })
     const count = kids.length
     const place = (index: number): Place => (box ? { parentId: box.id, index } : { index })
     const lw = vertical ? (box ? box.w - 4 : Math.max(span, list.w)) : list.w
@@ -480,11 +506,15 @@ export function layoutBoard(design: Design, options: LayoutOptions): BoardLayout
       }
       const common = { place: place(i), depth, axis, end: false }
       if (axis === 'h') {
-        const gap = flow === 'chain' ? GAP_H : 1
+        const gap = flow === 'chain' ? GAP_H : stackCells
+        if (i > 0 && flow === 'stack' && gap >= 3) rules.push({ x: here.x - gap, y: here.y + 1, w: gap, axis, label: ruleLabel(boxType) })
         if (i === 0) slots.push({ ...common, x: here.x, y: oy, w: 1, h: list.h, bar: 'column', mark: null })
         else slots.push({ ...common, x: here.x - gap, y: oy, w: gap, h: list.h, bar: 'column', mark: flow === 'chain' ? { x: here.x - gap + 1, y: oy + Math.min(2, list.h - 1), label: '+' } : null })
       } else if (i === 0 || flow === 'stack') {
-        slots.push({ ...common, x: ox, y: here.y, w: lw, h: 1, bar: 'row', mark: null })
+        // Blocks of a stack listed one under the other: the row between two says they do not follow one another.
+        const between = i > 0 && stackCells > 0
+        if (between) rules.push({ x: ox, y: here.y - 1, w: lw, axis, label: ruleLabel(boxType) })
+        slots.push({ ...common, x: ox, y: between ? here.y - 1 : here.y, w: lw, h: 1, bar: 'row', mark: null })
       } else {
         // The connector's row: the `+` a little right of the line, the same place at every level.
         slots.push({ ...common, x: ox, y: here.y - GAP_V, w: lw, h: GAP_V, bar: 'row', mark: { x: ox + 5, y: here.y - GAP_V, label: '+' } })
@@ -512,16 +542,16 @@ export function layoutBoard(design: Design, options: LayoutOptions): BoardLayout
   let height = top.h
   const strays = options.unmapped ?? 0
   if (strays > 0) {
-    const fan = `×${strays}`
-    const title = 'no block claims these'
+    // Not a fan-out: no `×`, no double border. The count is said in words.
+    const title = strays > 1 ? `${strays} agents no block claims` : 'an agent no block claims'
     const w = vertical ? span : title.length + 4
     const x = vertical ? 0 : top.w + 1
     const y = vertical ? top.h : 0
-    cards.push({ x, y, w, h: LEAF_H - 1, id: UNMAPPED_ID, type: 'unmapped', header: strays > 1 ? `unmapped ${fan}` : 'unmapped', title, each: '', lines: [{ text: title, role: 'title' }], foot: '', fan: strays > 1 ? fan : '', fanned: strays > 1, line: false, expanded: false, depth: 0, parentId: undefined, index: design.nodes.length, container: false, inside: 0, axis: vertical ? 'v' : 'h' })
+    cards.push({ x, y, w, h: LEAF_H - 1, id: UNMAPPED_ID, type: 'unmapped', header: 'unmapped', title, each: '', lines: [{ text: title, role: 'title' }], foot: '', fan: '', fanned: false, line: false, expanded: false, depth: 0, parentId: undefined, index: design.nodes.length, container: false, inside: 0, axis: vertical ? 'v' : 'h' })
     width = Math.max(width, x + w)
     height = Math.max(height, y + LEAF_H - 1)
   }
-  return { orientation, width, height, cards, edges, slots }
+  return { orientation, width, height, cards, edges, slots, rules }
 }
 
 /**

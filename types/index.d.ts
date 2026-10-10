@@ -32,7 +32,7 @@ export type ConductorDesignUi = {
   help: number
   notice: string | null
   grabbedId: string | null
-  picker: { at: { parentId?: string; index: number }; query: string } | null
+  picker: { at: { parentId?: string; index: number }; query: string; retypeId?: string } | null
   confirmId: string | null
   compact: { dock: boolean; inline: boolean }
   editing: boolean
@@ -44,6 +44,7 @@ export type ConductorDesignUi = {
   describing: boolean
   runCleared: boolean
   saved: { name: string; blocks: number; description: string }[]
+  handed: boolean
 }
 
 declare module 'claude-code' {

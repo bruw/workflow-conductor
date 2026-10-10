@@ -7,6 +7,7 @@ import type { Knobs, NodeType } from './model'
 export type Teach = {
   /** One character for the rail. */
   glyph: string
+  /** The type's one name, everywhere: its id. */
   name: string
   /** One line, at most HINT_MAX characters, in plain words: what the block does. */
   hint: string
@@ -126,7 +127,7 @@ export const TEACH: Record<NodeType, Teach> = {
   },
   'judge-panel': {
     glyph: '▽',
-    name: 'judge panel',
+    name: 'judge-panel',
     hint: 'Several attempts at one task; judges score them, the best one wins',
     when: 'many answers are possible and a first try is rarely the best',
     card: [
@@ -139,7 +140,7 @@ export const TEACH: Record<NodeType, Teach> = {
   },
   'loop-until-dry': {
     glyph: '∞',
-    name: 'loop until dry',
+    name: 'loop-until-dry',
     hint: 'Keeps searching until some rounds in a row find nothing new',
     when: 'you do not know how many there are to find: bugs, edge cases',
     card: [
@@ -151,7 +152,7 @@ export const TEACH: Record<NodeType, Teach> = {
   },
   sweep: {
     glyph: '◎',
-    name: 'multi-modal sweep',
+    name: 'sweep',
     hint: 'Several searchers at once, each looking a different way',
     when: 'one way of searching would miss things',
     card: [
@@ -163,7 +164,7 @@ export const TEACH: Record<NodeType, Teach> = {
   },
   critic: {
     glyph: '◐',
-    name: 'completeness critic',
+    name: 'critic',
     hint: 'One agent at the end asks what is missing; gaps become more work',
     when: 'before the final write-up of research, review or audit work',
     card: [
@@ -243,11 +244,11 @@ export const FIELD_LABEL = {
 
 export const FIELD_PLACEHOLDER = {
   notes: 'for whoever reads the design: what this block does and why',
-  prompt: 'for the agent: the intent of its prompt; Claude writes the wording',
+  prompt: 'the intent of its prompt; Claude writes the wording',
   fanout: 'e.g. changed files, ×4 dimensions',
   until: 'e.g. 2 dry rounds, 10 findings, budget < 50k',
   schema: 'e.g. { findings: [{ file, claim }] }, or in words',
-  agentType: 'empty: the default subagent',
+  agentType: 'the default subagent; name another to change it, e.g. Explore',
 } as const
 
 /** Picker order: primitives first, then patterns. */
@@ -260,8 +261,8 @@ export const PALETTE: PaletteEntry[] = [
   { type: 'subworkflow', tier: 'primitive', keywords: ['workflow', 'nested', 'child', 'reuse', 'saved'] },
   { type: 'code', tier: 'primitive', keywords: ['js', 'javascript', 'transform', 'dedup', 'filter', 'flatten', 'script'] },
   { type: 'verify', tier: 'pattern', keywords: ['adversarial', 'disprove', 'checkers', 'refute', 'skeptic', 'votes', 'check', 'confirm'] },
-  { type: 'judge-panel', tier: 'pattern', keywords: ['judges', 'score', 'attempts', 'winner', 'tournament', 'rank'] },
-  { type: 'loop-until-dry', tier: 'pattern', keywords: ['dry', 'exhaustive', 'discovery', 'converge', 'rounds', 'tail'] },
+  { type: 'judge-panel', tier: 'pattern', keywords: ['judge panel', 'judges', 'score', 'attempts', 'winner', 'tournament', 'rank'] },
+  { type: 'loop-until-dry', tier: 'pattern', keywords: ['loop until dry', 'until dry', 'dry', 'exhaustive', 'discovery', 'converge', 'rounds', 'tail'] },
   { type: 'sweep', tier: 'pattern', keywords: ['multi-modal', 'search', 'angles', 'modes', 'broad', 'coverage'] },
   { type: 'critic', tier: 'pattern', keywords: ['completeness', 'missing', 'gaps', 'review', 'what else'] },
 ]

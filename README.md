@@ -37,6 +37,7 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 | `/conductor draft <name> <description…>` | Claude drafts a design for the description, saves it under that name and shows it on the board. Refused when a design of that name already holds blocks. |
 | `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt; the pane switches to that design. With `fill`, the request is left in the box, ending `on: `, for you to say what to run it on and send. The answer says what the design implies: `at least 18 agents · 2 lints (n3, n5)`. |
 | `/conductor list` | The saved designs, each with its block count and description. |
+| `/conductor delete <name>` | Deletes a saved design. Asks once more: it answers with what would go, and `/conductor delete <name> confirm` does it. |
 | `/conductor replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
 | `/conductor replay design <template> [fast\|slow]` | Dev: replays a made-up run over a template's design (`review`, `research`, `migrate`, `judge-panel`). The design is named `replay-<template>`, lives in the session only, and is never saved or listed (the `replay-` prefix is kept for this). |
 
@@ -107,8 +108,18 @@ Above the prompt (inline) it flows left to right. It starts compact there (one r
 - `▲` on a border is a lint; the inspector under the board says what is wrong and how to fix it. The header counts them (`▲ 2`) and `n` goes to the next one.
 - Under the header, `goal: …` is the design's description: what the workflow is for. `d` edits it. Claude is handed it as the goal.
 
-Under the board: a line for whatever needs saying about it (the delete question, what a grab's keys do,
-a refused edit, the lock), one row of keys, then the inspector. Inline the inspector is one line until you press `e`.
+The keys and the inspector stand at the bottom of the pane and the board takes every other row, so the keys never move:
+not when another block is selected, not when something is said. Docked, from the bottom up: two rows of keys (the first
+acts on the selected block, the second on the design; each key keeps its place whether it is shown or not), one row for
+whatever needs saying (a change just made and `u: undo`, the delete question, a refused edit, the lock), the inspector, the board.
+Inline: one row of keys under short labels (the least needed are left out where the pane is too narrow for all), one line
+for the selected block, the board; the inspector's fields open when you press `e`.
+
+The key rows say who has the keyboard. While the pane has it, each key's letter is lit. While it does not (after a chat
+turn, a reload, a resize, Escape), the keys are dim and the pane says `keys are in the prompt · click the board or /conductor`.
+A click on the board gives the keys to the key rows. `r` and `v` put a request in the prompt box and the keys go there with
+it, so what you type next is typed into the prompt. If the prompt box already holds text when you click the board, the keys
+here stay off and the pane says so (`Esc returns to the prompt`).
 
 The inspector has a field for everything a block can carry, and shows only what suits the block's type:
 
@@ -127,41 +138,48 @@ The inspector has a field for everything a block can carry, and shows only what 
 
 A knob a block carries that its type does not list (set from chat, or in the file) gets its field too.
 Enter in a field saves it, with everything typed in the block's other fields since it was selected (Tab between them loses nothing), and returns the keys to the key row.
-The row of pickers starts with `type`: the block becomes another type and keeps its title, notes and knobs; one that holds blocks can only become another container.
+The row of pickers starts with `type`, which opens the same list a block is added from (every type with what it does): the block becomes another type and keeps its notes and knobs; a title it never got (still the old type's name) becomes the new type's; one that holds blocks can only become another container.
+While the board leaves rows free, the headline and a long `notes` or `prompt` wrap into them; the goal under the header wraps to three rows.
 Under the block's id the inspector says its type in two lines: what it does, and `use when: …`.
 
 With the mouse:
 
 - Click a card to select it.
-- Click a `+` to add a block at that place.
-- Drag a card to a slot to move it, into or out of a container too. A bar shows where it will land
+- Click a `+` to add a block at that place: press and release on the same `+` (a press let go elsewhere does nothing).
+- Drag the **selected** card to a slot to move it, into or out of a container too. A bar shows where it will land
   and the words at the pointer say what a release does; releasing away from any slot cancels.
-  Held at the board's edge, the board pans.
-- The selected card carries `edit` and `del` on its border. `del` on a container that holds blocks asks once more.
-- Drag the background to pan.
+  Held at the board's edge, the board pans. Every move says where the block went: `moved n7 after n11 · u: undo`.
+- Drag anything else to pan: the background, a container's body, a card that is not selected. No block moves by accident.
+- The selected card carries `edit` and `del` on its border. `del` on a container that holds blocks asks once more; a single block goes at once (`u` brings it back).
 - While a run is in progress editing is locked: a click only selects, the key row shows only the keys that still work,
   and the inspector lists the selected block's agents.
 
-With the keyboard. The keys do the same whether the pane's key row or the board (after a click on it) has the keyboard:
+With the keyboard, from the pane's key rows:
 
 | Key | Action |
 | --- | --- |
 | `h` `j` `k` `l` | move the selection: along the flow to the next or previous block, across it into a container or back out |
 | `a` | add a block after the selection (the field says where: `+ add after n4 (in n2)`): a list of the block types, each with a line on what it does, and for the best match `use when: …`; type to narrow, Enter adds that match. The new block's title is typed next (Enter keeps the default) |
 | `i` | add a block inside the selected container, the same way |
-| `x` | delete (a container that holds blocks asks first) |
+| `x` | delete: a single block at once, a container that holds blocks after a second `x`. Either way `u` brings it back |
+| `u` `y` | undo and redo. Every change to a design can be undone: add, delete, move, retype, a field, a knob, the goal, a drop, and what Claude changed from chat. Fifty steps per design, for the session |
 | `g` | grab the selected block; the direction keys then move it a step at a time, `g` drops it |
 | `e` | edit: the title field takes the keyboard, Tab reaches the other fields and the pickers; Enter saves |
 | `z` | compact: every card but the selected one becomes one row (branches one under the other); `z` again brings them back. Inline starts compact, docked starts whole; each keeps its own setting for the session, whatever design is open |
-| `c` | help, a page a press, in the inspector's place: the block type's card, what the board's marks mean, mouse and keys and the design file's path; then closed |
+| `c` | help (a Button takes a letter or a digit as its key, so not `?`), a page a press, in the inspector's place: the block type's card, what the board's marks mean, mouse and keys and the design file's path; then closed |
 | `d` | the goal: the design's description opens as a field under the header |
 | `n` | go to the next block with a lint (shown while there is one) |
-| `v` | ask Claude: puts `Review the "<name>" workflow design: is the structure right for its goal, what is missing, what is wasteful?` in the prompt, not sent |
-| `r` | run: puts `Implement and run the "<name>" workflow design on: ` in the prompt, for you to say what to run it on and send. The line under the board says what the design implies first: `run: 6 blocks · at least 18 agents · 2 lints (n3, n5)` |
+| `v` | ask Claude: puts `Review the "<name>" workflow design as it is on the board now (read it first, it may have changed by hand): is the structure right for its goal, what is missing, what is wasteful?` in the prompt, not sent; the keys go to the prompt |
+| `r` | run: puts `Implement and run the "<name>" workflow design on: ` in the prompt, for you to say what to run it on and send. The keys go to the prompt. The message row says what the design implies first: `run: 6 blocks · 18 agents · 2 lints (n3, n5)`, or `12+ agents (more: 2 blocks fan out over an unknown number)` where the drawing does not say how many |
 | `q` | put away the results of a run that is over (shown while they are on the board; the first edit does the same) |
 
-After a click on the board the arrow keys also move the selection and Enter edits. Escape hands the keys back to the prompt.
-After a handoff the keyboard is in the prompt: `/conductor` reopens the pane with the keyboard.
+Escape hands the keys back to the prompt (and closes the add or type picker to the eye). `/conductor` gives them back to the pane.
+The arrow keys belong to the pane's focus ring; `h` `j` `k` `l` move the selection.
+
+Blocks that do not follow one another are drawn so: the arms of a `branch` have `or` between them, the blocks of a `parallel` or `sweep` have `∥`, side by side when the board is whole and on a dotted row between them when it is compact.
+
+Claude always reads the board before it reviews or edits: every answer of its design tool names a revision, a prompt sent after you changed the board by hand tells it so, and an edit made from an older revision is refused until it has read again. Adding a block "after" one that stands directly in a branch makes a new arm; the tool says so and says how to get a sequence (wrap the two in a pipeline).
+A design started from a template is not written to disk until its first edit, or until it is run.
 Reopening a design brings back the block it was left on.
 
 ## Watching a run
@@ -205,7 +223,8 @@ Known limits:
 - Phases rely on the journal file, an internal format that may change.
 - A handoff claims the first Workflow run that starts within 3 minutes. A run started later, or without a handoff, is shown in the phase view only.
 - One run is tracked at a time, and one board is mounted at a time.
-- Delete has no undo.
+- Undo history is kept for the session only, and is lost when the plugin reloads.
+- Inline at about 100 columns one key row cannot hold every key: `y`, `n`, `d`, `q`, `i` are left out first, and a key that is not drawn does nothing until the pane is wider or docked.
 - Replayed token counts are made up.
 
 ## Develop and test
