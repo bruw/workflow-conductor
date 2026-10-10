@@ -19,10 +19,10 @@ hooks/hooks.json            { "modules": ["./register.tsx"] }
 hooks/register.tsx          composes run + design hooks only
 hooks/run.tsx               run hooks + run pane tree
 hooks/design.tsx            design hooks, inspector, commands (rename from .ts when it draws)
-hooks/canvas.tsx            Client module: the canvas
+hooks/canvas.tsx            Client module: the flow board
 src/run/                    events.ts reducer.ts journal.ts
 src/design/                 model.ts ops.ts lints.ts templates.ts teach.ts
-src/ui/                     rail.ts theme.ts tween.ts
+src/ui/                     rail.ts theme.ts tween.ts board-layout.ts board-paint.ts board-model.ts
 types/index.d.ts            $.state contract
 tests/ fixtures/
 scripts/dev-session.sh capture.sh
@@ -128,6 +128,8 @@ These files are internal and may change between versions: parse defensively, nev
 
 ## UX
 
+The designer's drawing and editing were replaced by the flow board (last section): the row sketch and the `j/k`-first input below describe the first design and the run pane, not the designer.
+
 Aesthetic: native Claude Code, geeky, text-first. Motion: short eased tweens on state change only.
 
 ```
@@ -229,3 +231,33 @@ The test kit checks the tree a hook returns, not the surface's paint.
 - **Dev aid:** `/conductor replay design <template> [fast|slow]` feeds a synthetic run mapped to a template's node ids.
 - **Atoms** are declared in both hooks files: validate refuses a shared atoms module.
 - **Lost on reload:** known node ids are not restored if the plugin reloads mid-run.
+
+## Flow board (replaces the designer's tree view)
+
+The tree showed containment; a workflow is flow. The designer now draws the design as a board of cards. Three pure modules: `src/ui/board-layout.ts` (cells), `board-paint.ts` (styled spans), `board-model.ts` (props, messages, the Client's reducer). `hooks/canvas.tsx` is the Client.
+
+**Layout rules**
+- One model, two orientations: `horizontal` (flow left to right) when the pane is inline, `vertical` (top to bottom) when docked. Inline falls back to vertical only when the horizontal board is taller than the room and the vertical one fits the columns.
+- Leaf = a bordered card, 4 rows, 16 to 30 columns (20 minimum with a run): `id type ×N` on the top border, title, then knobs (or the prompt's first words, which never widen the card) or the run's status.
+- Container = a box around its children, its title after ` · ` in the header, its knobs or run sum on the bottom border. `pipeline`, `loop`, `loop-until-dry` and the top level are **chains**: children along the main axis, an edge and a `+` in each gap. `parallel`, `sweep`, `branch` are **stacks**: children across it, no edges, one `+` at the end.
+- Edge kind (derived, not stored): inside a `pipeline` always stream (`─▶`). Elsewhere barrier (`═▶`) when the source yields many results (a `fanout` or `votes` knob, or a pipeline, parallel, sweep or judge-panel), else stream. Vertical glyphs: `│▼`, `║▼`.
+- Fan-out: `×N` from a leading count in `fanout` or from `votes`, `×n` for a fan-out with no count; plus a `▒` column right of the card.
+- Type accents are theme keys (`ACCENT` in `theme.ts`); `claude` is the selection, `success`/`error` run outcomes. The selected card has a heavy border.
+- Slots: every list has a slot per insertion index. Those with a `+` take clicks; before the first card and between stacked cards a slot only takes a drop.
+- The region is as tall as the board plus one legend line, up to the pane's room; past that it pans (drag the background; the selection is scrolled into view; a card held at the edge pans). No wheel: `ClientPointerEvent` has none.
+- Agents no block claims are one `unmapped ×N` card after the design.
+
+**Editing model**
+- Single source of truth: selection, grab, picker place and the delete question live in `designUi` (hooks). The Client keeps only pan, a drag in flight and card motion, so `rev` and the Client-side selection are gone.
+- Messages: `select`, `move {id, to}`, `addAt {at}`, `remove {id}`, `edit {id}`, `key {op, orientation}`. One per input.
+- Click a card: select. Click a `+`: the hooks-tree type picker opens for that place (all 12 types as Buttons, the field filters). Drag: the card is drawn dashed where it stood, a bar marks the nearest slot within reach, release posts one `move`; no slot near, off the board, or its own place cancels.
+- The selected card's bottom border carries `edit` and `del`; `del` on a container with children turns into `delete all?` and needs a second click.
+- Keys (toolbar Buttons `h j k l a i x g e c r`, or the same keys and the arrows once the board was clicked): along the sibling axis to the previous or next block (before the first: the container; after the last: what follows the container on that axis); across it, forward into a container, backward out. With a block grabbed the direction keys call `moveBy` ±1.
+- Run overlay: status glyph, `settled/total`, `N✗` failures and tokens on each card (containers sum their children, on the bottom border); never-reached blocks dim with `not run`. While running: no `+`, no `edit`/`del`, a press only selects or pans. The selected block's agents are listed in the inspector (no more per-row expand, `o`, or `runUi` in `designUi`).
+
+**Findings**
+- Drawn by cell: each board row is a `Box` row of `Text` spans. Nested bordered Boxes cannot put a title on a border, draw an edge between two boxes, or pan. A `Text` nested in a `Text` cannot start a hover group, hence sibling spans.
+- A tree is refused past 100,000 characters: `paintWeight` estimates it and the board repaints without colours past 70,000.
+- `rows`/`columns` on `$.ui.open` are requests: 28 rows were asked and a 50-row terminal gave `scroll.bodyRows` 14, so the board is sized from `bodyRows` and keeps at least 9 rows; the inspector's lower fields scroll.
+- A string sent to a focused Client in one burst arrives as a single paste key and is ignored; Escape first hands the keys back to the prompt.
+- Text measures by code unit: a title with wide or combined characters misaligns its card.

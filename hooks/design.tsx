@@ -428,6 +428,18 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const rows = flatten(design)
     const matches = ui.picker ? fuzzy(ui.picker.query).slice(0, PICKER_MAX) : []
 
+    // The selected block's agents, while a run is laid over the design: right under its headline, above the fields.
+    const agentList =
+      agents && agents.shown.length > 0 ? (
+        <Box key="design-agents" flexDirection="column">
+          {agents.shown.map(agent => (
+            <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : undefined}>
+              {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${agent.title}  ${fmtTokens(agent.tokens)}`}
+            </Text>
+          ))}
+          {agents.rest > 0 && <Text color="subtle">{`… ${agents.rest} more`}</Text>}
+        </Box>
+      ) : null
     const fields = node ? knobFields(node.type) : undefined
     const models = node?.knobs?.model && !MODEL_CHOICES.includes(node.knobs.model) ? [...MODEL_CHOICES, node.knobs.model] : MODEL_CHOICES
 
@@ -496,6 +508,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
                 <Text color="warning">{`${GLYPH.lint} ${one.message}`}</Text>
               ))}
             {node.knobs?.fanout && <Text color="subtle" wrap="truncate-end">{`fanout: ${node.knobs.fanout}`}</Text>}
+            {agentList}
             {ui.showCard && (
               <Box key="design-card" flexDirection="column">
                 {TEACH[node.type].card.map(line => (
@@ -561,22 +574,15 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             )}
           </Box>
         ) : ui.selectedId === UNMAPPED_ID && agents ? (
-          <Text wrap="truncate-end">
-            <Text color="claude" bold>unmapped</Text>
-            <Text color="subtle">: agents whose label names no block of this design</Text>
-          </Text>
+          <Box key="design-inspector" flexDirection="column">
+            <Text wrap="truncate-end">
+              <Text color="claude" bold>unmapped</Text>
+              <Text color="subtle">: agents whose label names no block of this design</Text>
+            </Text>
+            {agentList}
+          </Box>
         ) : (
           <Text color="subtle">{design.nodes.length === 0 ? 'Empty design: click + on the board, or press a, to add the first block.' : 'Click a card to select it, or + to add a block there.'}</Text>
-        )}
-        {agents && agents.shown.length > 0 && (
-          <Box key="design-agents" flexDirection="column">
-            {agents.shown.map(agent => (
-              <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : undefined}>
-                {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${agent.title}  ${fmtTokens(agent.tokens)}`}
-              </Text>
-            ))}
-            {agents.rest > 0 && <Text color="subtle">{`… ${agents.rest} more`}</Text>}
-          </Box>
         )}
         {ui.notice !== null && ui.notice !== LOCK_NOTICE && <Text color="warning">{ui.notice}</Text>}
         {ui.notice === LOCK_NOTICE && locked && <Text color="subtle">{LOCK_NOTICE}</Text>}

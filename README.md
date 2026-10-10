@@ -38,31 +38,52 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 | `/conductor replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
 | `/conductor replay design <template> [fast\|slow]` | Dev: replays a made-up run over a template's design (`review`, `research`, `migrate`, `judge-panel`). |
 
-## Keys and mouse
+## The designer: a flow board
 
-The designer opens with the keyboard on its toolbar:
+The design is drawn as a board of cards, in the order the workflow runs:
+
+```
+╭ n1 agent ────╮    ╭ n2 pipeline ×4 · review ───────────────────────╮     ╭ n5 agent ────╮
+│ scout diff   │ ─▶ │ ╭ n3 agent ────╮    ╭ n4 verify ×3 ──────╮     │▒ ═▶ │ synthesize   │ +
+│ low          │ +  │ │ review       │ ─▶ │ adversarial verify │▒ +  │▒ +  │ Write one r… │
+╰──────────────╯    │ │ Review the … │ +  │ 3 votes            │▒    │▒    ╰──────────────╯
+                    │ ╰──────────────╯    ╰────────────────────╯▒    │▒
+                    ╰ ×4 dimensions ─────────────────────────────────╯▒
+```
+
+- A block is a card: `id type` on its border, its title, then its knobs (or, with a run, its progress).
+- A container is a box around its blocks. A pipeline or loop chains them along the flow;
+  a parallel, sweep or branch stacks them across it.
+- `─▶` hands each result on as it arrives; `═▶` waits for all results first.
+- `×4` and the shade beside a card mean it runs many times (a fan-out, or votes).
+- `▲` on a border is a lint; the inspector under the board says what it is.
+- The board flows left to right when the pane sits above the prompt and top to bottom when
+  it is docked beside the transcript. A board larger than its room pans.
+
+With the mouse:
+
+- Click a card to select it; the inspector under the board edits it.
+- Click a `+` to add a block at that place: between two blocks, at the end of a container, at the end of the design.
+- Drag a card to a slot to move it, into or out of a container too. A bar shows where it will land;
+  releasing away from any slot cancels. Held at the board's edge, the board pans.
+- The selected card carries `edit` and `del` on its border. `del` on a container that holds blocks asks once more.
+- Drag the background to pan.
+- While a run is in progress editing is locked: a click only selects, and the inspector lists the selected block's agents.
+
+With the keyboard (the designer opens with it on the toolbar; a click on the board hands the board the same keys):
 
 | Key | Action |
 | --- | --- |
-| `j` / `k` | move the selection down / up |
-| `g` | grab the selected block; `j`/`k` then move it, `g` drops it |
+| `h` `j` `k` `l` (arrows on the board) | move the selection: along the flow to the next or previous block, across it into a container or back out |
 | `a` | add a block after the selection |
 | `i` | add a block inside the selected container |
-| `x` | delete (a container asks first) |
+| `x` | delete (a container that holds blocks asks first) |
+| `g` | grab the selected block; the direction keys then move it a step at a time, `g` drops it |
 | `e` | edit the title |
-| `h` | show the block type's help card |
-| `o` | list the selected node's agents (only with a run on the design) |
+| `c` | show the block type's help card |
 | `r` | put `/conductor run <name>` in the prompt; Enter sends it |
 
-Mouse, on the canvas:
-
-- Click a row to select it; click a container's glyph to fold or unfold it; click `+ add` to add at the end.
-- Drag a row to move it. Moving left or right while dragging picks the depth
-  (3 columns per level). Holding the pointer on the first or last visible row scrolls.
-  Releasing outside the rows cancels.
-- While a run is in progress editing is locked; a click opens or closes a row's agent list.
-
-Clicking the canvas gives it the keyboard; Escape hands the keys back to the prompt.
+Escape hands the keys back to the prompt.
 After a handoff the keyboard is in the prompt: `/conductor` reopens the pane with the keyboard.
 
 ## How a design becomes a workflow
@@ -82,7 +103,7 @@ The designer saves on every change.
 Progress is derived from hooks, not from the workflow engine's own state:
 
 - The Workflow tool call gives the run id, name and transcript folder.
-- Each workflow agent spawn gives an agent and its label; the label's node id maps it to a design node. Agents whose label names no node of the design are listed as `unmapped`.
+- Each workflow agent spawn gives an agent and its label; the label's node id maps it to a design node. Agents whose label names no node of the design get an `unmapped` card after the design.
 - Model requests and turn completions give tokens and the agent's end. The figure is the sum of input, output, cache-creation and cache-read tokens.
 - Phases are read from the run's `journal.jsonl`.
 
@@ -91,7 +112,7 @@ Known limits:
 - There is no run-end signal. A run is held finished after 8 seconds with no agent running and no new spawn; a later spawn for the same run reopens it.
 - Phases rely on the journal file, an internal format that may change.
 - A handoff claims the first Workflow run that starts within 3 minutes. A run started later, or without a handoff, is shown in the phase view only.
-- One run is tracked at a time, and one canvas is mounted at a time.
+- One run is tracked at a time, and one board is mounted at a time.
 - Delete has no undo.
 - Replayed token counts are made up.
 
@@ -103,7 +124,7 @@ The gate (also `bun run check`):
 claude plugin validate . && bunx tsc -p . && claude plugin test .
 ```
 
-- `src/` is pure logic (design model, run reducer and tracker, canvas model); `hooks/` holds the hooks modules and the canvas surface module; `tests/` runs under `claude plugin test`.
+- `src/` is pure logic (design model, run reducer and tracker, the board's layout, paint and model); `hooks/` holds the hooks modules and the board's surface module (`hooks/canvas.tsx`); `tests/` runs under `claude plugin test`.
 - `scripts/dev-session.sh` starts a detached tmux session running Claude Code with the mod loaded (`CONDUCTOR_SESSION`, `CONDUCTOR_COLS`, `CONDUCTOR_ROWS`); the debug log goes to `.capture/debug.log`.
 - `scripts/send.sh '/conductor' Enter` sends keys to it; `scripts/capture.sh` prints the screen and the mod's recent debug lines (also written to `.capture/`).
 - `/conductor replay …` exercises the run view and the overlay without running a workflow.
