@@ -68,7 +68,7 @@ export const TEACH: Record<NodeType, Teach> = {
     ],
   },
   branch: {
-    glyph: '⋔',
+    glyph: 'ψ',
     name: 'branch',
     hint: 'Plain if/else on an earlier result; decided in code, not by a model',
     card: [
@@ -126,7 +126,7 @@ export const TEACH: Record<NodeType, Teach> = {
     ],
   },
   'loop-until-dry': {
-    glyph: '⟳',
+    glyph: '∞',
     name: 'loop until dry',
     hint: 'Keep finding until K rounds in a row turn up nothing new',
     card: [
