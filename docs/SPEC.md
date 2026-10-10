@@ -41,6 +41,7 @@ type Design = {
   name: string            // kebab-case, becomes meta.name
   description: string
   nodes: DesignNode[]     // top-level order = execution order
+  nextId?: number         // next n<k> to hand out, so ids are never reused
 }
 type DesignNode = {
   id: string              // stable, short: "n1", "n2"… never reused
