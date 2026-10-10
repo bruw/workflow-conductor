@@ -54,7 +54,7 @@ for (const surface of SURFACES) {
       return flatten(parsed.design).map(row => row.node.id)
     }
 
-    await $.command.run({ command: 'conductor-design', args: 'demo', ...RUN })
+    await $.command.run({ command: 'conductor', args: 'design demo', ...RUN })
     const ui = await $.ui.mount({ plugin: 'conductor', surface, component: 'Pane', requestId: DESIGN_PANE_ID, props: PANE })
     await ui.press({ key: 'template:review' })
     expect(ids()).toEqual(['n1', 'n2', '  n3', '  n4', 'n5'])

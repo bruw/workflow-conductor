@@ -207,9 +207,16 @@ The test kit checks the tree a hook returns, not the surface's paint.
 
 - **Canvas focus:** no API focuses a `Client`; it gets the keyboard only after a click, and Escape or ctrl+c hand the keys back to the prompt. `$.ui.focus` works for `Button`/`Input`/`Select` only, and only while that site holds the keyboard. A pane opened with `focus: true` plus an `autoFocus` element does take the keys (the template picker works this way).
 - **Consequence:** keyboard-first cannot rest on the Client alone. Keyboard commands also need a route through the hooks tree (`Button` hotkeys in a focused pane); the Client stays the pointer surface and handles keys once clicked.
-- **Commands today:** `/conductor` (run view), `/conductor replay <fixture> [fast|slow|clear]`, `/conductor-design [name]` (designer, pane id `conductor-design`). To be unified under `/conductor`.
+- **Commands:** `/conductor` (run view), `/conductor replay <fixture> [fast|slow|clear]`, `/conductor design [name]` (designer, pane id `conductor-design`), `/conductor run <name> [fill]` (handoff), `/conductor list`.
 - **Hooks:** validate allows one unmatched hook per event per plugin. `run.tsx` holds the unmatched `session.start`; `design.tsx` uses the always-true matcher `{ cwd: /^/ }`.
 - **Contract:** `types/index.d.ts` cannot import, so it re-declares the run and design shapes; `tsc` catches drift.
 - **Test kit:** it cannot read `$.state`; tests observe `state.set`. Tests of run hooks must raise `session.start` first (timers are built there).
 - **Canvas:** messages discriminate on `kind`; two posts in one frame can drop one, so send one message per input. The canvas takes a `maxRows` prop.
 - **Run view:** counts are settled/total; replay token counts are synthetic; a quiet end always marks `done`, failures show as counts.
+
+## Findings from P5b and P6a
+
+- **Keyboard without a click works** through a hooks-tree toolbar of hotkey `Button`s in a pane opened with `focus: true`: `j` `k` move, `g` grab/drop, `a` add, `i` add inside, `x` delete (containers confirm), `e` edit title, `h` card, `r` run. The focus ring must rest on a `Button` (a ringed `Input` swallows letters), so it is sent back to the toolbar after each field's Enter.
+- **Handoff:** `$.prompt.submit` is refused inside a `command.run` hook; it is sent from `$.clock.after(64)`. `/conductor run <name> fill` fills the prompt instead. The Run button and `r` fill `/conductor run <name>` (a plugin's own `$.command.run` skips its own hooks). Conventions text lives in `src/design/handoff.ts`.
+- **Drag:** depth follows horizontal movement since the press (3 columns per level); release outside the rows or any key cancels; rows are placed by line order with blank lines; one module-level ticker (one canvas at a time).
+- **Open canvas items:** the canvas hint line duplicates the toolbar; toolbar grab is not drawn on the canvas (needs a `grabbedId` prop); the canvas's own `x` deletes containers without confirming; a refused move leaves the row lifted; no auto-scroll during drag.
