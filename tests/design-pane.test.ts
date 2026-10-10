@@ -1,5 +1,5 @@
 import type { On } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { flatten, parseDesign, serializeDesign } from '../src/design/model'
 import type { Design } from '../src/design/model'
@@ -35,6 +35,7 @@ for (const surface of SURFACES) {
     const fills: string[] = []
     const state = watch(on)
     const focused: string[] = []
+    mock.clock(on)
     on('session.root', () => ({ value: ROOT }))
     on('fs.exists', (_$, e) => ({ value: files.has(e.path) }))
     on('fs.read', (_$, e) => {
@@ -66,7 +67,7 @@ for (const surface of SURFACES) {
     const ids = async () => flatten(state.design ?? review()).map(row => `${'  '.repeat(row.depth)}${row.node.id}`)
 
     // Open by command: nothing saved under that name, so the template picker shows.
-    const answer = await $.command.run({ command: 'conductor-design', args: 'demo', ...RUN })
+    const answer = await $.command.run({ command: 'conductor', args: 'design demo', ...RUN })
     expect(answer.text).toMatch(/pick a template/)
     expect(state.ui?.status).toBe('pick')
 
@@ -184,6 +185,157 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
+  test(`designer: the toolbar's hotkey Buttons drive it with no Client act, on ${surface}`, async ($, on) => {
+    const files = new Map<string, string>()
+    const writes: string[] = []
+    const fills: string[] = []
+    const focused: string[] = []
+    const state = watch(on)
+    mock.clock(on)
+    on('session.root', () => ({ value: ROOT }))
+    on('fs.exists', (_$, e) => ({ value: files.has(e.path) }))
+    on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+    on('fs.write', (_$, e) => {
+      files.set(e.path, e.text)
+      writes.push(e.text)
+
+      return { value: undefined }
+    })
+    const opened: (true | undefined)[] = []
+    on('ui.open', (_$, e) => {
+      opened.push(e.focus)
+
+      return { value: { isPlaced: true } }
+    })
+    on('ui.focus', (_$, e) => {
+      focused.push(e.element ?? '')
+      return {}
+    })
+    on('prompt.fill', (_$, e) => {
+      fills.push(e.text)
+      return { isFilled: true }
+    })
+    const saved = () => {
+      const parsed = parseDesign(writes.at(-1) ?? '')
+      if (!parsed.ok) throw new Error(parsed.error)
+      return parsed.design
+    }
+    const ids = () => flatten(saved()).map(row => `${'  '.repeat(row.depth)}${row.node.id}`)
+
+    await $.command.run({ command: 'conductor', args: 'design demo', ...RUN })
+    // The pane asks for the keyboard, so the hotkeys are armed as it opens.
+    expect(opened).toEqual([true])
+    const ui = await $.ui.mount({ plugin: 'conductor', surface, component: 'Pane', requestId: DESIGN_PANE_ID, props: PANE })
+    await ui.press({ key: 'template:review' })
+    expect(ids()).toEqual(['n1', 'n2', '  n3', '  n4', 'n5'])
+
+    // The toolbar is the hint line: one plain dim Button per key.
+    const keys = (await ui.findAll({ type: 'Button' })).filter(one => typeof one.props.hotkey === 'string')
+    expect(keys.map(one => `${String(one.props.hotkey)}:${one.key ?? ''}`)).toEqual([
+      'j:key:down',
+      'k:key:up',
+      'g:key:grab',
+      'a:key:addAfter',
+      'i:key:addInside',
+      'x:key:remove',
+      'e:key:edit',
+      'h:key:card',
+      'r:design-run',
+    ])
+    expect(keys.every(one => one.props.plain === true && one.props.dimColor === true)).toBe(true)
+
+    // j and k move the selection; the inspector follows and the canvas is told (rev).
+    const rev = state.ui?.rev ?? 0
+    await ui.press({ key: 'key:down' })
+    expect(state.ui).toMatchObject({ selectedId: 'n2', rev: rev + 1 })
+    expect((await ui.find({ type: 'Input', key: 'design-title' }))?.props.value).toBe('review')
+    expect((await ui.find({ type: 'Client' }))?.props.props).toMatchObject({ selectedId: 'n2', rev: rev + 1 })
+    await ui.press({ key: 'key:down' })
+    expect(state.ui?.selectedId).toBe('n3')
+    await ui.press({ key: 'key:up' })
+    await ui.press({ key: 'key:up' })
+    await ui.press({ key: 'key:up' })
+    expect(state.ui?.selectedId).toBe('n1')
+    expect(writes).toHaveLength(1)
+
+    // a: the picker's field takes the ring; typing filters, Enter adds the first match.
+    await ui.press({ key: 'key:addAfter' })
+    expect(state.ui?.picker).toEqual({ at: { index: 1 }, query: '' })
+    expect((await ui.find({ type: 'Input', key: 'design-add' }))?.props.autoFocus).toBe(true)
+    // While it is open no hotkey is armed: letters go to the field.
+    expect((await ui.findAll({ type: 'Button' })).filter(one => one.props.hotkey !== undefined)).toEqual([])
+    await ui.input({ key: 'design-add', text: 'crit', kind: 'change' })
+    expect(state.ui?.picker?.query).toBe('crit')
+    expect((await ui.findAll({ type: 'Button' })).map(one => one.key)[0]).toBe('pick:critic')
+    await ui.input({ key: 'design-add', text: 'crit' })
+    expect(ids()).toEqual(['n1', 'n6', 'n2', '  n3', '  n4', 'n5'])
+    expect(saved().nodes[1]).toMatchObject({ id: 'n6', type: 'critic' })
+    expect(state.ui).toMatchObject({ selectedId: 'n6', picker: null })
+    expect(await ui.find({ type: 'Input', key: 'design-add' })).toBe(undefined)
+
+    // i: inside the selected container, at its end, by pressing a match; refused on a leaf.
+    await ui.press({ key: 'key:addInside' })
+    expect(state.ui?.picker).toBe(null)
+    expect(state.ui?.notice).toMatch(/holds no blocks/)
+    await ui.press({ key: 'key:down' })
+    await ui.press({ key: 'key:addInside' })
+    expect(state.ui?.picker).toEqual({ at: { parentId: 'n2', index: 2 }, query: '' })
+    await ui.press({ key: 'pick:agent' })
+    expect(ids()).toEqual(['n1', 'n6', 'n2', '  n3', '  n4', '  n7', 'n5'])
+    expect(state.ui?.selectedId).toBe('n7')
+    // The picker closes without adding.
+    await ui.press({ key: 'key:addAfter' })
+    await ui.press({ key: 'design-add-cancel' })
+    expect(state.ui?.picker).toBe(null)
+    expect(writes).toHaveLength(3)
+
+    // e: the ring goes to the title field (the kit raises no ui.focus to see); Enter there renames.
+    await ui.press({ key: 'key:edit' })
+    await ui.input({ key: 'design-title', text: 'second look' })
+    expect(saved().nodes[2]?.children?.[2]).toMatchObject({ id: 'n7', title: 'second look' })
+
+    // g grabs: j/k then move the block, g drops it.
+    await ui.press({ key: 'key:grab' })
+    expect(state.ui?.grabbedId).toBe('n7')
+    expect((await ui.find({ type: 'Button', key: 'key:grab' }))?.props.label).toBe('drop')
+    await ui.press({ key: 'key:up' })
+    expect(ids()).toEqual(['n1', 'n6', 'n2', '  n3', '  n7', '  n4', 'n5'])
+    expect(state.ui?.selectedId).toBe('n7')
+    await ui.press({ key: 'key:grab' })
+    expect(state.ui?.grabbedId).toBe(null)
+
+    // x on a container that holds blocks asks once; moving away forgets the question.
+    await ui.press({ key: 'key:up' })
+    await ui.press({ key: 'key:up' })
+    expect(state.ui?.selectedId).toBe('n2')
+    const before = writes.length
+    await ui.press({ key: 'key:remove' })
+    expect(state.ui).toMatchObject({ confirmId: 'n2', selectedId: 'n2' })
+    expect(state.ui?.notice).toMatch(/n2 holds 3 blocks: x again/)
+    await ui.press({ key: 'key:down' })
+    await ui.press({ key: 'key:up' })
+    expect(state.ui?.confirmId).toBe(null)
+    await ui.press({ key: 'key:remove' })
+    expect(writes).toHaveLength(before)
+    await ui.press({ key: 'key:remove' })
+    expect(ids()).toEqual(['n1', 'n6', 'n5'])
+    expect(state.ui).toMatchObject({ selectedId: 'n5', confirmId: null, notice: null })
+    // A leaf goes at once.
+    await ui.press({ key: 'key:remove' })
+    expect(ids()).toEqual(['n1', 'n6'])
+    expect(state.ui?.selectedId).toBe('n6')
+    expect(files.get(FILE)).toBe(serializeDesign(state.design ?? review()))
+
+    // h shows the card; r puts the handoff command in the prompt for the person to send.
+    await ui.press({ key: 'key:card' })
+    expect(await ui.find({ key: 'design-card' })).toBeDefined()
+    await ui.press({ key: 'design-run' })
+    expect(fills).toEqual(['/conductor run demo'])
+    expect(state.ui?.notice).toMatch(/esc, then Enter/)
+
+    await ui.unmount()
+  })
+
   test(`designer: a saved design opens as it is, and a broken file is reported, not replaced, on ${surface}`, async ($, on) => {
     const stored = serializeDesign({ ...review(), name: 'kept' })
     const files = new Map<string, string>([
@@ -202,7 +354,7 @@ for (const surface of SURFACES) {
     })
     on('ui.open', () => ({ value: { isPlaced: true } }))
 
-    const opened = await $.command.run({ command: 'conductor-design', args: 'Kept', ...RUN })
+    const opened = await $.command.run({ command: 'conductor', args: 'design Kept', ...RUN })
     expect(opened.text).toMatch(/Design kept opened/)
     expect(state.ui).toMatchObject({ status: 'ready', name: 'kept', selectedId: 'n1' })
     expect(serializeDesign(state.design ?? review())).toBe(stored)
@@ -229,7 +381,7 @@ for (const surface of SURFACES) {
     expect(writes).toEqual([])
     await short.unmount()
 
-    const broken = await $.command.run({ command: 'conductor-design', args: 'broken', ...RUN })
+    const broken = await $.command.run({ command: 'conductor', args: 'design broken', ...RUN })
     expect(broken.text).toMatch(/could not be opened/)
     expect(state.ui).toMatchObject({ status: 'error', name: 'broken' })
     expect(state.design).toBe(null)

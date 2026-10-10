@@ -15,6 +15,14 @@ import { GLYPH, PANE_ID, PANE_TITLE } from '../src/ui/theme'
 const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
 const MAX_ROWS = 400
+const HELP = [
+  'Usage: /conductor [design [name] | run <name> | list | replay <fixture>]',
+  '  /conductor                  open the run view',
+  '  /conductor design [name]    open the designer (name defaults to untitled)',
+  '  /conductor run <name>       hand the saved design to Claude to implement and run',
+  '  /conductor list             name the saved designs',
+  '  /conductor replay <fixture|clear> [fast|slow]   replay a recorded run (dev)',
+].join('\n')
 
 const FIXTURES: Record<string, ReplayFixture> = { 'review-41': review41, 'partial-29': partial29 }
 
@@ -43,7 +51,8 @@ export const registerRun = (on: On): void => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'conductor',
-      description: 'Open the Conductor workflow pane (dev: replay <fixture> [fast|slow])',
+      description: 'Workflow designer and run view: no argument opens the run view; design [name], run <name>, list, replay <fixture>',
+      argumentHint: '[design [name] | run <name> | list | replay <fixture>]',
     })
 
     // The tracker's only way out: every `$` call it causes is spelled here. Its timers
@@ -78,7 +87,9 @@ export const registerRun = (on: On): void => {
 
       return { text: 'Conductor pane opened.' }
     }
-    if (verb !== 'replay') return next(e)
+    // design.tsx answers these, whichever of the two hooks the engine asks first.
+    if (verb === 'design' || verb === 'run' || verb === 'list') return next(e)
+    if (verb !== 'replay') return { text: HELP }
 
     if (name === 'clear') {
       tracker.clear()
