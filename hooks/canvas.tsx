@@ -30,7 +30,7 @@ const Board: ClientModule<JsonValue, BoardState> = (raw, surface) => {
   const rows = Math.max(1, props.rows > 0 ? props.rows : 12)
   const locked = props.mode === 'run'
   const layout = boardLayout(props)
-  const context: BoardContext = { layout, columns, rows, selectedId: props.selectedId, confirmId: props.confirmId, locked }
+  const context: BoardContext = { layout, columns, rows, selectedId: props.selectedId, confirmId: props.confirmId, locked, placement: props.placement }
 
   let state = syncBoard(surface.state ?? initialBoard(), context)
 
@@ -84,6 +84,7 @@ const Board: ClientModule<JsonValue, BoardState> = (raw, surface) => {
     lints: new Set(props.lints.map(one => one.nodeId)),
     run: props.run,
     locked,
+    emptyNote: props.emptyNote,
     hoverAt: state.hover,
     drag: held !== null && state.drag?.kind === 'card' ? { id: held, target: dragTarget(state, context), x: state.drag.x, y: state.drag.y, hint: dragHint(state, context) } : null,
     offsets: boardOffsets(state),

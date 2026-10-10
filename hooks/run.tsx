@@ -4,7 +4,7 @@ import type { On } from 'claude-code'
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
 import { flatten, parseDesign } from '../src/design/model'
-import { DESIGN_PANE_ID, designFile } from '../src/design/session'
+import { DESIGN_PANE_ID, bareTarget, designFile, followRun, initialTimes, initialUi, stampTimes } from '../src/design/session'
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
 import { USAGE_KEYS } from '../src/run/journal'
@@ -20,7 +20,7 @@ const MAX_WIDTH = 96
 const MAX_ROWS = 400
 const HELP = [
   'Usage: /conductor [design [name] | draft <name> <description> | run <name> | list | replay <fixture>]',
-  '  /conductor                  open the run view (on its design, when the run came from one)',
+  '  /conductor                  open the run (on its design, when it came from one); with no run, the design last opened',
   '  /conductor design [name]    open the designer (name defaults to untitled)',
   '  /conductor draft <name> <description>   have Claude draft a design for the description, on the board',
   '  /conductor run <name>       hand the saved design to Claude to implement and run',
@@ -38,6 +38,11 @@ const clockAtom = atom({ plugin: 'conductor', key: 'runClock' } as const, 0)
 /** The design the tracked run was started from (a handoff); null for any other run. */
 const runDesignAtom = atom({ plugin: 'conductor', key: 'runDesign' } as const, null)
 const uiAtom = atom({ plugin: 'conductor', key: 'runUi' } as const, { expanded: [], collapsed: [] })
+/** When the run began and ended: stamped as its state is written. */
+const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initialTimes())
+// The designer's state (design.tsx owns it): read and written here only so the selection can follow the run.
+const designAtom = atom({ plugin: 'conductor', key: 'design' } as const, null)
+const designUiAtom = atom({ plugin: 'conductor', key: 'designUi' } as const, initialUi())
 
 // The reducer leaves optional fields present but undefined; the stored copy is plain data.
 const plain = (state: RunState): RunState => JSON.parse(JSON.stringify(state)) as RunState
@@ -77,8 +82,25 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     // outlive this hook, as a `$.clock` callback does.
     tracker.attach(
       {
-        write: state => update($, runAtom, () => plain(state)),
-        frame: now => update($, clockAtom, () => now),
+        write: async state => {
+          await update($, runAtom, () => plain(state))
+          const now = await $.clock.now()
+          const times = await read($, timesAtom)
+          if (stampTimes(times, state, now) !== times) await update($, timesAtom, held => stampTimes(held, state, now))
+          // The designer's selection follows the block that is running, until the person moves it.
+          const name = await read($, runDesignAtom)
+          if (name === null || state.status !== 'running') return
+          const design = await read($, designAtom)
+          const shown = await read($, designUiAtom)
+          if (followRun(shown, design, state, name) !== shown) await update($, designUiAtom, held => followRun(held, design, state, name))
+        },
+        frame: async tick => {
+          await update($, clockAtom, () => tick)
+          // The elapsed time in the designer's header: stamped here, about once a second, so no drawing reads a clock.
+          const now = await $.clock.now()
+          const times = await read($, timesAtom)
+          if (stampTimes(times, tracker.state(), now) !== times) await update($, timesAtom, held => stampTimes(held, tracker.state(), now))
+        },
         readText: async path => {
           const body = await $.fs.read(path)
 
@@ -104,7 +126,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
 
     if (!verb) {
       // One place to look: a run that came from a design is shown on that design, by design.tsx.
-      if ((await read($, runDesignAtom)) !== null && (await read($, runAtom)).status !== 'idle') return next(e)
+      // With no run at all there is nothing to show here: design.tsx opens the design last worked on, or the picker.
+      if (bareTarget((await read($, runAtom)).status, await read($, runDesignAtom), await read($, designUiAtom)).view === 'design') return next(e)
       const opened = await $.ui.open({ id: PANE_ID, title: PANE_TITLE })
       if (opened.isPlaced) tracker.paneOpened()
 

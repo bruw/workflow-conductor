@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { On } from 'claude-code'
 
 import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, guideText, readReport, replaceDesign, showEdit, toolDescription } from '../src/design/chat'
-import { lint } from '../src/design/lints'
+import { lint, preflightLine } from '../src/design/lints'
 import { buildHandoff } from '../src/design/handoff'
 import { EFFORTS, emptyDesign, findNode, flatten, parseDesign, serializeDesign } from '../src/design/model'
 import type { Design, NodeType } from '../src/design/model'
@@ -10,12 +10,23 @@ import type { NodePatch } from '../src/design/ops'
 import {
   BLANK_TEMPLATE_ID,
   BOARD_MIN_ROWS,
+  DRAFTING_NOTE,
+  HELP_PAGES,
   LOCK_NOTICE,
-  PICKER_MAX,
   RUN_KEYS_HINT,
+  TEXT_KNOBS,
+  VOTE_CHOICES,
   agentsOf,
+  bareTarget,
+  carryUi,
+  compactOf,
+  dockColumns,
+  elapsedOf,
+  helpPage,
+  initialTimes,
   overlaysDesign,
   runOverlay,
+  runSummary,
   DESIGN_DIR,
   DESIGN_PANE_ID,
   DESIGN_PANE_TITLE,
@@ -26,13 +37,11 @@ import {
   boardProps,
   boardView,
   inspectorCollapsed,
-  inspectorNotes,
   inspectorSummary,
   inspectorTyping,
   designFile,
   designName,
   initialUi,
-  knobFields,
   openDesign,
   patchNode,
   pickBlock,
@@ -40,14 +49,14 @@ import {
   typePicker,
   wrapRows,
 } from '../src/design/session'
-import type { DesignUi, RunContext, Step, ToolbarOp } from '../src/design/session'
-import { TEACH, fuzzy } from '../src/design/teach'
+import type { DesignUi, RunContext, Step, TextKnob, ToolbarOp } from '../src/design/session'
+import { FIELD_LABEL, FIELD_PLACEHOLDER, TEACH, fuzzy, knobsOf } from '../src/design/teach'
 import { TEMPLATES } from '../src/design/templates'
 import { emptyRunState } from '../src/run/events'
 import { replayDesignEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
-import { UNMAPPED_ID } from '../src/ui/board-layout'
-import { LEGEND, parseBoardMessage } from '../src/ui/board-model'
+import { UNMAPPED_ID, wrapText } from '../src/ui/board-layout'
+import { parseBoardMessage } from '../src/ui/board-model'
 import { FAILED, fmtTokens } from '../src/ui/rail'
 import { GLYPH } from '../src/ui/theme'
 
@@ -61,8 +70,18 @@ const CANVAS_KEY = 'canvas'
 const TITLE_KEY = 'design-title'
 const NOTES_KEY = 'design-notes'
 const PICKER_KEY = 'design-add'
+/** The address of a knob's text field: `design-knob:prompt`. */
+const KNOB_KEY = 'design-knob:'
+/** Whether the ring on this element means a field is being typed in. */
+const isField = (element: string | undefined): boolean => element === TITLE_KEY || element === NOTES_KEY || (element ?? '').startsWith(KNOB_KEY)
 /** Where the ring rests: on a Button, so letters are hotkeys (on an Input they would be typed). On `edit`, so Enter edits, as it does on the board. */
 const HOME_KEY = 'key:edit'
+/** Where it rests while a run locks editing: `edit` is not drawn then. */
+const HOME_LOCKED_KEY = 'key:down'
+/** The keys that still do something while a run locks editing. */
+const LOCKED_OPS: readonly ToolbarOp[] = ['left', 'down', 'up', 'right', 'compact', 'card']
+/** Block types the add picker lists with their hint at once; the rest are a count, and typing narrows. */
+const PICK_ROWS = { dock: 12, inline: 4 } as const
 /** How long after the command's answer the handoff prompt is submitted. */
 export const SUBMIT_DELAY_MS = 64
 /** A redraw's worth of wait before the ring moves to an element just drawn. */
@@ -86,15 +105,34 @@ const TOOLBAR: readonly { op: ToolbarOp; hotkey: string; label: string }[] = [
 const EDIT_HINT = 'click the title field, or press tab to reach it'
 /** The board gets at least this many rows (a card inside a container): the pane scrolls before the board shrinks further. */
 const BOARD_ROOM_MIN = 8
+/** The board's rows under an inline pane's help card. */
+const BOARD_HELP_ROWS = 3
 /** Docked, the board keeps at least this share of the pane's rows whatever the inspector holds. */
 const BOARD_SHARE = 0.55
 /** Rows asked for when the pane sits inline above the prompt: a nested container and the inspector under it. */
 export const PANE_ROWS = 28
 /** Columns asked for when the pane is docked beside the transcript: the toolbar on one row, and room for a card's notes. */
 export const PANE_COLUMNS = 86
-const PANE_OPEN = { id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, focus: true, rows: PANE_ROWS, columns: PANE_COLUMNS } as const
-/** The pane shown without the keyboard: an edit from chat opens it and the person goes on typing in the prompt. */
-const PANE_SHOW = { id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, rows: PANE_ROWS, columns: PANE_COLUMNS } as const
+/**
+ * The terminal's width as the last command saw it (`e.presentation.columns`): the
+ * only place a hook is told it. Undefined until a command has run in this load.
+ */
+let terminalColumns: number | undefined
+/**
+ * What `$.ui.open` is asked: with the keyboard (`focus`), or shown without it (an
+ * edit from chat opens the pane and the person goes on typing in the prompt).
+ * The dock's width is asked so that the transcript keeps about half the terminal.
+ */
+const paneArgs = (focus: boolean): { id: string; title: string; rows: number; columns: number; focus?: true } => ({
+  id: DESIGN_PANE_ID,
+  title: DESIGN_PANE_TITLE,
+  rows: PANE_ROWS,
+  columns: dockColumns(PANE_COLUMNS, terminalColumns),
+  ...(focus ? { focus: true as const } : {}),
+})
+/** What `r` leaves under the board: what the design implies, then where the command is. */
+const runNotice = (design: Design | null, line: string, isFilled: boolean): string =>
+  `run: ${design ? `${preflightLine(design)} · ` : ''}${isFilled ? `Enter sends ${line}` : `type ${line} in the prompt`}`
 
 // The run's state. Both hooks modules declare these (an atom must be spelled in the
 // file that reads it): run.tsx writes them through the tracker, design.tsx reads them.
@@ -104,6 +142,8 @@ const clockAtom = atom({ plugin: 'conductor', key: 'runClock' } as const, 0)
 const runDesignAtom = atom({ plugin: 'conductor', key: 'runDesign' } as const, null)
 const designAtom = atom({ plugin: 'conductor', key: 'design' } as const, null)
 const uiAtom = atom({ plugin: 'conductor', key: 'designUi' } as const, initialUi())
+/** When the run began and ended: run.tsx stamps it. */
+const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initialTimes())
 
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 160)
 
@@ -111,9 +151,12 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   // run.tsx registers /conductor and answers its own verbs; it passes these on.
   on('command.run', { command: 'conductor', args: DESIGN_VERBS }, async ($, e, next) => {
     const [verb = '', ...rest] = e.args.trim().split(/\s+/)
-    // No argument: the run, on its design when it came from one; else run.tsx's phase view.
-    const shown = verb === '' && (await read($, runAtom)).status !== 'idle' ? await read($, runDesignAtom) : null
-    if (verb === '' && shown === null) return next(e)
+    terminalColumns = e.presentation?.columns ?? terminalColumns
+    // No argument: a run in progress on its design (run.tsx's phase view when it came from none).
+    // With no run in progress: the design last opened, with the keyboard; the picker when there is none.
+    const bare = verb === '' ? bareTarget((await read($, runAtom)).status, await read($, runDesignAtom), await read($, uiAtom)) : null
+    if (bare !== null && bare.view === 'run') return next(e)
+    const shown = bare !== null && bare.view === 'design' && bare.live ? bare.name : null
     const root = await $.session.root()
 
     if (verb === 'replay') {
@@ -134,8 +177,10 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         await $.fs.write(path, serializeDesign(made)).catch(() => undefined)
       }
       await update($, designAtom, () => made)
-      await update($, uiAtom, () => ({ ...initialUi(), name, status: 'ready' as const, selectedId: made.nodes[0]?.id ?? null }))
-      await $.ui.open(PANE_OPEN)
+      await update($, uiAtom, held => ({ ...carryUi(held, initialUi()), name, status: 'ready' as const, selectedId: made.nodes[0]?.id ?? null }))
+      await $.ui.open(paneArgs(true))
+      // A replay reuses its run id: the clock of the one before must not time this one.
+      await update($, timesAtom, () => initialTimes())
       tracker.handoff({ name, nodeIds: flatten(made).map(row => row.node.id) })
       tracker.replay(replayDesignEvents(made, name), speed ?? 'fast')
 
@@ -172,8 +217,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         return { text: `Design ${name} could not be saved: ${reason(error)}` }
       }
       await update($, designAtom, () => blank)
-      await update($, uiAtom, held => ({ ...initialUi(), name, status: 'ready' as const, compact: held.compact }))
-      await $.ui.open(PANE_SHOW)
+      // The empty board says Claude is drafting until the first blocks land.
+      await update($, uiAtom, held => ({ ...carryUi(held, initialUi()), name, status: 'ready' as const, drafting: true }))
+      await $.ui.open(paneArgs(false))
       const prompt = `Draft the "${name}" workflow design: ${brief}`
       // As the handoff: `prompt.submit` is refused inside this hook, so it is sent once the command has settled.
       $.clock.after(SUBMIT_DELAY_MS, () => {
@@ -211,8 +257,10 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const handoff = buildHandoff(parsed.design, path)
       // The next run to start is this design's: its agents count against these ids.
       tracker.handoff({ name, nodeIds: flatten(parsed.design).map(row => row.node.id) })
-      // The designer's "run: … is in the prompt" hint is spent once the command has been sent.
-      await update($, uiAtom, held => (held.notice?.startsWith('run: ') ? { ...held, notice: null } : held))
+      // The designer's "run: …" line is spent once the command has been sent; the selection follows the run that starts.
+      await update($, uiAtom, held => ({ ...held, follow: true, notice: held.notice?.startsWith('run: ') ? null : held.notice }))
+      // Said before the handoff, never a gate: how much the design implies.
+      const facts = preflightLine(parsed.design, { blocks: false })
       const prompt = `Implement and run the "${name}" workflow design.`
       const fill = async (): Promise<void> => {
         const filled = await $.prompt.fill({ text: prompt }).catch(() => ({ isFilled: false }))
@@ -221,7 +269,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       if (fillOnly) {
         await fill()
 
-        return { text: `${handoff.text}; press Enter on the filled prompt to start`, context: handoff.context }
+        return { text: `${handoff.text} · ${facts}; press Enter on the filled prompt to start`, context: handoff.context }
       }
       // The engine refuses `prompt.submit` from inside a command.run hook (it
       // would wait on the turn this hook holds), so it is sent from a clock
@@ -233,22 +281,23 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
           .catch(() => fill())
       })
 
-      return handoff
+      return { text: `${handoff.text} · ${facts}`, context: handoff.context }
     }
 
-    const name = shown ?? designName(rest.join(' '))
-    const path = designFile(root, name)
     const previous = await read($, uiAtom)
-    // The run's design is often the one already open: it is shown as it stands.
-    if (shown !== null && previous.name === name && previous.status === 'ready' && (await read($, designAtom)) !== null) {
-      await $.ui.open(PANE_OPEN)
+    // Bare /conductor: the run's design, else the design this session last had open.
+    const name = bare !== null && bare.view === 'design' ? bare.name : designName(rest.join(' '))
+    const path = designFile(root, name)
+    // The run's design, or the one last worked on, is often already loaded: it is shown as it stands.
+    if (verb === '' && previous.name === name && previous.status === 'ready' && (await read($, designAtom)) !== null) {
+      await $.ui.open(paneArgs(true))
 
-      return { text: `Design ${name} opened with its run.` }
+      return { text: shown !== null ? `Design ${name} opened with its run.` : `Design ${name} opened.` }
     }
-    let step = openDesign(name, undefined)
+    let step = openDesign(name, undefined, previous)
     if (await $.fs.exists(path)) {
       try {
-        step = openDesign(name, await $.fs.read(path))
+        step = openDesign(name, await $.fs.read(path), previous)
       } catch (error) {
         // Unreadable is not absent: never offer a template over a file that is there.
         step = { ...step, ui: { ...step.ui, status: 'error', error: `could not be read: ${reason(error)}` } }
@@ -257,7 +306,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     await update($, designAtom, () => step.design)
     await update($, uiAtom, () => step.ui)
     // With the keyboard, the toolbar's hotkeys work at once: no click on the canvas.
-    await $.ui.open(PANE_OPEN)
+    await $.ui.open(paneArgs(true))
 
     if (step.ui.status === 'error') return { text: `Design ${name} could not be opened: ${step.ui.error}` }
 
@@ -311,7 +360,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     await update($, uiAtom, held => showEdit(held, name, edit.design, edit))
     const seq = (await read($, uiAtom)).flash?.seq ?? 0
     // Shown, but the keyboard stays where the person is typing.
-    await $.ui.open(PANE_SHOW).catch(() => undefined)
+    await $.ui.open(paneArgs(false)).catch(() => undefined)
     $.clock.after(FLASH_CLEAR_MS, () => {
       void update($, uiAtom, held => clearFlash(held, seq))
     })
@@ -371,7 +420,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     if (message.kind === 'key' && message.op === 'run') {
       const line = `/${COMMAND} run ${nextUi.name}`
       const filled = await $.prompt.fill({ text: line }).catch(() => ({ isFilled: false }))
-      nextUi = { ...nextUi, notice: filled.isFilled ? `run: ${line} is in the prompt · Enter sends it` : `run: type ${line} in the prompt` }
+      nextUi = { ...nextUi, notice: runNotice(step.design, line, filled.isFilled) }
     }
     // Writing the atoms redraws the pane, which hands the board its next props.
     if (step.design !== design) await update($, designAtom, () => step.design)
@@ -382,13 +431,16 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const edits = (message.kind === 'edit' || (message.kind === 'key' && message.op === 'edit')) && nextUi.editing
     const picks = nextUi.picker !== null && ui.picker === null
     if (edits || picks) {
-      await $.ui.open(PANE_OPEN)
-      $.clock.after(FOCUS_DELAY_MS, () => {
-        void $.ui
-          .focus({ requestId: DESIGN_PANE_ID, key: edits ? TITLE_KEY : PICKER_KEY })
-          .then(moved => (moved.deny !== undefined && edits ? update($, uiAtom, held => ({ ...held, notice: `edit: ${EDIT_HINT}` })) : undefined))
-          .catch(() => undefined)
-      })
+      await $.ui.open(paneArgs(true))
+      const key = edits ? TITLE_KEY : PICKER_KEY
+      // The field may not be drawn yet on the first try (the pane redraws for the update above): one more try, then the hint.
+      const land = async (tries: number): Promise<void> => {
+        const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
+        if (moved.deny === undefined) return
+        if (tries > 0) $.clock.after(FOCUS_DELAY_MS * 2, () => void land(tries - 1))
+        else if (edits) await update($, uiAtom, held => ({ ...held, notice: `edit: ${EDIT_HINT}` }))
+      }
+      $.clock.after(FOCUS_DELAY_MS, () => void land(1))
     }
 
     return {}
@@ -402,7 +454,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   on('ui.focus', { requestId: DESIGN_PANE_ID }, async ($, e, next) => {
     const moved = await next(e)
     if (moved.deny !== undefined) return moved
-    const onField = e.element === TITLE_KEY || e.element === NOTES_KEY
+    const onField = isField(e.element)
     const held = await read($, uiAtom)
     if (held.status === 'ready' && held.editing !== onField && (onField || e.origin.kind === 'person')) await update($, uiAtom, ui => ({ ...ui, editing: onField }))
 
@@ -422,37 +474,76 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const locked = over && run.status === 'running'
     // The tick clock is read only while it matters, so an idle pane is not redrawn by it.
     const overlay = over ? runOverlay(run, locked ? await read($, clockAtom) : 0) : undefined
+    const summary = over ? runSummary(run, elapsedOf(await read($, timesAtom), run)) : null
     const placement = e.props.placement === 'inline' ? 'inline' : 'dock'
+    const compact = compactOf(ui, placement)
     const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 48
     const node = design === null || ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
     const lints = design ? lint(design) : []
+    const lintLines = node ? lints.filter(one => one.nodeId === node.id).flatMap(one => wrapText(`${GLYPH.lint} ${one.message}`, columns)) : []
     const agents = over && ui.selectedId !== null ? agentsOf(run, ui.selectedId) : null
+    const agentRows = agents ? agents.shown.length + (agents.rest > 0 ? 1 : 0) : 0
+    const picking = ui.picker !== null && !locked
+    // The help card takes the inspector's place, a page at a time: it never squeezes the board.
+    const help = !picking && ui.help > 0 ? helpPage(ui.help, node?.type, file, columns) : null
     // An inline pane has few rows: its inspector is one line until a field is being typed in.
     const collapsed = inspectorCollapsed(placement, ui)
-    // While a field has the ring it wraps its own text; at rest it is one line, and the notes are wrapped under it.
-    const wrapped = node && !collapsed && !ui.editing ? inspectorNotes(node.notes ?? '', columns, bodyRows) : { lines: [], more: 0 }
-    const typing = node && !collapsed && ui.editing ? inspectorTyping(node.notes ?? '', columns, bodyRows) : 0
-    const help = ui.showCard ? [...(node ? TEACH[node.type].card : []), ...LEGEND, file] : []
-    // Rows of the pane that are not the board: the header, the key row, the inspector as it is drawn below.
-    // The key row is one row where the pane is wide enough for it (78 cells), and wraps where it is not.
-    // The picker takes its place: a field, then a wrapping row of every block type.
-    const matches = ui.picker ? fuzzy(ui.picker.query).slice(0, PICKER_MAX) : []
-    const keyRows = ui.picker
-      ? 1 + (matches.length === 0 ? 1 : 0) + wrapRows([...matches.map(type => TEACH[type].name.length + 2), 'cancel'.length], 2, columns)
-      : wrapRows([...TOOLBAR.map(one => one.label.length + 3), 'run'.length + 3], 1, columns)
-    let chrome = 1 + keyRows + help.length + (ui.notice !== null ? 1 : 0) + (locked ? 1 : 0) + (ui.grabbedId !== null ? 1 : 0)
-    if (collapsed) chrome += 1
-    else if (node) {
-      const knobs = knobFields(node.type)
-      // The rule (docked), the headline, the two fields; then what this block adds. A field at rest that holds more
-      // than its line is drawn with an empty row under it (seen in real paint), counted with the wrapped notes.
-      chrome += (placement === 'dock' ? 4 : 3) + lints.filter(one => one.nodeId === node.id).length + (node.knobs?.fanout ? 1 : 0) + wrapped.lines.length + (wrapped.more > 0 ? 1 : 0) + (wrapped.lines.length > 0 ? 1 : 0) + typing + (knobs.model || knobs.effort || knobs.isolation ? 1 : 0)
-      if (agents) chrome += agents.shown.length + (agents.rest > 0 ? 1 : 0)
-    } else chrome += (placement === 'dock' ? 2 : 1) + (agents ? agents.shown.length + (agents.rest > 0 ? 1 : 0) : 0)
+    // What is said right under the board: a refused edit, the delete question, what a grab's keys do, the lock.
+    const message: { text: string; color: 'warning' | 'subtle' } | null =
+      ui.notice !== null && (ui.notice !== LOCK_NOTICE || locked)
+        ? { text: ui.notice, color: 'warning' }
+        : ui.grabbedId !== null && !locked
+          ? { text: `${ui.grabbedId} grabbed: h j k l move it, g drops it`, color: 'subtle' }
+          : locked
+            ? { text: `${LOCK_NOTICE} · ${RUN_KEYS_HINT}`, color: 'subtle' }
+            : null
+    // The fields this block's type calls for (teach.ts says which): text ones a row each, pickers on one row.
+    const knobs = node ? knobsOf(node) : []
+    const textKnobs = TEXT_KNOBS.filter(key => knobs.includes(key))
+    const texts: { key: string; label: string; value: string; placeholder?: string; patch: (value: string) => NodePatch }[] = node
+      ? [
+          // A block just added opens with its title field empty: the default title shows dim and stays if nothing is typed.
+          { key: TITLE_KEY, label: FIELD_LABEL.title, value: ui.freshId === node.id ? '' : node.title, placeholder: node.title, patch: value => ({ title: value.trim() || node.title }) },
+          { key: NOTES_KEY, label: FIELD_LABEL.notes, value: node.notes ?? '', placeholder: FIELD_PLACEHOLDER.notes, patch: value => ({ notes: value.trim() }) },
+          ...textKnobs.map((knob: TextKnob) => ({
+            key: `${KNOB_KEY}${knob}`,
+            label: FIELD_LABEL[knob],
+            value: node.knobs?.[knob] ?? '',
+            placeholder: FIELD_PLACEHOLDER[knob],
+            patch: (value: string): NodePatch => ({ knobs: { [knob]: value.trim() } as NodePatch['knobs'] }),
+          })),
+        ]
+      : []
+    const pickers = { model: knobs.includes('model'), effort: knobs.includes('effort'), isolation: knobs.includes('isolation'), votes: knobs.includes('votes') }
+    const pickerRow = pickers.model || pickers.effort || pickers.isolation || pickers.votes
+    // A field at rest is one line, cut with `…`. Docked each has its row; inline (few rows) the short ones go two to a row.
+    const short = texts.filter(one => one.key !== NOTES_KEY && one.key !== `${KNOB_KEY}prompt`)
+    const fieldLines = placement === 'dock' ? texts.map(one => [one]) : [...short.flatMap((one, i) => (i % 2 === 0 ? [short.slice(i, i + 2)] : [])), ...texts.filter(one => !short.includes(one)).map(one => [one])]
+    const fieldRows = fieldLines.length
+    // The ring's field wraps its own text: room for the longest of them while one is typed in.
+    const typing = node && !collapsed && ui.editing ? inspectorTyping(texts.reduce((longest, one) => (one.value.length > longest.length ? one.value : longest), ''), columns, bodyRows) : 0
+    const matches = picking && ui.picker ? fuzzy(ui.picker.query) : []
+    const listed = matches.slice(0, PICK_ROWS[placement])
+    const toolbar = locked ? TOOLBAR.filter(one => LOCKED_OPS.includes(one.op)) : TOOLBAR
+    // Rows of the pane that are not the board, as they are drawn below. The header is one row where the
+    // run's summary fits beside the name; the key row wraps where the pane is narrower than its keys.
+    const titleText = `wf: ${ui.name}`
+    const headerRows = summary !== null && titleText.length + 2 + summary.text.length > columns ? 2 : 1
+    const keyRows = picking ? 1 + Math.max(1, listed.length) + 1 : wrapRows([...toolbar.map(one => one.label.length + 3), ...(locked ? [] : ['run'.length + 3])], 1, columns)
+    let chrome = headerRows + (message !== null ? 1 : 0) + keyRows
+    if (!picking) {
+      chrome += placement === 'dock' ? 1 : 0
+      if (help) chrome += help.length + 1
+      else if (node && collapsed) chrome += 1
+      else if (node && locked) chrome += 1 + lintLines.length + agentRows
+      else if (node) chrome += (placement === 'dock' ? 1 + agentRows : 0) + lintLines.length + fieldRows + typing + (pickerRow ? 1 : 0)
+      else chrome += 1 + agentRows
+    }
     // The board's region is as tall as the board until that passes the room
     // there is; from there its height is fixed and the board pans inside it.
-    // An inline pane with a field open is for typing: there the board may shrink to a card's worth of rows.
-    const least = placement === 'inline' && !collapsed ? BOARD_MIN_ROWS : BOARD_ROOM_MIN
+    // An inline pane with a field, the picker or the help card open may shrink the board to a card's worth of rows.
+    // Under the help card, read for a moment, three rows of it are enough to keep the place.
+    const least = placement === 'inline' && help !== null ? BOARD_HELP_ROWS : placement === 'inline' && (!collapsed || picking) ? BOARD_MIN_ROWS : BOARD_ROOM_MIN
     const room = Math.max(least, placement === 'dock' ? Math.ceil(bodyRows * BOARD_SHARE) : 0, bodyRows - chrome)
     // Which way the board flows is decided for the pane at rest (header, key row, one line of inspector): opening the inspector must not turn it.
     const turnRoom = Math.max(BOARD_ROOM_MIN, bodyRows - 3)
@@ -461,19 +552,19 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const held = overlaysDesign(now, await read($, runDesignAtom), await read($, uiAtom))
       const shown = await read($, designAtom)
       // The arrows mean what they do on the board as it is drawn now.
-      const orientation = shown ? boardView(shown, placement, columns, room, { run: held ? runOverlay(now) : undefined, compact: (await read($, uiAtom)).compact, turnRoom }).orientation : undefined
+      const orientation = shown ? boardView(shown, placement, columns, room, { run: held ? runOverlay(now) : undefined, compact: compactOf(await read($, uiAtom), placement), turnRoom }).orientation : undefined
 
-      return held ? { run: now, locked: now.status === 'running', orientation } : { orientation }
+      return held ? { run: now, locked: now.status === 'running', orientation, placement } : { orientation, placement }
     }
-    // The mode marker: the side that is live is lit.
+    // The name, and beside it the run in one line while one is laid over the design. `design` is a label, nothing to press.
     const header = (
-      <Box flexDirection="row" justifyContent="space-between">
-        <Text bold>{`wf: ${ui.name}`}</Text>
-        <Text>
-          <Text color={locked ? 'subtle' : 'claude'} bold={!locked}>design</Text>
-          <Text color="subtle">{' ▸ '}</Text>
-          <Text color={locked ? 'claude' : 'subtle'} bold={locked}>run</Text>
-        </Text>
+      <Box flexDirection={headerRows === 2 ? 'column' : 'row'} justifyContent="space-between">
+        <Text bold wrap="truncate-end">{titleText}</Text>
+        {summary !== null ? (
+          <Text key="design-run-summary" color={summary.color} wrap="truncate-end">{summary.text}</Text>
+        ) : (
+          <Text color="subtle">design</Text>
+        )}
       </Box>
     )
 
@@ -534,11 +625,12 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             <Button key={`template:${BLANK_TEMPLATE_ID}`} label="Blank" onPress={() => start(BLANK_TEMPLATE_ID)} />
             <Text color="subtle">An empty design</Text>
           </Box>
+          <Text key="design-draft-route" color="subtle">{`or type: /${COMMAND} draft ${ui.name} <what you want>  (Claude drafts it on the board)`}</Text>
         </Box>
       )
     }
 
-    const view = boardView(design, placement, columns, room, { run: overlay, selectedId: ui.selectedId, compact: ui.compact, turnRoom })
+    const view = boardView(design, placement, columns, room, { run: overlay, selectedId: ui.selectedId, compact, turnRoom })
 
     // An inspector edit: read the state as it is now, patch, save, write back.
     const edit = async (id: string, patch: NodePatch): Promise<void> => {
@@ -574,48 +666,47 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
 
       return { ...step, ui: nextUi }
     }
-    const focus = async (key: string, hint: string): Promise<void> => {
-      const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
-      if (moved.deny !== undefined) await update($, uiAtom, held => ({ ...held, notice: hint }))
+    // The ring is moved a redraw after the state that draws its target was written, always: the same
+    // wait whatever held the ring before (a Button, a Select just used, a field), so the same outcome.
+    // A target not drawn yet is tried once more before the hint is shown.
+    const focus = (key: string, hint: string): void => {
+      const land = async (tries: number): Promise<void> => {
+        const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
+        if (moved.deny === undefined) return
+        if (tries > 0) $.clock.after(FOCUS_DELAY_MS * 2, () => void land(tries - 1))
+        else await update($, uiAtom, held => ({ ...held, notice: hint }))
+      }
+      $.clock.after(FOCUS_DELAY_MS, () => void land(1))
+    }
+    // After a field's Enter or a picker's choice the ring goes back to the toolbar, so the next letter is a key again.
+    const home = (): void => {
+      $.clock.after(FOCUS_DELAY_MS, () => {
+        void $.ui.focus({ requestId: DESIGN_PANE_ID, key: locked ? HOME_LOCKED_KEY : HOME_KEY }).catch(() => undefined)
+      })
     }
     const press = async (op: ToolbarOp): Promise<void> => {
       const step = await commit((before, held, ctx) => applyOp(before, held, op, ctx))
       if (op === 'edit') {
-        if (!step.ui.editing || !node) return
-        // Collapsed, the field is drawn by the update above: the ring moves to it a frame later.
-        if (!collapsed) return focus(TITLE_KEY, `edit: ${EDIT_HINT}`)
-        $.clock.after(FOCUS_DELAY_MS, () => {
-          void focus(TITLE_KEY, `edit: ${EDIT_HINT}`)
-        })
+        if (step.ui.editing && node) focus(TITLE_KEY, `edit: ${EDIT_HINT}`)
         return
       }
       if (op === 'cancel') home()
-      // The picker's field exists once the update above is drawn, so the ring
-      // is moved to it a frame later, from the clock.
-      if (step.ui.picker && (op === 'addAfter' || op === 'addInside')) {
-        $.clock.after(FOCUS_DELAY_MS, () => {
-          void focus(PICKER_KEY, 'add: press tab to reach the field')
-        })
-      }
-    }
-    // After a field's Enter the ring goes back to the toolbar, so the next letter is a key again.
-    const home = (): void => {
-      $.clock.after(FOCUS_DELAY_MS, () => {
-        void $.ui.focus({ requestId: DESIGN_PANE_ID, key: HOME_KEY }).catch(() => undefined)
-      })
+      if (step.ui.picker && (op === 'addAfter' || op === 'addInside')) focus(PICKER_KEY, 'add: press tab to reach the field')
     }
     const pick = async (choice: { type?: NodeType; query?: string }): Promise<void> => {
       const step = await commit((before, held, ctx) => pickBlock(before, held, choice, ctx))
-      if (!step.ui.picker) home()
+      // A block was added: its title is the next thing typed. Anything else: back to the keys.
+      if (step.changed && step.ui.editing) focus(TITLE_KEY, `edit: ${EDIT_HINT}`)
+      else if (!step.ui.picker) home()
     }
     // The same path as typing it. A plugin's own $.command.run skips its own
     // hooks (the engine then says no hook answered), so the command is put in
-    // the prompt box for the person to send.
+    // the prompt box for the person to send, with what the design implies said under the board.
     const handOff = async (): Promise<void> => {
       const line = `/${COMMAND} run ${ui.name}`
       const filled = await $.prompt.fill({ text: line }).catch(() => ({ isFilled: false }))
-      const notice = filled.isFilled ? `run: ${line} is in the prompt · Enter sends it` : `run: type ${line} in the prompt`
-      await update($, uiAtom, held => ({ ...held, notice }))
+      const now = await read($, designAtom)
+      await update($, uiAtom, held => ({ ...held, notice: runNotice(now, line, filled.isFilled) }))
     }
     const rows = flatten(design)
 
@@ -625,20 +716,27 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         <Box key="design-agents" flexDirection="column">
           {agents.shown.map(agent => (
             <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : undefined}>
-              {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${agent.title}  ${fmtTokens(agent.tokens)}`}
+              {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${agent.title}  ${agent.status} · ${fmtTokens(agent.tokens)} tokens`}
             </Text>
           ))}
           {agents.rest > 0 && <Text color="subtle">{`… ${agents.rest} more`}</Text>}
         </Box>
       ) : null
-    const fields = node ? knobFields(node.type) : undefined
     const models = node?.knobs?.model && !MODEL_CHOICES.includes(node.knobs.model) ? [...MODEL_CHOICES, node.knobs.model] : MODEL_CHOICES
+    const votes = node?.knobs?.votes !== undefined && !VOTE_CHOICES.includes(node.knobs.votes) ? [...VOTE_CHOICES, node.knobs.votes] : VOTE_CHOICES
+    const headline = node ? (
+      <Text wrap="truncate-end">
+        <Text bold>{`${node.id} · ${TEACH[node.type].name}`}</Text>
+        <Text color="subtle">{`: ${TEACH[node.type].hint}`}</Text>
+      </Text>
+    ) : null
+    const lintList = lintLines.map(line => <Text color="warning">{line}</Text>)
 
     return (
       <Box flexDirection="column" paddingLeft={1}>
         {header}
         {'Client' in els ? (
-          <els.Client key={CANVAS_KEY} module="./canvas.tsx" width="100%" height={view.rows} props={boardProps(design, ui, view, overlay)} />
+          <els.Client key={CANVAS_KEY} module="./canvas.tsx" width="100%" height={view.rows} props={boardProps(design, ui, view, overlay, placement)} />
         ) : (
           <Box flexDirection="column">
             {rows.map(row => (
@@ -648,126 +746,165 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             ))}
           </Box>
         )}
-        {ui.picker && 'Input' in els && (
-          <Box key="design-picker" flexDirection="column">
-            <els.Input
-              key={PICKER_KEY}
-              label={ui.picker.at.parentId === undefined ? '+ add' : `+ add in ${ui.picker.at.parentId}`}
-              placeholder="type a block name"
-              value={ui.picker.query}
-              submitLabel="add the first match"
-              autoFocus
-              onInput={value => update($, uiAtom, held => typePicker(held, value))}
-              onSubmit={value => pick({ query: value })}
-            />
-            {matches.length === 0 && <Text color="subtle">no block matches</Text>}
-          </Box>
+        {message !== null && (
+          <Text key="design-message" color={message.color} wrap="truncate-end">{message.text}</Text>
         )}
-        {ui.picker ? (
-          <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-            {matches.map(type => (
-              <Button key={`pick:${type}`} plain dimColor={type === matches[0] ? undefined : true} label={`${TEACH[type].glyph} ${TEACH[type].name}`} onPress={() => pick({ type })} />
+        {picking && ui.picker ? (
+          <Box key="design-picker" flexDirection="column">
+            {'Input' in els && (
+              <els.Input
+                key={PICKER_KEY}
+                label={ui.picker.at.parentId === undefined ? '+ add' : `+ add in ${ui.picker.at.parentId}`}
+                placeholder="type to narrow, Enter adds the first"
+                value={ui.picker.query}
+                submitLabel="add the first match"
+                autoFocus
+                onInput={value => update($, uiAtom, held => typePicker(held, value))}
+                onSubmit={value => pick({ query: value })}
+              />
+            )}
+            {matches.length === 0 && <Text color="subtle">no block matches</Text>}
+            {listed.map(type => (
+              <Box flexDirection="row" gap={1}>
+                <Button key={`pick:${type}`} plain dimColor={type === matches[0] ? undefined : true} label={type.padEnd(14)} onPress={() => pick({ type })} />
+                <Text color="subtle" wrap="truncate-end">{TEACH[type].name === type ? TEACH[type].hint : `${TEACH[type].name}: ${TEACH[type].hint}`}</Text>
+              </Box>
             ))}
-            <Button key="design-add-cancel" plain dimColor label="cancel" onPress={() => press('cancel')} />
+            <Box flexDirection="row" gap={2}>
+              <Button key="design-add-cancel" plain dimColor label="cancel" onPress={() => press('cancel')} />
+              {matches.length > listed.length && <Text color="subtle">{`… ${matches.length - listed.length} more types: type to narrow`}</Text>}
+            </Box>
           </Box>
         ) : (
           <Box key="design-toolbar" flexDirection="row" flexWrap="wrap" columnGap={1}>
-            {TOOLBAR.map(one => (
+            {toolbar.map(one => (
               <Button
                 key={`key:${one.op}`}
                 hotkey={one.hotkey}
-                autoFocus={`key:${one.op}` === HOME_KEY ? true : undefined}
+                autoFocus={`key:${one.op}` === (locked ? HOME_LOCKED_KEY : HOME_KEY) ? true : undefined}
                 plain
                 dimColor
-                label={one.op === 'grab' && ui.grabbedId !== null ? 'drop' : one.op === 'remove' && ui.confirmId !== null ? 'sure?' : one.op === 'compact' && ui.compact ? 'full' : one.label}
+                label={
+                  one.op === 'grab' && ui.grabbedId !== null
+                    ? 'drop'
+                    : one.op === 'remove' && ui.confirmId !== null
+                      ? 'sure?'
+                      : one.op === 'compact' && compact
+                        ? 'full'
+                        : one.op === 'card' && ui.help > 0
+                          ? ui.help < HELP_PAGES ? 'next' : 'close'
+                          : one.label
+                }
                 onPress={() => press(one.op)}
               />
             ))}
-            <Button key="design-run" hotkey="r" plain dimColor label="run" onPress={handOff} />
+            {!locked && <Button key="design-run" hotkey="r" plain dimColor label="run" onPress={handOff} />}
           </Box>
         )}
-        {placement === 'dock' && <Text color="subtle">{'─'.repeat(columns)}</Text>}
-        {node && collapsed ? (
+        {!picking && placement === 'dock' && <Text color="subtle">{'─'.repeat(columns)}</Text>}
+        {picking ? null : help ? (
+          <Box key="design-card" flexDirection="column">
+            {help.map(line => (
+              <Text>{line}</Text>
+            ))}
+            <Text color="subtle">{`help ${ui.help}/${HELP_PAGES} · c: ${ui.help < HELP_PAGES ? 'next page' : 'close'}`}</Text>
+          </Box>
+        ) : node && collapsed ? (
           <Box key="design-inspector" flexDirection="column">
             <Text key="design-summary" wrap="truncate-end">
-              {lints.some(one => one.nodeId === node.id) && <Text color="warning">{`${GLYPH.lint} `}</Text>}
+              {lintLines.length > 0 && <Text color="warning">{`${GLYPH.lint} `}</Text>}
               <Text bold>{inspectorSummary(node, columns - 12)}</Text>
               <Text color="subtle">{agents && agents.shown.length > 0 ? ` · ${agents.shown.length + agents.rest} agents` : locked ? '' : ' · e: edit'}</Text>
             </Text>
           </Box>
+        ) : node && locked ? (
+          <Box key="design-inspector" flexDirection="column">
+            {headline}
+            {lintList}
+            {agentList}
+          </Box>
         ) : node ? (
           <Box key="design-inspector" flexDirection="column">
-            <Text wrap="truncate-end">
-              <Text bold>{`${node.id} · ${TEACH[node.type].name}`}</Text>
-              <Text color="subtle">{`: ${TEACH[node.type].hint}`}</Text>
-            </Text>
-            {lints
-              .filter(one => one.nodeId === node.id)
-              .map(one => (
-                <Text color="warning">{`${GLYPH.lint} ${one.message}`}</Text>
-              ))}
-            {node.knobs?.fanout && <Text color="subtle" wrap="truncate-end">{`fanout: ${node.knobs.fanout}`}</Text>}
-            {agentList}
+            {placement === 'dock' && headline}
+            {lintList}
+            {placement === 'dock' && agentList}
             {'Input' in els && (
               <Box flexDirection="column">
-                <els.Input
-                  key={TITLE_KEY}
-                  label="title"
-                  value={node.title}
-                  submitLabel="save"
-                  onSubmit={async value => {
-                    await edit(node.id, { title: value.trim() || node.title })
-                    home()
-                  }}
-                />
-                <els.Input
-                  key={NOTES_KEY}
-                  label="notes"
-                  placeholder="anything the blocks cannot express"
-                  value={node.notes ?? ''}
-                  submitLabel="save"
-                  onSubmit={async value => {
-                    await edit(node.id, { notes: value.trim() })
-                    home()
-                  }}
-                />
-              </Box>
-            )}
-            {wrapped.lines.length > 0 && (
-              <Box key="design-notes-wrapped" flexDirection="column" paddingLeft={2}>
-                {wrapped.lines.map(line => (
-                  <Text>{line}</Text>
+                {fieldLines.map(line => (
+                  <Box flexDirection="row" columnGap={2}>
+                    {line.map(one => (
+                      // The label is drawn here, not by the field: a field's own label is squeezed by a long value
+                      // (it lost its space, then wrapped onto a second row). This one never shrinks.
+                      <Box flexDirection="row" width={line.length > 1 ? '50%' : '100%'}>
+                        <Box flexShrink={0}>
+                          <Text color="subtle">{`${one.label}: `}</Text>
+                        </Box>
+                        <Box flexGrow={1} flexShrink={1}>
+                          <els.Input
+                            key={one.key}
+                            placeholder={one.placeholder}
+                            value={one.value}
+                            submitLabel="save"
+                            onSubmit={async value => {
+                              await edit(node.id, one.patch(value))
+                              home()
+                            }}
+                          />
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
                 ))}
-                {wrapped.more > 0 && <Text color="subtle">{`… ${wrapped.more} more ${wrapped.more === 1 ? 'line' : 'lines'}`}</Text>}
               </Box>
             )}
-            {'Select' in els && fields && (fields.model || fields.effort || fields.isolation) && (
+            {'Select' in els && pickerRow && (
               <Box flexDirection="row" gap={2}>
-                {fields.model && (
+                {pickers.model && (
                   <els.Select
                     key="design-model"
                     label="model"
                     value={node.knobs?.model ?? INHERIT}
                     options={[{ value: INHERIT }, ...models.map(value => ({ value }))]}
-                    onSelect={value => edit(node.id, { knobs: { model: value === INHERIT ? '' : value } })}
+                    onSelect={async value => {
+                      await edit(node.id, { knobs: { model: value === INHERIT ? '' : value } })
+                      home()
+                    }}
                   />
                 )}
-                {fields.effort && (
+                {pickers.effort && (
                   <els.Select
                     key="design-effort"
                     label="effort"
                     value={node.knobs?.effort ?? INHERIT}
                     options={[{ value: INHERIT }, ...EFFORTS.map(value => ({ value }))]}
-                    onSelect={value => edit(node.id, { knobs: { effort: EFFORTS.find(one => one === value) } })}
+                    onSelect={async value => {
+                      await edit(node.id, { knobs: { effort: EFFORTS.find(one => one === value) } })
+                      home()
+                    }}
                   />
                 )}
-                {fields.isolation && (
+                {pickers.isolation && (
                   <els.Select
                     key="design-isolation"
                     label="isolation"
                     value={node.knobs?.isolation ?? 'none'}
                     options={[{ value: 'none' }, { value: 'worktree' }]}
-                    onSelect={value => edit(node.id, { knobs: { isolation: value === 'worktree' ? 'worktree' : undefined } })}
+                    onSelect={async value => {
+                      await edit(node.id, { knobs: { isolation: value === 'worktree' ? 'worktree' : undefined } })
+                      home()
+                    }}
+                  />
+                )}
+                {pickers.votes && (
+                  <els.Select
+                    key="design-votes"
+                    label="votes"
+                    value={node.knobs?.votes === undefined ? 'none' : String(node.knobs.votes)}
+                    options={[{ value: 'none' }, ...votes.map(count => ({ value: String(count) }))]}
+                    onSelect={async value => {
+                      await edit(node.id, { knobs: { votes: value === 'none' ? undefined : Number(value) } })
+                      home()
+                    }}
                   />
                 )}
               </Box>
@@ -782,19 +919,14 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             {collapsed ? <Text color="subtle">{`${agents.shown.length + agents.rest} agents`}</Text> : agentList}
           </Box>
         ) : (
-          <Text color="subtle" wrap="truncate-end">{design.nodes.length === 0 ? 'Empty design: click + on the board, or press a, to add the first block.' : 'Click a card to select it, or + to add a block there.'}</Text>
+          <Text color={ui.drafting && design.nodes.length === 0 ? 'claude' : 'subtle'} wrap="truncate-end">
+            {design.nodes.length > 0
+              ? 'Click a card to select it, or + to add a block there.'
+              : ui.drafting
+                ? `${DRAFTING_NOTE}.`
+                : `Empty design: click + on the board, or press a, to add the first block. Or ask Claude in the prompt to draft it.`}
+          </Text>
         )}
-        {help.length > 0 && (
-          <Box key="design-card" flexDirection="column">
-            {help.map(line => (
-              <Text color="subtle" wrap="truncate-end">{line}</Text>
-            ))}
-          </Box>
-        )}
-        {ui.notice !== null && ui.notice !== LOCK_NOTICE && <Text color="warning" wrap="truncate-end">{ui.notice}</Text>}
-        {ui.notice === LOCK_NOTICE && locked && <Text color="subtle">{LOCK_NOTICE}</Text>}
-        {locked && <Text color="subtle" wrap="truncate-end">{RUN_KEYS_HINT}</Text>}
-        {ui.grabbedId !== null && <Text color="subtle" wrap="truncate-end">{`${ui.grabbedId} grabbed: h j k l move it, g drops it`}</Text>}
       </Box>
     )
   })

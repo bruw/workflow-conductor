@@ -8,6 +8,7 @@ implement and run, and watch the run's progress on the same design.
 
 - Claude Code 2.1.296 or later (the version this was built and tested on), with the Workflow tool.
 - A fullscreen terminal session for the mouse; the keyboard toolbar works without it.
+- The pane asks the dock for a width that leaves the transcript about half the terminal. A dock width you dragged (Claude Code keeps it) wins over that.
 - For development: `bun` (the gate runs `bunx tsc`).
 
 ## Install for development
@@ -31,10 +32,10 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 
 | Command | What it does |
 | --- | --- |
-| `/conductor` | Opens the run view. If the current run came from a design, opens that design with the run laid over it. |
+| `/conductor` | With a run in progress: that run, on its design when it came from one. Otherwise the design last opened in this session, with the keyboard, or the template picker when there is none. |
 | `/conductor design [name]` | Opens the designer on a saved design, or offers templates for a new one. The name defaults to `untitled`. |
 | `/conductor draft <name> <description…>` | Claude drafts a design for the description, saves it under that name and shows it on the board. Refused when a design of that name already holds blocks. |
-| `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt. With `fill`, the prompt is left in the box for you to send. |
+| `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt. With `fill`, the prompt is left in the box for you to send. The answer says what the design implies: `at least 18 agents · no lints`. |
 | `/conductor list` | Names the saved designs. |
 | `/conductor replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
 | `/conductor replay design <template> [fast\|slow]` | Dev: replays a made-up run over a template's design (`review`, `research`, `migrate`, `judge-panel`). |
@@ -59,57 +60,72 @@ the transcript it flows top to bottom and every card is as wide as the pane:
 ```
 ╭── n1 agent ────────────────────────────────╮
 │ scout diff                                 │
-│ Cheap and mechanical. Its list of          │
-│ dimensions is the work-list for the…       │
-╰ low ───────────────────────────────────────╯
+│ effort: low · out: { dimensions: [{ name…  │
+╰────────────────────────────────────────────╯
   │  +
-┏━▼ n2 pipeline ×4 · review · each: dimensi… ┓
-┃ ╭── n3 agent ────────────────────────────╮ ┃
-┃ │ review                                 │ ┃
-┃ │ One reviewer per dimension.            │ ┃
-┃ ╰────────────────────────────────────────╯ ┃
-┃   │                                        ┃
-┃ ╭─▼ n4 verify ×3 ────────────────────────╮ ┃
-┃ │ adversarial verify                     │ ┃
-┃ │ Each skeptic tries to refute a finding │ ┃
-┃ │ and defaults to refuted when unsure.…  │ ┃
-┃ ╰ 3 votes ───────────────────────────────╯ ┃
-┃  ╰──────────────────────────────────────╯  ┃
-┃   ╰────────────────────────────────────╯   ┃
-┗━ + ━━━━━━━━━━━━━━━━━━━━━━━━━━━ edit ━ del ━┛
- ╰──────────────────────────────────────────╯
-  ╰────────────────────────────────────────╯
-  ║  +
+╭─▼ n2 pipeline ×4 · review · each: dimensi… ╮
+│ ┏━━ n3 agent ━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ │
+│ ┃ review                                 ┃ │
+│ ┃ One reviewer per dimension.            ┃ │
+│ ┃ out: { findings: [{ file, line, sever… ┃ │
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━ edit ━ del ━┛ │
+│   │  +                                     │
+│ ╭─▼ n4 verify ×3 ────────────────────────╮ │
+│ │ adversarial verify                     │ │
+│ │ 3 votes · out: { refuted: boolean, re… │ │
+│ ╘════════════════════════════════════════╛ │
+╘═ + ════════════════════════════════════════╛
+  ║
 ╭─▼ n5 agent ────────────────────────────────╮
 ```
 
-Above the prompt (inline) it flows left to right:
+Above the prompt (inline) it flows left to right. It starts compact there (one row a card, the selected one whole); `z` shows it whole, as here:
 
 ```
-╭ n1 agent ────╮    ╭ n2 pipeline ×4 · review · each: dimensions ───╮    ╭ n5 agent ────╮
-│ scout diff   │ ─▶ │ ╭ n3 agent ────╮    ╭ n4 verify ×3 ──────╮    │ ═▶ │ synthesize   │ +
-│ Cheap and…   │    │ │ review       │ ─▶ │ adversarial verify │    │    │ Runs once…   │
-╰ low ─────────╯    │ │ One reviewe… │    │ Each skeptic trie… │    │    ╰──────────────╯
-                    │ ╰──────────────╯    ╰ 3 votes ───────────╯    │
+╭ n1 agent ──────────────────╮    ╭ n2 pipeline ×4 · review · each: dimensions ──────────────────────╮    ╭ n5 agent ────╮
+│ scout diff                 │ ─▶ │ ╭ n3 agent ──────────────────╮    ╭ n4 verify ×3 ──────────────╮ │ ═▶ │ synthesize   │ +
+│ effort: low · out: { dime… │    │ │ review                     │ ─▶ │ adversarial verify         │ │    │              │
+╰────────────────────────────╯    │ │ out: { findings: [{ file,… │    │ 3 votes · out: { refuted:… │ │    ╰──────────────╯
+                                  │ ╰────────────────────────────╯    ╘════════════════════════════╛ │
+                                  ╘══════════════════════════════════════════════════════════════════╛
 ```
 
-- A block is a card: `id type` on its top border, its title, the start of its notes, its knobs
-  on the bottom border (with a run, its progress there instead).
-- The selected card has a heavy border and grows to show all its notes and a line of its knobs.
-  Its colour stays its type's.
+- A block is a card: `id type` on its top border, its title, then one meta row: its knobs, each
+  with its name (`effort: low`, `3 votes`, `until: 2 dry rounds`), and `out: …`, the schema it hands on.
+  Notes are not on a card until it is selected.
+- The selected card has a heavy border and grows to show all its notes, word-wrapped. That is the one
+  place the notes are read; the inspector holds the field they are edited in. Its colour stays its type's.
 - A container is a box around its blocks. A pipeline or loop chains them along the flow;
   a parallel, sweep or branch puts them side by side across it.
 - `│` (or `─▶`) hands each result on as it arrives; `║` (or `═▶`) waits for all results first.
-- `×4` and the borders stacked under a box mean it runs many times (a fan-out, or votes).
-  A container's header says what each run is for (`each: …`); `out: …` on its bottom border is what it hands on.
+- `×4` and a double bottom border (`╘═══╛`) mean it runs many times (a fan-out, or votes); no badge for one.
+  A container's header says what each run is for (`each: …`); its knobs and `out: …` are on its bottom border.
 - `+` adds a block there. The ones around the selection and at the ends are always drawn; the rest
   show under the pointer. A `+` on a container's bottom border adds at the end of that container.
 - `▲ 3 more above` / `▼ 5 more below` on the board's edge say it goes on; a container whose header
   has scrolled off keeps it pinned on the first row.
 - `▲` on a border is a lint; the inspector under the board says what it is.
 
-Under the board: one row of keys, then the inspector. Docked, the inspector has the title and
-notes fields, with the notes word-wrapped under their field. Inline it is one line until you press `e`.
+Under the board: a line for whatever needs saying about it (the delete question, what a grab's keys do,
+a refused edit, the lock), one row of keys, then the inspector. Inline the inspector is one line until you press `e`.
+
+The inspector has a field for everything a block can carry, and shows only what suits the block's type:
+
+| Field | For | Shown on |
+| --- | --- | --- |
+| `title` | the block's name on the board | every block |
+| `notes (what it does)` | whoever reads the design: what the block does and why | every block |
+| `prompt (tell the agent)` | the agent: the intent of its prompt (Claude writes the wording) | agent, verify, judge panel, critic, subworkflow |
+| `fanout (once per)` | what it runs once per, with a count when known (`×4 dimensions`) | agent, verify, judge panel, pipeline, parallel, sweep, loop until dry |
+| `until (stop when)` | when a loop stops | loop, loop until dry |
+| `schema (out)` | what the block hands on, in words or as JSON Schema text | every block |
+| `agentType` | a subagent type to run as | agent, verify, critic |
+| `model`, `effort` | pickers; `inherit` leaves them to the session | blocks that spawn agents |
+| `isolation` | picker: `worktree` or none | agent |
+| `votes` | picker | verify, judge panel |
+
+A knob a block carries that its type does not list (set from chat, or in the file) gets its field too.
+Enter in a field saves it and returns the keys to the key row.
 
 With the mouse:
 
@@ -120,24 +136,37 @@ With the mouse:
   Held at the board's edge, the board pans.
 - The selected card carries `edit` and `del` on its border. `del` on a container that holds blocks asks once more.
 - Drag the background to pan.
-- While a run is in progress editing is locked: a click only selects, and the inspector lists the selected block's agents.
+- While a run is in progress editing is locked: a click only selects, the key row shows only the keys that still work,
+  and the inspector lists the selected block's agents.
 
 With the keyboard. The keys do the same whether the pane's key row or the board (after a click on it) has the keyboard:
 
 | Key | Action |
 | --- | --- |
 | `h` `j` `k` `l` | move the selection: along the flow to the next or previous block, across it into a container or back out |
-| `a` | add a block after the selection |
-| `i` | add a block inside the selected container |
+| `a` | add a block after the selection: a list of the block types, each with a line on what it is for; type to narrow, Enter adds the first. The new block's title is typed next (Enter keeps the default) |
+| `i` | add a block inside the selected container, the same way |
 | `x` | delete (a container that holds blocks asks first) |
 | `g` | grab the selected block; the direction keys then move it a step at a time, `g` drops it |
-| `e` | edit: the title field takes the keyboard, Tab reaches the notes; Enter saves |
-| `z` | compact: every card but the selected one becomes one row; `z` again brings them back |
-| `c` | help: the block type's card, what the board's marks mean, the design file's path |
-| `r` | put `/conductor run <name>` in the prompt; Enter sends it |
+| `e` | edit: the title field takes the keyboard, Tab reaches the other fields and the pickers; Enter saves |
+| `z` | compact: every card but the selected one becomes one row (branches one under the other); `z` again brings them back. Inline starts compact, docked starts whole; each keeps its own setting for the session, whatever design is open |
+| `c` | help, a page a press, in the inspector's place: the block type's card, what the board's marks mean, mouse and keys and the design file's path; then closed |
+| `r` | put `/conductor run <name>` in the prompt; Enter sends it. The line under the board says what the design implies first: `run: 6 blocks · at least 18 agents · no lints` |
 
 After a click on the board the arrow keys also move the selection and Enter edits. Escape hands the keys back to the prompt.
 After a handoff the keyboard is in the prompt: `/conductor` reopens the pane with the keyboard.
+Reopening a design brings back the block it was left on.
+
+## Watching a run
+
+A run started from a design is laid over it:
+
+- The header says the run in one line: `run running · 5/9 agents done · 1 failed · 57.4k tokens · 4.5s`.
+- Each card's bottom border says its agents: `⠹ 2/4 done · 1 failed · 22.3k` (ended well, of started; failures; tokens).
+  A container sums what it holds. `waiting` has no agent yet; `not run` never got one.
+- The selection follows the block that is running (the furthest along when several are), and the board scrolls
+  with it, until you move the selection yourself; from then on it stays where you put it.
+- "At least N agents" before a run is a floor, not an estimate: counts multiply only where the design states a number.
 
 ## How a design becomes a workflow
 

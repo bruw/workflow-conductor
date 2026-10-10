@@ -31,8 +31,11 @@ export type BoardMessage =
   /** A click on `del`: a container that holds blocks is asked about first. */
   | { kind: 'remove'; id: string }
   | { kind: 'edit'; id: string }
-  /** A key pressed while the board has the keyboard; arrows mean what they do in this orientation. */
-  | { kind: 'key'; op: BoardOp; orientation: Orientation }
+  /** A key pressed while the board has the keyboard; arrows mean what they do in this orientation, `z` is for this placement. */
+  | { kind: 'key'; op: BoardOp; orientation: Orientation; placement: Placement }
+
+/** Where the pane sits: docked beside the transcript, or inline above the prompt. */
+export type Placement = 'dock' | 'inline'
 
 export type LintMark = { nodeId: string; message: string }
 
@@ -52,8 +55,11 @@ export type BoardProps = {
   /** The place the add picker is open for. */
   pickerAt: Place | null
   orientation: Orientation
+  placement: Placement
   /** Every leaf that is not selected is drawn as one row. */
   compact: boolean
+  /** What an empty board says in place of its `+ add the first block`: Claude is drafting it. */
+  emptyNote?: string
   /** The room the pane gives the board: its columns, the rows of its region, and the most rows it could have had. */
   columns: number
   rows: number
@@ -100,7 +106,7 @@ export function parseBoardMessage(data: unknown): BoardMessage | undefined {
   }
   if (kind === 'key') {
     const op = BOARD_OPS.find(one => one === data.op)
-    return op ? { kind, op, orientation: data.orientation === 'vertical' ? 'vertical' : 'horizontal' } : undefined
+    return op ? { kind, op, orientation: data.orientation === 'vertical' ? 'vertical' : 'horizontal', placement: data.placement === 'inline' ? 'inline' : 'dock' } : undefined
   }
   if (typeof id !== 'string') return undefined
   if (kind === 'edit' || kind === 'remove') return { kind, id }
@@ -159,6 +165,7 @@ export type BoardContext = {
   confirmId?: string | null
   /** A run is in progress: a press selects and pans, nothing is edited. */
   locked?: boolean
+  placement?: Placement
 }
 
 export type BoardResult = { state: BoardState; post?: BoardMessage }
@@ -212,7 +219,7 @@ export function syncBoard(state: BoardState, context: BoardContext): BoardState 
     next = { ...next, seen }
     if (card) {
       // A cell's margin on every side: the window's edge rows and columns say what is past them.
-      next = { ...next, panX: revealPadded(next.panX, card.x, card.w, context.columns, EDGE_ROWS), panY: revealPadded(next.panY, card.y, card.h + card.stack, context.rows, EDGE_ROWS) }
+      next = { ...next, panX: revealPadded(next.panX, card.x, card.w, context.columns, EDGE_ROWS), panY: revealPadded(next.panY, card.y, card.h, context.rows, EDGE_ROWS) }
     }
   }
   return clampPan(next, context)
@@ -313,7 +320,7 @@ function reduceKey(state: BoardState, input: BoardKey, context: BoardContext): B
   const base: BoardState = state.drag === null ? state : { ...state, drag: null }
   if (input.ctrl || input.meta) return { state: base }
   const op = KEY_OPS[input.key]
-  return op ? { state: base, post: { kind: 'key', op, orientation: context.layout.orientation } } : { state: base }
+  return op ? { state: base, post: { kind: 'key', op, orientation: context.layout.orientation, placement: context.placement ?? 'dock' } } : { state: base }
 }
 
 /** One input against the board's local state: the next state, and the message to post when the hooks module has to act on it. */
@@ -422,8 +429,9 @@ export function dragHint(state: Pick<BoardState, 'drag' | 'panX' | 'panY'>, cont
 export const LEGEND: readonly string[] = [
   '│ ─▶  hands each result on as it arrives',
   '║ ═▶  waits for all results first',
-  '×N and borders stacked under a box: that many run side by side',
-  'each: what a fan-out runs once for · out: what a container hands on',
+  '×N and a double bottom border ╘═══╛: the block runs that many times side by side',
+  'each: what a fan-out runs once for · out: what the block hands on',
+  'in a run: 2/4 done · 1 failed = agents ended well of agents started, then the ones that failed',
   '+ adds a block there; more + show under the pointer',
   'drag a card to move it · drag the background to pan',
   'keys work the same from the toolbar and after a click on the board (there the arrows and Enter work too)',

@@ -11,7 +11,7 @@ import type { Design, NodeType } from './model'
 import { addNode, moveNode, nextIdNumber, removeNode, retypeNode, updateNode } from './ops'
 import type { NodePatch, Place } from './ops'
 import { FLASH_MS } from '../ui/board-model'
-import { DESIGN_DIR, initialUi } from './session'
+import { DESIGN_DIR, carryUi, initialUi } from './session'
 import type { DesignUi } from './session'
 import { KNOB_HELP, TEACH } from './teach'
 
@@ -387,7 +387,8 @@ export const FLASH_CLEAR_MS = FLASH_MS + 400
  */
 export function showEdit(ui: DesignUi, name: string, design: Design, change: Change): DesignUi {
   const same = ui.name === name && ui.status === 'ready'
-  const base: DesignUi = same ? { ...ui, grabbedId: null, picker: null, confirmId: null, editing: false, notice: null } : { ...initialUi(), name, status: 'ready', compact: ui.compact }
+  // The draft has landed (or the file changed): the board no longer says Claude is drafting.
+  const base: DesignUi = same ? { ...ui, grabbedId: null, picker: null, confirmId: null, editing: false, freshId: null, drafting: false, notice: null } : { ...carryUi(ui, initialUi()), name, status: 'ready' }
   const still = same && ui.selectedId !== null && findNode(design, ui.selectedId) ? ui.selectedId : null
   const selectedId = change.added[0] ?? still ?? change.changed[0] ?? design.nodes[0]?.id ?? null
   return { ...base, selectedId, flash: { ids: [...change.added, ...change.changed], seq: (ui.flash?.seq ?? 0) + 1 } }

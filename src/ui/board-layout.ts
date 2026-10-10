@@ -25,9 +25,9 @@ export const UNMAPPED_ID = 'unmapped'
 
 export const LEAF_MIN_W = 16
 /** With a run laid over it a card's status needs more room. */
-export const LEAF_MIN_RUN_W = 20
+export const LEAF_MIN_RUN_W = 28
 export const LEAF_MAX_W = 30
-/** A left-to-right card: borders, the title and one line of notes. */
+/** A left-to-right card: borders, the title and the meta row. */
 export const LEAF_H = 4
 /** How wide the selected card may grow on a left-to-right board, so its notes have room to wrap. */
 export const EXPANDED_W = 40
@@ -42,8 +42,6 @@ export const BRANCH_MIN_W = 18
 export const GAP_H = 4
 /** Rows between two chained cards, top to bottom: the connector, one row. */
 export const GAP_V = 1
-/** Lines of notes on a card that is not selected: top to bottom, left to right. */
-export const NOTE_ROWS = { vertical: 2, horizontal: 1 } as const
 /** The `+` after the last card of a left-to-right list. */
 const END_W = 3
 /** How far (columns, a row counting four) a dragged card may be from a slot and still drop into it. */
@@ -52,7 +50,7 @@ export const ADD_FIRST = '+ add first block'
 export const ADD_BLOCK = '+ add block'
 export const EMPTY_HINT = '+ add the first block'
 
-/** One row of text inside a card. `more` is the `… N more lines` marker, `summary` the knobs of the selected card. */
+/** One row of text inside a card. `more` is the `… N more lines` marker, `summary` the meta row: the labelled knobs, then `out:`. */
 export type CardLine = { text: string; role: 'title' | 'note' | 'more' | 'summary' }
 
 export type BoardCard = Rect & {
@@ -63,14 +61,14 @@ export type BoardCard = Rect & {
   title: string
   /** A container's per-item text (its `fanout` knob without the count): `each: …` in its header. '' with none. */
   each: string
-  /** The rows of text inside the box, from its second row: a leaf's title and notes, a selected container's notes. */
+  /** The rows of text inside the box, from its second row: a leaf's title, its notes when selected, its meta row; a selected container's notes. */
   lines: CardLine[]
-  /** What the bottom border says: the knobs worth a glance, and for a container `out: …` (its `schema` knob). '' with none. */
+  /** What a container's bottom border says: its labelled knobs and `out: …` (its `schema` knob). '' for a leaf (its meta row says it) and with none. */
   foot: string
-  /** `×4`, `×n` for a fan-out with no stated count, '' for none. */
+  /** `×4`, `×n` for a fan-out with no stated count, '' for none (and for a count of one). */
   fan: string
-  /** Borders drawn under the bottom one, each a column in: there are many of these. They are outside the card's own rows. */
-  stack: 0 | 1 | 2
+  /** It runs many times: its bottom border is a double line. No rows of its own. */
+  fanned: boolean
   /** A one-row card: what compact mode makes of every leaf that is not selected. */
   line: boolean
   /** The selected card, grown to show all its notes. */
@@ -120,7 +118,7 @@ export type LayoutOptions = {
   width?: number
   /** The selected block: its card grows to show its notes in full. */
   selectedId?: string | null
-  /** Every leaf that is not selected is one row. */
+  /** Every leaf that is not selected is one row, and branches are listed one under the other. */
   compact?: boolean
   /** The most rows of notes the selected card shows, the `… N more lines` row counted. */
   noteRows?: number
@@ -184,18 +182,22 @@ export function cappedLines(text: string, width: number, max: number): { lines: 
 /** The most rows of notes the selected card shows in a board with `room` rows (top to bottom, the `… N more lines` row counted). */
 export function expandRows(orientation: Orientation, room: number): number {
   if (orientation === 'vertical') return Math.max(3, Math.min(10, Math.floor(room / 3)))
-  // Left to right the rows are few: two containers, their stacked borders and the card's own leave these.
-  return Math.max(2, Math.min(4, room - 9))
+  // Left to right the rows are few: two containers around the card, its borders, title and meta row leave these.
+  return Math.max(2, Math.min(4, room - 8))
 }
 
-/** `×4` from a stated count (`×4 dimensions`, `4 angles`, votes), `×n` for any other fan-out, '' for none. */
+/** The count a fan-out states (`×4 dimensions`, `4 angles`), or undefined when it names none. */
+export function fanCount(fanout: string | undefined): number | undefined {
+  const count = /^\s*[×x]?\s*(\d+)\b/.exec(fanout ?? '')
+  return count ? Number(count[1]) : undefined
+}
+
+/** `×4` from a stated count (`×4 dimensions`, `4 angles`, votes), `×n` for any other fan-out, '' for none and for one: `×1` says nothing. */
 export function fanOf(node: Pick<DesignNode, 'knobs'>): string {
   const knobs = node.knobs ?? {}
-  if (knobs.fanout) {
-    const count = /^\s*[×x]?\s*(\d+)\b/.exec(knobs.fanout)
-    return count ? `×${count[1]}` : '×n'
-  }
-  return knobs.votes !== undefined ? `×${knobs.votes}` : ''
+  const count = knobs.fanout ? (fanCount(knobs.fanout) ?? NaN) : (knobs.votes ?? 1)
+  if (Number.isNaN(count)) return '×n'
+  return count > 1 ? `×${count}` : ''
 }
 
 /** What a fan-out runs once for: the `fanout` knob without its count (`×4 dimensions` → `dimensions`). */
@@ -203,14 +205,6 @@ export function eachOf(node: Pick<DesignNode, 'knobs'>): string {
   const fanout = clean(node.knobs?.fanout ?? '')
   const rest = fanout.replace(/^[×x]?\s*\d+\b\s*/, '')
   return rest === '' ? fanout.replace(/^[×x]\s*/, '') : rest
-}
-
-/** How many borders are drawn under a card that fans out: one for two, two for more (or for a count not stated). */
-export function stackOf(fan: string): 0 | 1 | 2 {
-  if (fan === '') return 0
-  const count = Number(fan.slice(1))
-  if (Number.isNaN(count)) return 2
-  return count <= 1 ? 0 : count === 2 ? 1 : 2
 }
 
 /** How a container arranges what it holds: stages chained along the flow, or branches stacked across it. */
@@ -232,42 +226,51 @@ export function edgeKind(parent: NodeType | undefined, from: Pick<DesignNode, 't
   return MANY.includes(from.type) || fanOf(from) !== '' ? 'barrier' : 'stream'
 }
 
-/** The axis a list's cards run along. */
-export function flowAxis(flow: Flow, orientation: Orientation): Axis {
+/**
+ * The axis a list's cards run along. Compact, top to bottom, branches are listed
+ * one under the other too: side by side each would be a few cells of one row.
+ */
+export function flowAxis(flow: Flow, orientation: Orientation, compact: boolean = false): Axis {
   const main: Axis = orientation === 'horizontal' ? 'h' : 'v'
-  if (flow === 'chain') return main
+  if (flow === 'chain' || (compact && main === 'v')) return main
   return main === 'h' ? 'v' : 'h'
 }
 
-/** The knobs worth a glance: model, effort, isolation, votes, until. The fan-out is said elsewhere (`×N`, `each:`). */
+/** `1 vote`, `3 votes`. */
+export function votesText(votes: number): string {
+  return `${votes} ${votes === 1 ? 'vote' : 'votes'}`
+}
+
+/**
+ * The knobs worth a glance, each with its name so it reads with no context:
+ * `model: sonnet · effort: low · isolation: worktree · 3 votes · until: 2 dry rounds`.
+ * The fan-out is said elsewhere (`×N`, `each:`).
+ */
 export function knobLine(node: DesignNode): string {
   const knobs = node.knobs ?? {}
   const parts: string[] = []
-  if (knobs.model) parts.push(knobs.model)
-  if (knobs.effort) parts.push(knobs.effort)
-  if (knobs.isolation) parts.push(knobs.isolation)
-  if (knobs.votes !== undefined) parts.push(`${knobs.votes} votes`)
-  if (knobs.until) parts.push(`until ${clean(knobs.until)}`)
+  if (knobs.model) parts.push(`model: ${knobs.model}`)
+  if (knobs.effort) parts.push(`effort: ${knobs.effort}`)
+  if (knobs.isolation) parts.push(`isolation: ${knobs.isolation}`)
+  if (knobs.agentType) parts.push(`as: ${clean(knobs.agentType)}`)
+  if (knobs.votes !== undefined) parts.push(votesText(knobs.votes))
+  if (knobs.until) parts.push(`until: ${clean(knobs.until)}`)
   return parts.join(' · ')
 }
 
-/** What a card's bottom border says. A leaf names what it runs once for; a container, what it hands on. */
-export function footLine(node: DesignNode): string {
+/**
+ * A block's meta row: its labelled knobs, what a leaf runs once for (a container
+ * says that in its header), then what it hands on, `out: <schema knob>`. A leaf
+ * carries it inside the card, a container on its bottom border. '' with none.
+ */
+export function metaLine(node: DesignNode): string {
   const parts = [knobLine(node)]
-  if (canHoldChildren(node.type)) {
-    if (node.knobs?.schema) parts.push(`out: ${clean(node.knobs.schema)}`)
-  } else if (node.knobs?.fanout) parts.push(`each: ${eachOf(node)}`)
+  if (!canHoldChildren(node.type) && node.knobs?.fanout) parts.push(`each: ${eachOf(node)}`)
+  if (node.knobs?.schema) parts.push(`out: ${clean(node.knobs.schema)}`)
   return parts.filter(part => part !== '').join(' · ')
 }
 
-/** The selected card's one line of knobs: the bottom border's words and what the block hands on. */
-export function summaryLine(node: DesignNode): string {
-  const parts = [footLine(node)]
-  if (!canHoldChildren(node.type) && node.knobs?.schema) parts.push(`out: ${clean(node.knobs.schema)}`)
-  return parts.filter(part => part !== '').join(' · ')
-}
-
-/** What a card says under its title: the block's notes, or with none what its prompt asks. */
+/** What the selected card says under its title: the block's notes, or with none what its prompt asks. */
 export function cardText(node: DesignNode): string {
   const notes = (node.notes ?? '').trim()
   return notes !== '' ? notes : (node.knobs?.prompt ?? '').trim()
@@ -276,17 +279,13 @@ export function cardText(node: DesignNode): string {
 type Measured = {
   node: DesignNode
   w: number
-  /** The box's own rows. */
   h: number
-  /** Rows with the stacked borders under it. */
-  fh: number
   header: string
   title: string
   each: string
   lines: CardLine[]
   foot: string
   fan: string
-  stack: 0 | 1 | 2
   line: boolean
   expanded: boolean
   flow: Flow | null
@@ -299,8 +298,9 @@ type Arranged = { w: number; h: number; at: { x: number; y: number }[]; end: { x
 /** What a list is laid out by: which way the board runs, and whether the list is the top level (which has no box to carry its last `+`). */
 type ListShape = { flow: Flow; axis: Axis; orientation: Orientation; top: boolean }
 
+
 /** Where the cards of one list go, from the list's own corner, and where its end slot starts. */
-function arrange(sizes: readonly { w: number; fh: number }[], shape: ListShape): Arranged {
+function arrange(sizes: readonly { w: number; h: number }[], shape: ListShape): Arranged {
   const { flow, axis, orientation, top } = shape
   const at: { x: number; y: number }[] = []
   let x = 0
@@ -312,9 +312,9 @@ function arrange(sizes: readonly { w: number; fh: number }[], shape: ListShape):
     at.push({ x, y })
     if (axis === 'h') {
       x += size.w + (last ? 0 : flow === 'chain' ? GAP_H : 1)
-      h = Math.max(h, size.fh)
+      h = Math.max(h, size.h)
     } else {
-      y += size.fh + (last ? 0 : flow === 'chain' ? GAP_V : 0)
+      y += size.h + (last ? 0 : flow === 'chain' ? GAP_V : 0)
       w = Math.max(w, size.w)
     }
   }
@@ -332,11 +332,12 @@ function arrange(sizes: readonly { w: number; fh: number }[], shape: ListShape):
 
 type Ctx = Required<Pick<LayoutOptions, 'orientation' | 'run' | 'compact' | 'noteRows'>> & { selectedId: string | null }
 
-function noteLines(node: DesignNode, width: number, selected: boolean, ctx: Ctx): CardLine[] {
+/** The selected card's notes, wrapped. A card that is not selected says none: the notes are read in one place. */
+function noteLines(node: DesignNode, width: number, ctx: Ctx): CardLine[] {
   const text = cardText(node)
   if (text === '') return []
   // Left to right there is no row to spare for a count of what is left: the last line ends in `…`.
-  if (!selected || ctx.orientation === 'horizontal') return firstLines(text, width, selected ? ctx.noteRows : NOTE_ROWS[ctx.orientation]).map(one => ({ text: one, role: 'note' as const }))
+  if (ctx.orientation === 'horizontal') return firstLines(text, width, ctx.noteRows).map(one => ({ text: one, role: 'note' as const }))
   const capped = cappedLines(text, width, ctx.noteRows)
   const lines: CardLine[] = capped.lines.map(one => ({ text: one, role: 'note' as const }))
   if (capped.more > 0) lines.push({ text: moreLines(capped.more), role: 'more' })
@@ -357,25 +358,24 @@ function measure(node: DesignNode, width: number, ctx: Ctx): Measured {
   const base = { node, header, title, fan, expanded: selected }
 
   if (!canHoldChildren(node.type)) {
-    const foot = footLine(node)
-    const none = { ...base, each: '', flow: null, kids: [], inside: 0 }
+    const meta = metaLine(node)
+    const none = { ...base, each: '', flow: null, kids: [], inside: 0, foot: '' }
     if (ctx.compact && !selected) {
-      const w = vertical ? width : Math.min(EXPANDED_W, Math.max(LEAF_MIN_W, header.length + 3 + title.length + 7))
-      return { ...none, w, h: 1, fh: 1, lines: [], foot: '', stack: 0, line: true }
+      // Left to right a row is as wide as its words, and with a run its count (`2/4 done · 1 failed`) after them.
+      const w = vertical ? width : Math.min(EXPANDED_W + (ctx.run ? 12 : 0), Math.max(ctx.run ? LEAF_MIN_RUN_W : LEAF_MIN_W, header.length + 3 + title.length + 7 + (ctx.run ? 24 : 0)))
+      return { ...none, w, h: 1, lines: [], line: true }
     }
-    const natural = Math.max(ctx.run ? LEAF_MIN_RUN_W : LEAF_MIN_W, Math.min(LEAF_MAX_W, Math.max(header.length, title.length, foot.length) + 4))
-    const w = vertical ? width : selected && cardText(node).length > natural - 4 ? Math.max(natural, EXPANDED_W) : natural
-    const lines: CardLine[] = [{ text: title, role: 'title' }, ...noteLines(node, w - 4, selected, ctx)]
-    // Top to bottom the selected card says its knobs on a row of their own; left to right they stay on the border.
-    const summary = selected && vertical ? summaryLine(node) : ''
-    if (summary !== '') lines.push({ text: summary, role: 'summary' })
+    const natural = Math.max(ctx.run ? LEAF_MIN_RUN_W : LEAF_MIN_W, Math.min(LEAF_MAX_W, Math.max(header.length, title.length, meta.length) + 4))
+    const w = vertical ? width : selected && Math.max(cardText(node).length, meta.length) > natural - 4 ? Math.max(natural, EXPANDED_W) : natural
+    // The title, then (selected only) the notes, then one meta row: the labelled knobs and `out:`.
+    const lines: CardLine[] = [{ text: title, role: 'title' }, ...(selected ? noteLines(node, w - 4, ctx) : [])]
+    if (meta !== '') lines.push({ text: meta, role: 'summary' })
     const h = Math.max(vertical ? 3 : LEAF_H, lines.length + 2)
-    const stack = stackOf(fan)
-    return { ...none, w, h, fh: h + stack, lines, foot: selected && vertical ? '' : foot, stack, line: false }
+    return { ...none, w, h, lines, line: false }
   }
 
   const flow = childFlow(node.type)
-  const axis = flowAxis(flow, ctx.orientation)
+  const axis = flowAxis(flow, ctx.orientation, ctx.compact)
   const kin = node.children ?? []
   let kids: Measured[]
   if (!vertical) kids = kin.map(child => measure(child, 0, ctx))
@@ -389,11 +389,10 @@ function measure(node: DesignNode, width: number, ctx: Ctx): Measured {
   const list = arrange(kids, { flow, axis, orientation: ctx.orientation, top: false })
   const w = vertical ? Math.max(width, list.w + 4) : Math.max(CONTAINER_MIN_W, list.w + 4, Math.min(header.length + (title === '' || title === node.type ? 0 : 3 + Math.min(title.length, 18)), 44) + 4)
   // A selected container says its notes above what it holds.
-  const lines = selected ? noteLines(node, w - 4, true, { ...ctx, noteRows: Math.min(ctx.noteRows, vertical ? 4 : 1) }) : []
+  const lines = selected ? noteLines(node, w - 4, { ...ctx, noteRows: Math.min(ctx.noteRows, vertical ? 4 : 1) }) : []
   const h = list.h + 2 + lines.length
-  const stack = stackOf(fan)
   const inside = kids.reduce((sum, kid) => sum + 1 + kid.inside, 0)
-  return { ...base, each: fan === '' ? '' : eachOf(node), w, h, fh: h + stack, lines, foot: footLine(node), stack, line: false, flow, kids, inside }
+  return { ...base, each: node.knobs?.fanout ? eachOf(node) : '', w, h, lines, foot: metaLine(node), line: false, flow, kids, inside }
 }
 
 /** The board for a design: every card, edge and slot, in cells from the board's top left. */
@@ -413,7 +412,7 @@ export function layoutBoard(design: Design, options: LayoutOptions): BoardLayout
   }
 
   const placeList = (kids: Measured[], flow: Flow, ox: number, oy: number, box: BoardCard | undefined, depth: number): Arranged => {
-    const axis = flowAxis(flow, orientation)
+    const axis = flowAxis(flow, orientation, ctx.compact)
     const list = arrange(kids, { flow, axis, orientation, top: box === undefined })
     const count = kids.length
     const place = (index: number): Place => (box ? { parentId: box.id, index } : { index })
@@ -436,7 +435,7 @@ export function layoutBoard(design: Design, options: LayoutOptions): BoardLayout
         lines: kid.lines,
         foot: kid.foot,
         fan: kid.fan,
-        stack: kid.stack,
+        fanned: kid.fan !== '',
         line: kid.line,
         expanded: kid.expanded,
         depth,
@@ -512,10 +511,9 @@ export function layoutBoard(design: Design, options: LayoutOptions): BoardLayout
     const w = vertical ? span : title.length + 4
     const x = vertical ? 0 : top.w + 1
     const y = vertical ? top.h : 0
-    const stack = stackOf(fan)
-    cards.push({ x, y, w, h: LEAF_H - 1, id: UNMAPPED_ID, type: 'unmapped', header: `unmapped ${fan}`, title, each: '', lines: [{ text: title, role: 'title' }], foot: '', fan, stack, line: false, expanded: false, depth: 0, parentId: undefined, index: design.nodes.length, container: false, inside: 0, axis: vertical ? 'v' : 'h' })
+    cards.push({ x, y, w, h: LEAF_H - 1, id: UNMAPPED_ID, type: 'unmapped', header: strays > 1 ? `unmapped ${fan}` : 'unmapped', title, each: '', lines: [{ text: title, role: 'title' }], foot: '', fan: strays > 1 ? fan : '', fanned: strays > 1, line: false, expanded: false, depth: 0, parentId: undefined, index: design.nodes.length, container: false, inside: 0, axis: vertical ? 'v' : 'h' })
     width = Math.max(width, x + w)
-    height = Math.max(height, y + LEAF_H - 1 + stack)
+    height = Math.max(height, y + LEAF_H - 1)
   }
   return { orientation, width, height, cards, edges, slots }
 }
@@ -615,7 +613,7 @@ export function dropTarget(layout: BoardLayout, id: string, x: number, y: number
  * last, whatever follows its container on that axis. Across that axis: forward
  * goes into a container (its first block), backward out to the container.
  */
-export function navigate(design: Design, id: string | null, direction: Direction, orientation: Orientation): string | null {
+export function navigate(design: Design, id: string | null, direction: Direction, orientation: Orientation, compact: boolean = false): string | null {
   const rows = flatten(design)
   const forward = direction === 'right' || direction === 'down'
   const here = rows.find(row => row.node.id === id)
@@ -623,7 +621,7 @@ export function navigate(design: Design, id: string | null, direction: Direction
   const keyAxis: Axis = direction === 'left' || direction === 'right' ? 'h' : 'v'
   const byId = new Map(rows.map(row => [row.node.id, row]))
   const parentOf = (row: (typeof rows)[number]) => (row.parentId === undefined ? undefined : byId.get(row.parentId))
-  const axisOf = (row: (typeof rows)[number]): Axis => flowAxis(childFlow(parentOf(row)?.node.type), orientation)
+  const axisOf = (row: (typeof rows)[number]): Axis => flowAxis(childFlow(parentOf(row)?.node.type), orientation, compact)
   const siblingsOf = (row: (typeof rows)[number]): readonly DesignNode[] => parentOf(row)?.node.children ?? design.nodes
 
   const along = axisOf(here) === keyAxis

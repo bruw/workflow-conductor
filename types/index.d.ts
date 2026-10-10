@@ -29,14 +29,18 @@ export type ConductorDesignUi = {
   status: 'closed' | 'pick' | 'ready' | 'error'
   error: string | null
   selectedId: string | null
-  showCard: boolean
+  help: number
   notice: string | null
   grabbedId: string | null
   picker: { at: { parentId?: string; index: number }; query: string } | null
   confirmId: string | null
-  compact: boolean
+  compact: { dock: boolean; inline: boolean }
   editing: boolean
   flash: { ids: string[]; seq: number } | null
+  follow: boolean
+  drafting: boolean
+  freshId: string | null
+  picks: Record<string, string>
 }
 
 declare module 'claude-code' {
@@ -69,6 +73,8 @@ declare module 'claude-code' {
       runClock: number
       /** The design the tracked run was started from; null when it came from none. */
       runDesign: string | null
+      /** When the tracked run began and ended, in `$.clock.now()`'s ms (RunTimes in src/design/session.ts). */
+      runTimes: { runId: string | null; startedAt: number | null; endedAt: number | null; seenAt: number | null }
       design: ConductorDesign | null
       designUi: ConductorDesignUi
     }

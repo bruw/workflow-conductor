@@ -28,8 +28,10 @@ export type CardRun = {
   /** Spinner frame, `✓`, `✗`, or `·` while it has no agent. */
   glyph: string
   color: RunColor
-  /** `3/3 27.7k`, with `1✗` between when an agent failed; `waiting` or `not run` with no agent. */
+  /** `2/4 done · 1 failed · 27.7k`; `waiting` or `not run` with no agent. */
   text: string
+  /** The same in fewer words, longest first, for a border too short for `text`: without the tokens, then the count alone. */
+  shorter: string[]
   /** False once the run is over and the block got no agent. */
   reached: boolean
 }
@@ -59,16 +61,34 @@ export function cardRuns(layout: BoardLayout, run: RunOverlay): Map<string, Card
   for (const card of layout.cards) {
     const sum = sums.get(card.id) ?? NO_RUN
     if (sum.total === 0) {
-      if (card.type !== 'code') out.set(card.id, { glyph: '·', color: 'inactive', text: over ? NOT_RUN : WAITING, reached: !over })
+      if (card.type !== 'code') out.set(card.id, { glyph: '·', color: 'inactive', text: over ? NOT_RUN : WAITING, shorter: [], reached: !over })
       continue
     }
-    const settled = sum.done + sum.failed
-    const text = `${settled}/${sum.total}${sum.failed > 0 ? ` ${sum.failed}${FAILED}` : ''} ${fmtTokens(sum.tokens)}`
-    if (sum.running > 0) out.set(card.id, { glyph: spinnerFrame(run.now ?? 0), color: 'claude', text, reached: true })
-    else if (sum.failed > 0) out.set(card.id, { glyph: FAILED, color: 'error', text, reached: true })
-    else out.set(card.id, { glyph: GLYPH.done, color: 'success', text, reached: true })
+    const words = runWords(sum)
+    if (sum.running > 0) out.set(card.id, { glyph: spinnerFrame(run.now ?? 0), color: 'claude', ...words, reached: true })
+    else if (sum.failed > 0) out.set(card.id, { glyph: FAILED, color: 'error', ...words, reached: true })
+    else out.set(card.id, { glyph: GLYPH.done, color: 'success', ...words, reached: true })
   }
   return out
+}
+
+/**
+ * A block's agents in words nobody can misread: `2/4 done · 1 failed · 22.3k`
+ * (done are the ones that ended well, of all started; failures are named, never a bare mark).
+ */
+export function runWords(sum: NodeRun): { text: string; shorter: string[] } {
+  const count = `${sum.done}/${sum.total}`
+  const failed = sum.failed > 0 ? ` · ${sum.failed} failed` : ''
+  // No token figure before the first usage arrives: `0/4 done`, not `0/4 done · 0`.
+  const full = `${count} done${failed}`
+  return { text: sum.tokens > 0 ? `${full} · ${fmtTokens(sum.tokens)}` : full, shorter: [full, `${count}${failed}`, count] }
+}
+
+/** A card's status as it fits `room` cells, glyph included: the longest wording that does, '' when none. */
+export function fitStatus(run: CardRun | undefined, room: number): string {
+  if (!run) return ''
+  for (const words of [run.text, ...run.shorter]) if (words.length + 2 <= room) return `${run.glyph} ${words}`
+  return run.shorter.length === 0 ? clip(`${run.glyph} ${run.text}`, room) : ''
 }
 
 export type Affordance = { kind: 'edit' | 'remove'; x: number; y: number; w: number; label: string }
@@ -124,6 +144,8 @@ export type PaintOptions = {
   offsets?: Record<string, { dx: number; dy: number; dh?: number }>
   /** Colours and hovers left out: what a board too large for one tree falls back to. */
   plain?: boolean
+  /** Said on an empty board in place of its `+`: Claude is drafting the design. */
+  emptyNote?: string
   /** Blocks an edit from chat just touched: drawn in `claude`, their header inverse while `strong`. */
   flash?: { ids: readonly string[]; strong: boolean } | null
 }
@@ -131,6 +153,8 @@ export type PaintOptions = {
 const ROUND = ['╭', '─', '╮', '│', '╰', '╯'] as const
 const HEAVY = ['┏', '━', '┓', '┃', '┗', '┛'] as const
 const DASHED = ['╭', '╌', '╮', '┆', '╰', '╯'] as const
+/** The bottom border of a block that runs many times: a double line, at no extra row. Light, and for the selected card. */
+export const FAN_BOTTOM = { light: ['╘', '═', '╛'], heavy: ['╚', '═', '╝'] } as const
 
 /** Left to right an edge is a line and its head; top to bottom, one row of line, the head on the next card's top border. */
 export const EDGE_GLYPH = {
@@ -264,11 +288,13 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
     const y = card.y + (offset?.dy ?? 0)
     const tone = toneOf(card)
     const { selected, grabbed, lifted, lit, faded, tint, frame, edge, run } = tone
-    const status = run ? `${run.glyph} ${run.text}` : ''
 
     if (card.line) {
       // One row: `╶── n3 agent · review ─────╴`, the run's count at its right end.
       put(x, y, `╶${frame[1].repeat(Math.max(0, card.w - 2))}╴`, edge)
+      // The words keep the cells they need, and at least half the row; the status says what fits the rest.
+      const words = card.header.length + (card.title === '' ? 0 : 3 + card.title.length)
+      const status = fitStatus(run, Math.max(Math.floor(card.w / 2) - 4, card.w - 10 - words - (lints.has(card.id) ? 2 : 0)))
       const tail = status === '' ? 0 : status.length + 3
       const mark = lints.has(card.id) ? 2 : 0
       const room = card.w - 7 - tail - mark
@@ -293,26 +319,26 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
       put(x + 1, y + row, ' '.repeat(Math.max(0, card.w - 2)), 0)
       put(x + card.w - 1, y + row, frame[3], edge)
     }
-    put(x, y + h - 1, `${frame[4]}${frame[1].repeat(Math.max(0, card.w - 2))}${frame[5]}`, edge)
-    // Many of these: more bottom borders under the first, each a column in.
-    for (let layer = 1; layer <= card.stack; layer++) {
-      if (card.w - 2 * layer < 4) break
-      put(x + layer, y + h - 1 + layer, `${ROUND[4]}${ROUND[1].repeat(card.w - 2 - 2 * layer)}${ROUND[5]}`, look({ color: tint }))
-    }
+    // Many of these: the bottom border is a double line.
+    const bottom = card.fanned ? FAN_BOTTOM[lit && !lifted ? 'heavy' : 'light'] : ([frame[4], frame[1], frame[5]] as const)
+    put(x, y + h - 1, `${bottom[0]}${bottom[1].repeat(Math.max(0, card.w - 2))}${bottom[2]}`, edge)
 
     for (const [i, line] of card.lines.entries()) {
       if (1 + i >= h - 1) break
-      const style: Look =
-        line.role === 'title' ? (faded ? { color: 'inactive' } : lit ? { bold: true } : {}) : faded ? { color: 'inactive' } : line.role === 'note' && selected ? {} : { color: 'subtle' }
+      const style: Look = line.role === 'title' ? (faded ? { color: 'inactive' } : lit ? { bold: true } : {}) : faded ? { color: 'inactive' } : line.role === 'note' ? {} : { color: 'subtle' }
       put(x + 2, y + 1 + i, clip(line.text, card.w - 4), look(style))
     }
 
     const acts = selected && !options.locked && dragId === null && !moving ? affordances(card, options.confirmId === card.id) : []
-    const foot = status || card.foot
-    // Top to bottom a container's bottom border starts with its `+`; the words come after it.
+    // The bottom border: a container's meta (knobs, `out:`) from the left, the run's status after it (a leaf's meta is inside the card).
+    // Top to bottom a container's border starts with its `+`; the words come after it.
     const fx = x + (vertical && card.container ? 5 : 1)
     const room = (acts[0]?.x ?? card.x + card.w - 1) - (fx - x + card.x) - 4
-    if (foot !== '' && room >= 4) put(fx, y + h - 1, ` ${clip(foot, room)} `, look({ color: run ? run.color : faded ? 'inactive' : 'subtle' }))
+    const status = fitStatus(run, card.foot === '' ? room : Math.max(8, Math.ceil(room / 2)))
+    const left = room - (status === '' ? 0 : status.length + 3)
+    const foot = card.foot !== '' && left >= 8 ? clip(card.foot, left) : ''
+    if (foot !== '') put(fx, y + h - 1, ` ${foot} `, look({ color: faded ? 'inactive' : 'subtle' }))
+    if (status !== '' && status.length <= room) put(foot === '' ? fx : fx + foot.length + 3, y + h - 1, ` ${status} `, look({ color: run?.color ?? 'subtle' }))
     for (const act of acts) {
       const sure = act.kind === 'remove' && options.confirmId === card.id
       put(act.x, act.y, act.label, look({ color: sure ? 'error' : 'claude', ...(sure ? { bold: true } : {}), hover: `conductor-${act.kind}` }))
@@ -331,7 +357,9 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
         put(edge.x, edge.y + 1, glyph.slice(1), style)
       }
     }
-    if (!options.locked && dragId === null) {
+    const drafting = options.emptyNote !== undefined && options.emptyNote !== '' && layout.cards.length === 0
+    if (drafting) put(1, 0, clip(options.emptyNote ?? '', Math.max(1, width - 2)), look({ color: 'claude' }))
+    if (!options.locked && dragId === null && !drafting) {
       for (const slot of layout.slots) {
         if (!slot.mark) continue
         const open = samePlace(options.pickerAt, slot.place)

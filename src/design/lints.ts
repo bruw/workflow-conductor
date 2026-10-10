@@ -2,7 +2,7 @@
 // structural or keyword heuristic, stated above the rule. Each one prefers
 // missing a case to raising a false alarm. Lints never block anything.
 
-import { walk } from './model'
+import { canHoldChildren, flatten, walk } from './model'
 import type { Design, DesignNode } from './model'
 
 export type LintRule = 'barrier-not-needed' | 'worktree-read-only' | 'loop-unbounded' | 'code-input-no-schema' | 'fanout-over-cap'
@@ -108,4 +108,54 @@ export function lint(design: Design): Lint[] {
   })
 
   return lints
+}
+
+// ---------------------------------------------------------------------------
+// Preflight: what a design implies before it is handed off
+
+/** The count a fan-out states at its start (`×4 dimensions`, `12 files`); 1 when it names none. */
+function statedCount(fanout: string | undefined): number {
+  const count = /^\s*[×x]?\s*(\d+)\b/.exec(fanout ?? '')
+  return count ? Math.max(1, Number(count[1])) : 1
+}
+
+/**
+ * The fewest agents a block implies. A fan-out or votes count multiplies only
+ * where it is a number; a fan-out in words, a loop's rounds and a subworkflow's
+ * own agents count once or not at all, so the sum is a floor, never an estimate.
+ */
+function leastAgents(node: DesignNode): number {
+  const times = statedCount(node.knobs?.fanout)
+  if (canHoldChildren(node.type)) {
+    const kids = (node.children ?? []).map(leastAgents)
+    // One path of a branch runs: the cheapest. An empty sweep or dry loop still spawns its own searchers.
+    if (node.type === 'branch') return kids.length > 0 ? Math.min(...kids) : 0
+    const inside = kids.reduce((sum, one) => sum + one, 0)
+    if (kids.length === 0) return node.type === 'sweep' || node.type === 'loop-until-dry' ? times : 0
+    // Branches side by side: the count may name the branches drawn (`×2 angles`, two searchers) or items each
+    // of them runs for. The floor holds for both readings. Stages in a row run once per item.
+    if (node.type === 'parallel' || node.type === 'sweep') return Math.max(inside, times)
+    return inside * times
+  }
+  if (node.type === 'code' || node.type === 'subworkflow') return 0
+  if (node.type === 'verify' || node.type === 'judge-panel') return times * (node.knobs?.votes ?? 1)
+  return times
+}
+
+export type Preflight = { blocks: number; agents: number; lints: number }
+
+/** What a hand-off is about to start: how many blocks, the fewest agents they imply, and how many lints stand. */
+export function preflight(design: Design): Preflight {
+  return { blocks: flatten(design).length, agents: design.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lints: lint(design).length }
+}
+
+/**
+ * `6 blocks · at least 14 agents · 1 lint`. It informs; nothing is blocked.
+ * `blocks: false` leaves the first part out, where the count is already said.
+ */
+export function preflightLine(design: Design, options: { blocks?: boolean } = {}): string {
+  const { blocks, agents, lints } = preflight(design)
+  const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
+  const parts = [`at least ${plural(agents, 'agent')}`, lints === 0 ? 'no lints' : plural(lints, 'lint')]
+  return (options.blocks === false ? parts : [plural(blocks, 'block'), ...parts]).join(' · ')
 }

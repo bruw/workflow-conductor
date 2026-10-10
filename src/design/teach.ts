@@ -174,6 +174,63 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
   until: 'when a loop stops: "2 dry rounds", "budget < 50k"',
 }
 
+/**
+ * Which knobs make sense on which type: the one place that says so. The
+ * inspector offers a field for each, in this order; a knob a block carries
+ * anyway (set from chat or by hand in the file) is offered after them, so
+ * nothing set is ever out of reach.
+ *
+ * Reasoning: a knob the script passes to `agent()` (prompt, model, effort,
+ * agentType, isolation) belongs to the types that spawn agents; `votes` to the
+ * two voting patterns; `until` to the loops; `fanout` to whatever can run once
+ * per item; `schema` to anything that hands a result on.
+ */
+export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
+  agent: ['prompt', 'fanout', 'schema', 'agentType', 'model', 'effort', 'isolation'],
+  verify: ['prompt', 'fanout', 'schema', 'agentType', 'model', 'effort', 'votes'],
+  'judge-panel': ['prompt', 'fanout', 'schema', 'model', 'effort', 'votes'],
+  critic: ['prompt', 'schema', 'agentType', 'model', 'effort'],
+  pipeline: ['fanout', 'schema'],
+  parallel: ['fanout', 'schema'],
+  sweep: ['fanout', 'schema', 'model', 'effort'],
+  loop: ['until', 'schema'],
+  'loop-until-dry': ['until', 'fanout', 'schema', 'model', 'effort'],
+  branch: ['schema'],
+  code: ['schema'],
+  subworkflow: ['prompt', 'schema'],
+}
+
+/** The knobs the inspector offers for a block: its type's, then any other it has set. */
+export function knobsOf(node: { type: NodeType; knobs?: Knobs }): (keyof Knobs)[] {
+  const listed = KNOBS_BY_TYPE[node.type]
+  const extra = (Object.keys(node.knobs ?? {}) as (keyof Knobs)[]).filter(key => !listed.includes(key) && node.knobs?.[key] !== undefined)
+  return [...listed, ...extra]
+}
+
+/**
+ * How a free-text field is named beside the field, so each reads with no
+ * context. `notes` and `prompt` are both prose: notes say what the block does,
+ * for whoever reads the design; the prompt is what the agent is to be told.
+ */
+export const FIELD_LABEL = {
+  title: 'title',
+  notes: 'notes (what it does)',
+  prompt: 'prompt (tell the agent)',
+  fanout: 'fanout (once per)',
+  until: 'until (stop when)',
+  schema: 'schema (out)',
+  agentType: 'agentType',
+} as const
+
+export const FIELD_PLACEHOLDER = {
+  notes: 'for whoever reads the design: what this block does and why',
+  prompt: 'for the agent: the intent of its prompt; Claude writes the wording',
+  fanout: 'e.g. changed files, ×4 dimensions',
+  until: 'e.g. 2 dry rounds, 10 findings, budget < 50k',
+  schema: 'e.g. { findings: [{ file, claim }] }, or in words',
+  agentType: 'empty: the default subagent',
+} as const
+
 /** Picker order: primitives first, then patterns. */
 export const PALETTE: PaletteEntry[] = [
   { type: 'agent', tier: 'primitive', keywords: ['subagent', 'prompt', 'task', 'step', 'schema', 'call'] },
