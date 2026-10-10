@@ -101,7 +101,7 @@ for (const surface of SURFACES) {
     await ui.advance(200)
     expect(await lines()).toEqual(['n2', 'n3', 'n4', 'n1', 'n5'])
     expect(await lit()).toEqual(['n1  scout diff'])
-    expect(await ui.find({ type: 'Text', text: /space grab/, in: 'canvas' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /release to/, in: 'canvas' })).toBe(undefined)
 
     // The same slot a level to the right is the pipeline's end: n5 up one line and in.
     await ui.pointer({ type: 'down', x: TITLE, y: 4, button: 'left' })

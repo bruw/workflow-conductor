@@ -13,6 +13,13 @@ const HINT_ROWS = 1
 const TYPE_COLUMN_MIN = 26
 const TYPE_COLUMN_MAX = 44
 const NAME_WIDTH = 20
+// The run overlay's columns, right of the type: a small bar, settled/total, tokens.
+const TYPE_WIDTH = 20
+const BAR_WIDTH = 6
+const COUNT_WIDTH = 7
+const TOKEN_WIDTH = 7
+/** Below this width the bar is left out. */
+const BAR_MIN_COLUMNS = 72
 
 // The one shared ticker. It runs only while rows slide: started by the drawing
 // that finds motion, stopped by the tick that finds none. The handle and the
@@ -30,15 +37,18 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
   const limit = props.maxRows > 0 ? props.maxRows : surface.rows
   const capacity = limit > 0 ? Math.max(1, limit - HINT_ROWS) : 0
   const columns = surface.columns > 0 ? surface.columns : 80
-  const typeColumn = Math.max(TYPE_COLUMN_MIN, Math.min(TYPE_COLUMN_MAX, columns - 18))
+  const withBar = columns >= BAR_MIN_COLUMNS
+  // With a run, the type column moves left to leave room for the run's columns.
+  const runWidth = props.run ? TYPE_WIDTH + (withBar ? BAR_WIDTH + 1 : 0) + COUNT_WIDTH + TOKEN_WIDTH : 0
+  const typeColumn = Math.max(TYPE_COLUMN_MIN, Math.min(TYPE_COLUMN_MAX, columns - (props.run ? runWidth + 1 : 18)))
+  const locked = props.mode === 'run'
 
   let state = syncCanvas(surface.state ?? initialCanvas(), props)
 
   // Set again on every call (a later listener replaces the earlier one), so it
   // always reduces against the props and state this drawing shows.
   const take = (input: CanvasInput) => {
-    if (props.mode !== 'design') return
-    const result = canvasReduce(state, input, { design: props.design, capacity })
+    const result = canvasReduce(state, input, { design: props.design, capacity, run: props.run, locked })
     if (result.state !== state) {
       state = result.state
       surface.setState(state)
@@ -72,7 +82,6 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
     surface.setState(state)
   }
 
-  const rows = scene.rows
   const view = windowCanvas(animateLayout(scene.layout, state), scene.top, capacity)
 
   const drawRow = (row: DesignRow) => {
@@ -86,12 +95,35 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
         </Text>
       )
     }
+    const { run } = row
+    if (row.kind === 'agent') {
+      // Tokens end where the node rows' tokens end.
+      const room = Math.max(4, typeColumn + runWidth - TOKEN_WIDTH - row.rail.length - 2)
+      const title = row.title.length > room ? `${row.title.slice(0, room - 1)}…` : row.title
+
+      return (
+        <Text wrap="truncate-end">
+          <Text color="subtle">{row.rail}</Text>
+          <Text color={run?.color}>{`${row.glyph} `}</Text>
+          <Text color={run?.color === 'error' ? 'error' : undefined}>{title.padEnd(room)}</Text>
+          <Text color="subtle">{(run?.tokens ?? '').padStart(TOKEN_WIDTH)}</Text>
+        </Text>
+      )
+    }
     const fold = row.collapsed ? ` [+${row.hidden}]` : ''
     const badge = row.badge ? `  ${row.badge}` : ''
     const lint = row.lint ? ` ${GLYPH.lint}` : ''
-    const used = row.rail.length + 2 + row.id.length + 2 + row.title.length + badge.length + fold.length + lint.length
+    // The unmapped group is no node: it has a name and no id.
+    const name = row.kind === 'group' ? row.title : `${row.id}  ${row.title}`
+    const used = row.rail.length + 2 + name.length + badge.length + fold.length + lint.length
     const gap = ' '.repeat(Math.max(2, typeColumn - used))
+    // With a run the type gives way to a long title, so the run's columns stay in line.
+    const typeRoom = Math.max(0, typeColumn + TYPE_WIDTH - used - gap.length)
+    const typeName = !run ? row.typeName : (row.typeName.length > typeRoom ? `${row.typeName.slice(0, Math.max(0, typeRoom - 2))}… ` : row.typeName).slice(0, typeRoom).padEnd(typeRoom)
     const lit = row.selected || row.grabbed
+    // A node the finished run never reached is dim from end to end.
+    const dim = run !== undefined && run.note !== ''
+    const tint = lit ? 'claude' : dim ? 'inactive' : undefined
 
     // Hover is the engine's: the row's group lights under the pointer, with no redraw.
     const scope = `conductor-row-${row.id}`
@@ -99,11 +131,15 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
     return (
       <Text wrap="truncate-end" hover={{ scope, bold: true }}>
         <Text color="subtle">{row.rail}</Text>
-        <Text color={lit ? 'claude' : undefined} bold={lit} inverse={row.grabbed} hover={{ scope, color: 'claude' }}>{`${row.glyph} `}</Text>
-        <Text color={lit ? 'claude' : undefined} bold={lit} inverse={lit} hover={{ scope, color: 'claude' }}>{`${row.id}  ${row.title}`}</Text>
+        <Text color={run && !row.grabbed ? run.color : tint} bold={lit} inverse={row.grabbed} hover={{ scope, color: 'claude' }}>{`${run ? run.glyph : row.glyph} `}</Text>
+        <Text color={tint} bold={lit} inverse={lit} hover={{ scope, color: 'claude' }}>{name}</Text>
         <Text color={row.grabbed ? 'claude' : 'subtle'} inverse={row.grabbed}>{`${badge}${fold}`}</Text>
         <Text color="warning">{lint}</Text>
-        <Text color="inactive">{`${gap}${row.typeName}`}</Text>
+        <Text color="inactive">{`${gap}${typeName}`}</Text>
+        {run && run.note !== '' && <Text color="inactive">{run.note}</Text>}
+        {run && run.note === '' && withBar && <Text color={run.color}>{`${run.bar.padEnd(BAR_WIDTH)} `}</Text>}
+        {run && run.note === '' && <Text color={run.color}>{run.counts.padStart(COUNT_WIDTH)}</Text>}
+        {run && run.note === '' && <Text color="subtle">{run.tokens.padStart(TOKEN_WIDTH)}</Text>}
       </Text>
     )
   }
@@ -151,13 +187,14 @@ const Canvas: ClientModule<JsonValue, CanvasState> = (raw, surface) => {
     )
   }
 
-  const selected = rows.find(row => row.selected)
+  // The toolbar shows the keys; this line is only for what is cut off, a drag, or the canvas's own picker.
   const cut = `${view.above > 0 ? `↑${view.above} ` : ''}${view.below > 0 ? `↓${view.below} ` : ''}`
+  const under = `${cut}${hintLine(state, scene.dragging)}`
 
   return (
     <Box flexDirection="column">
       {view.lines.map(drawLine)}
-      <Text color="subtle" wrap="truncate-end">{`${cut}${hintLine(state, selected, scene.dragging)}`}</Text>
+      {under !== '' && <Text color="subtle" wrap="truncate-end">{under}</Text>}
     </Box>
   )
 }

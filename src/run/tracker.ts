@@ -37,7 +37,12 @@ export type TrackerHost = {
   paneShown: () => Promise<boolean>
   status: (text: string | undefined) => unknown
   toast: (text: string) => unknown
+  /** Stores which design the tracked run belongs to; null when it was not started from one. */
+  design?: (name: string | null) => unknown
 }
+
+/** A design handed off to be run: the next run that starts is its run. */
+export type Handoff = { name: string; nodeIds: readonly string[] }
 
 export type RunStarted = { runId: string; name?: string; transcriptDir?: string }
 export type AgentSpawned = { runId: string; agentId: string; label: string; index?: number }
@@ -60,6 +65,9 @@ export function createTracker() {
   let reading = false
   let shown = false
   let lastStatus: string | undefined
+  /** The handoff waiting for its run, and the one the tracked run came from. */
+  let pending: { name: string; ids: ReadonlySet<string> } | undefined
+  let active: { name: string; ids: ReadonlySet<string> } | undefined
 
   const dirs = new Map<string, string>()
   /** Agents of the tracked run still running, with their token total so far. */
@@ -197,7 +205,7 @@ export function createTracker() {
     const before = state
     let wasRunning = state.status === 'running'
     for (const event of events) {
-      const next = reduce(state, event)
+      const next = reduce(state, event, active?.ids)
       if (next === state) continue
       state = next
       wasRunning ||= state.status === 'running'
@@ -221,6 +229,16 @@ export function createTracker() {
     cancelQuiet()
     totals.clear()
     noPhase.clear()
+    // Another run, or the one a handoff waited for: it belongs to that design, or to none.
+    if (pending !== undefined || state.runId !== runId) {
+      const before = active
+      active = pending
+      pending = undefined
+      if (active?.name !== before?.name) {
+        const name = active?.name ?? null
+        call(h => h.design?.(name))
+      }
+    }
     if (state.runId !== undefined && state.runId !== runId) superseded.add(state.runId)
     superseded.delete(runId)
   }
@@ -245,6 +263,14 @@ export function createTracker() {
       if (!hasRunning(state)) armQuiet()
       startTicker()
     },
+
+    /** A design was handed off: the next run to start is counted against its node ids. */
+    handoff(next: Handoff): void {
+      pending = { name: next.name, ids: new Set(next.nodeIds) }
+    },
+
+    /** The design the tracked run was started from, if any. */
+    design: (): string | undefined => active?.name,
 
     paneOpened(): void {
       shown = true

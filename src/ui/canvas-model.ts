@@ -7,6 +7,8 @@ import type { Design, DesignNode, NodeType } from '../design/model'
 import { removeNode } from '../design/ops'
 import type { Place } from '../design/ops'
 import { TEACH, fuzzy } from '../design/teach'
+import type { AgentStatus, NodeRun, RunStatus } from '../run/events'
+import { FAILED, bar, fmtTokens, spinnerFrame } from './rail'
 import { GLYPH } from './theme'
 import { FRAME_MS, motionActive, placeRows, rowOffsets, settleMotion, stepMotion, stillMotion } from './tween'
 import type { Motion } from './tween'
@@ -23,7 +25,12 @@ export type CanvasMessage =
   | { kind: 'remove'; id: string; select?: string | null }
   | { kind: 'edit'; id: string }
   | { kind: 'toggleCard' }
+  /** Open or close the agent list of a node (or of UNMAPPED_ROW_ID) in the run overlay. */
+  | { kind: 'toggleRun'; id: string }
+  /** An edit key pressed while editing is locked: the hooks module says why nothing happened. */
+  | { kind: 'locked' }
 
+/** `run` while a run of this design is in progress: editing is locked. */
 export type CanvasMode = 'design' | 'run'
 
 /** What the hooks module hands the Client. `rev` changes when the hooks module sets the selection itself. */
@@ -35,6 +42,29 @@ export type CanvasProps = {
   rev: number
   /** Lines the canvas may take, hint line included; 0 for no limit. */
   maxRows: number
+  /** The node the toolbar's grab holds: drawn lifted. */
+  grabbedId?: string | null
+  /** The run of this design, drawn over its rows. */
+  run?: RunOverlay
+}
+
+/** What the overlay knows of one agent. */
+export type OverlayAgent = { agentId: string; label: string; nodeId?: string; status: AgentStatus; tokens: number }
+
+/** A run laid over the design: counts by node id, and the agents the open nodes list. */
+export type RunOverlay = {
+  status: RunStatus
+  byNode: Record<string, NodeRun>
+  /** By agentId. May hold only the agents of open nodes and the unmapped ones. */
+  agents: Record<string, OverlayAgent>
+  /** AgentIds whose label names no node of the design. */
+  unmapped: string[]
+  /** Nodes whose agent list the person opened. */
+  expandedRunNodes: string[]
+  /** Nodes the person closed although a failure would open them. */
+  collapsedRunNodes?: string[]
+  /** The run's tick clock, for the spinner frame. */
+  now?: number
 }
 
 export type LintMark = { nodeId: string; message: string }
@@ -55,7 +85,8 @@ function readPlace(value: unknown): Place | undefined {
 export function parseCanvasMessage(data: unknown): CanvasMessage | undefined {
   if (!isRecord(data)) return undefined
   const { kind, id } = data
-  if (kind === 'toggleCard') return { kind }
+  if (kind === 'toggleCard' || kind === 'locked') return { kind }
+  if (kind === 'toggleRun') return typeof id === 'string' ? { kind, id } : undefined
   if (kind === 'select') return id === null || typeof id === 'string' ? { kind, id } : undefined
   if (kind === 'add') {
     const at = readPlace(data.at)
@@ -84,9 +115,33 @@ export function parseCanvasMessage(data: unknown): CanvasMessage | undefined {
 /** The id the `+ add` row is selected under; no node id has this form. */
 export const ADD_ROW_ID = '+'
 
+/** The id of the group row that lists the agents no node claims. */
+export const UNMAPPED_ROW_ID = 'unmapped'
+export const NOT_RUN = '· not run'
+/** Agents listed under one open node; the rest are a `… N more` line. */
+export const AGENT_ROWS_MAX = 12
+
+export type RunColor = 'claude' | 'success' | 'error' | 'inactive'
+
+/** What the run overlay adds to a row. */
+export type RowRun = {
+  /** Spinner frame, `✓`, `✗`, or the row's own glyph while it has no agent. */
+  glyph: string
+  color: RunColor
+  /** `settled/total`; '' with no agent. */
+  counts: string
+  tokens: string
+  bar: string
+  /** NOT_RUN once the run is over and the node got no agent; else ''. */
+  note: string
+  /** Whether its agents are listed under it. */
+  open: boolean
+}
+
 export type DesignRow = {
-  kind: 'node' | 'add'
-  /** The node's id, or ADD_ROW_ID. */
+  /** `agent`: one agent under an open node. `group`: the unmapped agents. Both only with a run overlay. */
+  kind: 'node' | 'add' | 'agent' | 'group'
+  /** The node's id, ADD_ROW_ID, UNMAPPED_ROW_ID, or `agent:<agentId>`. */
   id: string
   /** Everything drawn before the glyph: the rail for the row's depth and position. */
   rail: string
@@ -107,6 +162,8 @@ export type DesignRow = {
   collapsed: boolean
   /** Nodes hidden inside a collapsed container. */
   hidden: number
+  /** Present only when a run is laid over the design. */
+  run?: RowRun
 }
 
 export type RowOptions = {
@@ -114,6 +171,90 @@ export type RowOptions = {
   grabbedId?: string | null
   collapsed?: Iterable<string>
   lints?: readonly LintMark[]
+  run?: RunOverlay
+  /** False keeps every agent list shut (the picker counts rows without them). */
+  agentRows?: boolean
+}
+
+const NO_RUN: NodeRun = { total: 0, running: 0, done: 0, failed: 0, tokens: 0 }
+
+function addRuns(a: NodeRun, b: NodeRun | undefined): NodeRun {
+  if (!b) return a
+  return { total: a.total + b.total, running: a.running + b.running, done: a.done + b.done, failed: a.failed + b.failed, tokens: a.tokens + b.tokens }
+}
+
+/** A node's own agents plus those of everything it holds. */
+function runOfNode(node: DesignNode, byNode: Record<string, NodeRun>): NodeRun {
+  return (node.children ?? []).reduce((sum, child) => addRuns(sum, runOfNode(child, byNode)), addRuns(NO_RUN, byNode[node.id]))
+}
+
+function unmappedAgents(run: RunOverlay): OverlayAgent[] {
+  return run.unmapped.map(id => run.agents[id]).filter((one): one is OverlayAgent => one !== undefined)
+}
+
+/** Whether a node's (or the unmapped group's) agents are listed: opened by hand, or by a failure unless closed by hand. */
+export function runNodeOpen(run: RunOverlay, id: string): boolean {
+  if (run.expandedRunNodes.includes(id)) return true
+  if ((run.collapsedRunNodes ?? []).includes(id)) return false
+  if (id === UNMAPPED_ROW_ID) return unmappedAgents(run).some(agent => agent.status === 'failed')
+  return (run.byNode[id]?.failed ?? 0) > 0
+}
+
+function statusMark(status: AgentStatus | 'none', now: number | undefined, glyph: string): { glyph: string; color: RunColor } {
+  if (status === 'running') return { glyph: spinnerFrame(now ?? 0), color: 'claude' }
+  if (status === 'failed') return { glyph: FAILED, color: 'error' }
+  if (status === 'done') return { glyph: '✓', color: 'success' }
+  return { glyph, color: 'inactive' }
+}
+
+const MINI_BAR = 6
+const OVER: readonly RunStatus[] = ['done', 'failed']
+
+function rowRun(sum: NodeRun, run: RunOverlay, glyph: string, open: boolean, spawns: boolean): RowRun {
+  const status = sum.running > 0 ? 'running' : sum.failed > 0 ? 'failed' : sum.total > 0 ? 'done' : 'none'
+  const settled = sum.done + sum.failed
+  const ran = sum.total > 0
+  return {
+    ...statusMark(status, run.now, glyph),
+    counts: ran ? `${settled}/${sum.total}` : '',
+    tokens: ran ? fmtTokens(sum.tokens) : '',
+    bar: ran ? bar(settled, sum.total, MINI_BAR) : '',
+    note: !ran && spawns && OVER.includes(run.status) ? NOT_RUN : '',
+    open: open && ran,
+  }
+}
+
+const ORDER: Record<AgentStatus, number> = { failed: 0, running: 1, done: 2 }
+
+/** The label without the node id it starts with: `n3: verify auth` → `verify auth`. */
+export function agentTitle(agent: Pick<OverlayAgent, 'label' | 'agentId' | 'nodeId'>): string {
+  const label = agent.nodeId === undefined ? agent.label : agent.label.replace(/^n\d+\b[:\s]*/, '')
+  return label.trim() || agent.agentId
+}
+
+/** The lines under an open row: its agents, failures first, cut at AGENT_ROWS_MAX. */
+function agentRows(agents: OverlayAgent[], total: number, parentId: string, depth: number, stem: string, more: boolean, run: RunOverlay): DesignRow[] {
+  const sorted = [...agents].sort((a, b) => ORDER[a.status] - ORDER[b.status])
+  const shown = sorted.slice(0, AGENT_ROWS_MAX)
+  const rest = Math.max(total, sorted.length) - shown.length
+  const base = { badge: '', typeName: '', lint: undefined, selected: false, grabbed: false, depth, parentId, index: 0, container: false, collapsed: false, hidden: 0 }
+  const rows: DesignRow[] = shown.map(agent => ({
+    ...base,
+    kind: 'agent',
+    id: `agent:${agent.agentId}`,
+    rail: '',
+    glyph: '',
+    title: agentTitle(agent),
+    run: { ...statusMark(agent.status, run.now, ''), counts: '', tokens: fmtTokens(agent.tokens), bar: '', note: '', open: false },
+  }))
+  if (rest > 0) {
+    rows.push({ ...base, kind: 'agent', id: `more:${parentId}`, rail: '', glyph: '', title: `${rest} more`, run: { glyph: '…', color: 'inactive', counts: '', tokens: '', bar: '', note: '', open: false } })
+  }
+  for (const [at, row] of rows.entries()) {
+    row.rail = `${stem}${at === rows.length - 1 && !more ? GLYPH.railEnd : GLYPH.railBranch} `
+    row.glyph = row.run?.glyph ?? ''
+  }
+  return rows
 }
 
 const BADGE_TEXT_MAX = 24
@@ -149,6 +290,8 @@ function countNodes(nodes: readonly DesignNode[]): number {
  *   ╰─ + add
  */
 export function buildDesignRows(design: Design, options: RowOptions = {}): DesignRow[] {
+  const { run } = options
+  const listed = options.agentRows !== false
   const collapsed = new Set(options.collapsed ?? [])
   const lints = new Map<string, string>()
   for (const one of options.lints ?? []) if (!lints.has(one.nodeId)) lints.set(one.nodeId, one.message)
@@ -177,7 +320,7 @@ export function buildDesignRows(design: Design, options: RowOptions = {}): Desig
     const isCollapsed = collapsed.has(node.id) && canHoldChildren(node.type)
     if (isCollapsed) hiddenBelow = depth
     const teach = TEACH[node.type]
-    rows.push({
+    const row: DesignRow = {
       kind: 'node',
       id: node.id,
       rail,
@@ -194,7 +337,50 @@ export function buildDesignRows(design: Design, options: RowOptions = {}): Desig
       container: canHoldChildren(node.type),
       collapsed: isCollapsed,
       hidden: isCollapsed ? countNodes(node.children ?? []) : 0,
+    }
+    rows.push(row)
+    if (!run) continue
+
+    // A `code` node spawns nothing, so it is never "not run".
+    row.run = rowRun(runOfNode(node, run.byNode), run, teach.glyph, listed && runNodeOpen(run, node.id), node.type !== 'code')
+    const own = run.byNode[node.id]
+    if (!row.run.open || !own || own.total === 0) {
+      row.run.open = false
+      continue
+    }
+    let stem = `${GLYPH.rail}  `
+    for (const ancestor of path.slice(1, depth + 1)) stem += ancestor.last ? '   ' : `${GLYPH.rail}  `
+    const agents = Object.values(run.agents).filter(agent => agent.nodeId === node.id)
+    rows.push(...agentRows(agents, own.total, node.id, depth + 1, stem, !isCollapsed && (node.children?.length ?? 0) > 0, run))
+  }
+
+  // What the implementation ran that the design does not hold.
+  if (run && run.unmapped.length > 0) {
+    const agents = unmappedAgents(run)
+    const sum = agents.reduce<NodeRun>((all, agent) => addRuns(all, { ...NO_RUN, total: 1, [agent.status]: 1, tokens: agent.tokens }), { ...NO_RUN })
+    // Agents the overlay was not handed still count.
+    const total = Math.max(sum.total, run.unmapped.length)
+    const open = listed && runNodeOpen(run, UNMAPPED_ROW_ID)
+    rows.push({
+      kind: 'group',
+      id: UNMAPPED_ROW_ID,
+      rail: '',
+      glyph: '?',
+      title: 'unmapped',
+      badge: `×${run.unmapped.length}`,
+      typeName: '',
+      lint: undefined,
+      selected: options.selectedId === UNMAPPED_ROW_ID,
+      grabbed: false,
+      depth: 0,
+      parentId: undefined,
+      index: design.nodes.length,
+      container: false,
+      collapsed: false,
+      hidden: 0,
+      run: rowRun({ ...sum, total, done: sum.done + (total - sum.total) }, run, '?', open, false),
     })
+    if (open) rows.push(...agentRows(agents, total, UNMAPPED_ROW_ID, 1, `${GLYPH.rail}  `, false, run))
   }
 
   rows.push({
@@ -282,6 +468,10 @@ export type CanvasContext = {
   design: Design
   /** Lines the canvas can show; 0 or less means no limit. */
   capacity?: number
+  /** The run laid over the rows, when there is one: its agent lines count as lines. */
+  run?: RunOverlay
+  /** A run is in progress: edits are refused, a click opens a row's agents. */
+  locked?: boolean
 }
 
 export type CanvasResult = { state: CanvasState; post?: CanvasMessage }
@@ -307,10 +497,16 @@ function ancestorsOf(design: Design, id: string): string[] {
  * Brings local state in line with new props: takes the selection the hooks
  * module set (a new `rev`), and drops whatever names a node that is gone.
  */
-export function syncCanvas(state: CanvasState, props: Pick<CanvasProps, 'design' | 'selectedId' | 'rev'>): CanvasState {
+export function syncCanvas(state: CanvasState, props: Pick<CanvasProps, 'design' | 'selectedId' | 'rev'> & Partial<Pick<CanvasProps, 'mode' | 'run'>>): CanvasState {
   const { design } = props
-  const exists = (id: string | null): id is string => id !== null && findNode(design, id) !== undefined
+  const group = props.run !== undefined && props.run.unmapped.length > 0
+  const exists = (id: string | null): id is string => id !== null && (findNode(design, id) !== undefined || (group && id === UNMAPPED_ROW_ID))
   let next = state
+
+  // A run that starts takes whatever was held or half typed out of the hand.
+  if (props.mode === 'run' && (next.grabbedId !== null || next.picker !== null || next.drag !== null)) {
+    next = { ...next, grabbedId: null, picker: null, drag: null }
+  }
 
   if (props.rev !== state.rev) {
     next = { ...next, rev: props.rev, selectedId: props.selectedId ?? ADD_ROW_ID, picker: null, drag: null }
@@ -405,7 +601,10 @@ function reducePicker(state: CanvasState, picker: PickerState, input: CanvasKey)
   return { state: { ...state, picker: { ...picker, query: picker.query + text, index: 0 } } }
 }
 
-function reduceKey(state: CanvasState, input: CanvasKey, design: Design): CanvasResult {
+const LOCKED_KEYS = /^(space|return|enter|x|delete|a|A|i)$/
+
+function reduceKey(state: CanvasState, input: CanvasKey, context: CanvasContext): CanvasResult {
+  const { design } = context
   if (state.picker) return reducePicker(state, state.picker, input)
 
   const rows = buildDesignRows(design, { collapsed: state.collapsed })
@@ -423,6 +622,8 @@ function reduceKey(state: CanvasState, input: CanvasKey, design: Design): Canvas
     return drop ? { state: { ...state, grabbedId: null } } : { state }
   }
   if (input.ctrl || input.meta) return { state }
+  if (context.locked && LOCKED_KEYS.test(key)) return { state, post: { kind: 'locked' } }
+  if (key === 'o' && context.run) return state.selectedId === ADD_ROW_ID ? { state } : { state, post: { kind: 'toggleRun', id: state.selectedId } }
 
   if (step !== 0) return select(rows[Math.max(0, Math.min(rows.length - 1, at + step))]?.id ?? state.selectedId)
   if (key === 'g' || key === 'home') return select(rows[0]?.id ?? ADD_ROW_ID)
@@ -434,6 +635,8 @@ function reduceKey(state: CanvasState, input: CanvasKey, design: Design): Canvas
   if (key === 'space') return { state: { ...state, grabbedId: row.id } }
   if (key === 'return' || key === 'enter') return { state, post: { kind: 'edit', id: row.id } }
   if (key === 'x' || key === 'delete') {
+    // A container that holds blocks is confirmed by the hooks module, which then moves the selection itself.
+    if ((findNode(design, row.id)?.children?.length ?? 0) > 0) return { state, post: { kind: 'remove', id: row.id } }
     // The selection lands on what takes the removed node's place.
     const after = rows[lastOfSubtree(rows, at) + 1]
     const before = rows[at - 1]
@@ -456,7 +659,7 @@ function reduceKey(state: CanvasState, input: CanvasKey, design: Design): Canvas
  */
 export function canvasReduce(state: CanvasState, input: CanvasInput, context: CanvasContext): CanvasResult {
   // A key lets go of whatever the pointer holds.
-  const result = input.type === 'pointer' ? reducePointer(state, input, context) : reduceKey(state.drag ? { ...state, drag: null } : state, input, context.design)
+  const result = input.type === 'pointer' ? reducePointer(state, input, context) : reduceKey(state.drag ? { ...state, drag: null } : state, input, context)
   if (result.state === state) return result
   // The window stays put under a row in flight: the pointer's line must keep meaning the same row.
   if (isDragging(result.state.drag)) return result
@@ -543,10 +746,15 @@ function reducePointer(state: CanvasState, input: CanvasPointer, context: Canvas
     // A press outside an open picker closes it and does nothing else.
     if (base.picker) return { state: { ...base, picker: null } }
     if (y < 0 || (capacity > 0 && y >= capacity)) return { state: base }
-    const rows = buildDesignRows(design, { collapsed: base.collapsed, selectedId: base.selectedId })
+    const rows = buildDesignRows(design, { collapsed: base.collapsed, selectedId: base.selectedId, run: context.run })
     const top = scrollTop(base.top, layoutCanvas(rows, null), capacity)
     const row = rows[top + y]
-    if (!row) return { state: base }
+    if (!row || row.kind === 'agent') return { state: base }
+    // The unmapped group only opens and closes; so does every row while a run is in progress.
+    if (row.kind === 'group' || (context.locked && row.kind === 'node')) {
+      return { state: { ...base, selectedId: row.id }, post: { kind: 'toggleRun', id: row.id } }
+    }
+    if (context.locked) return { state: base, post: { kind: 'locked' } }
 
     const result = (next: CanvasState): CanvasResult =>
       row.id === state.selectedId ? { state: next } : { state: next, post: { kind: 'select', id: row.kind === 'add' ? null : row.id } }
@@ -666,7 +874,7 @@ export type CanvasView = {
 }
 
 /** The lines for a state: the rows and picker, or, during a drag, the rest of the rows with the lifted row in its gap. */
-export function viewCanvas(state: CanvasState, props: Pick<CanvasProps, 'design' | 'lints'>, capacity: number = 0): CanvasView {
+export function viewCanvas(state: CanvasState, props: Pick<CanvasProps, 'design' | 'lints'> & Partial<Pick<CanvasProps, 'run' | 'grabbedId'>>, capacity: number = 0): CanvasView {
   const drag = dragView(props.design, state, { lints: props.lints, capacity })
   if (drag && drag.target) {
     const { slot, depth } = drag.target
@@ -677,9 +885,12 @@ export function viewCanvas(state: CanvasState, props: Pick<CanvasProps, 'design'
   // Over an invalid place the rows stand as they are, the dragged one lit where it came from.
   const rows = buildDesignRows(props.design, {
     selectedId: state.selectedId,
-    grabbedId: drag ? drag.lifted.id : state.grabbedId,
+    grabbedId: drag ? drag.lifted.id : (state.grabbedId ?? props.grabbedId ?? null),
     collapsed: state.collapsed,
     lints: props.lints,
+    run: props.run,
+    // The picker's place is counted in rows without agent lines.
+    agentRows: state.picker === null,
   })
   return { rows, layout: layoutCanvas(rows, state.picker), top: drag ? (state.drag?.top ?? state.top) : state.top, pinned: null, dragging: drag ? 'invalid' : null }
 }
@@ -720,14 +931,13 @@ export function animateLayout(layout: CanvasLayout, state: Pick<CanvasState, 'mo
   return { ...layout, lines: placed.map(line => line ?? { kind: 'blank' }) }
 }
 
-/** The dim hotkey line under the canvas, for the state the canvas is in. */
-export function hintLine(state: Pick<CanvasState, 'picker' | 'grabbedId'>, row: DesignRow | undefined, dragging: CanvasView['dragging'] = null): string {
-  if (dragging === 'valid') return 'release to drop · left/right picks the depth · release on this line to cancel'
+/**
+ * The dim line under the canvas, only for what the toolbar does not say: a drag
+ * in flight and the canvas's own picker. '' otherwise: the toolbar shows the keys.
+ */
+export function hintLine(state: Pick<CanvasState, 'picker'>, dragging: CanvasView['dragging'] = null): string {
+  if (dragging === 'valid') return 'release to drop · left/right picks the depth · release below the rows to cancel'
   if (dragging === 'invalid') return 'no place here: release to cancel'
   if (state.picker) return 'type to filter · ↑/↓ choose · enter add · backspace on empty cancels'
-  if (state.grabbedId !== null) return `moving ${state.grabbedId} · j/k move · space drop`
-  if (!row || row.kind === 'add') return 'j/k move · a add · ? card'
-  // What only this row offers comes first: the line is cut at the pane's edge.
-  const fold = row.container ? (row.collapsed ? 'l expand · ' : 'h collapse · A add inside · ') : ''
-  return `${fold}j/k move · space grab · a add · enter edit · x delete · ? card`
+  return ''
 }

@@ -194,8 +194,8 @@ test('while a row is held the others open a gap at the drop place, and none over
   expect(off.dragging).toBe('invalid')
   expect(off.layout.lines.map(line => (line.kind === 'row' ? line.row.id : line.kind))).toEqual(['n1', 'n2', 'n3', 'n4', 'n5', ADD_ROW_ID])
   expect(off.rows.find(row => row.id === 'n1')?.grabbed).toBe(true)
-  expect(hintLine(at(8), undefined, off.dragging)).toMatch(/release to cancel/)
-  expect(hintLine(at(3), undefined, 'valid')).toMatch(/release to drop/)
+  expect(hintLine(at(8), off.dragging)).toMatch(/release to cancel/)
+  expect(hintLine(at(3), 'valid')).toMatch(/release to drop/)
 })
 
 test('the instance keeps the drag when the pointer leaves; a key or a new selection lets go', () => {

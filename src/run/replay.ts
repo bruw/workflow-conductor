@@ -1,3 +1,6 @@
+import { flatten, idNumber } from '../design/model'
+import type { Design } from '../design/model'
+
 import type { RunEvent } from './events'
 import { journalToEvents } from './journal'
 import type { AgentMeta } from './journal'
@@ -45,4 +48,62 @@ export function replayDue(total: number, step: number, steps: number): number {
   if (steps <= 0 || step >= steps) return total
 
   return Math.min(total, Math.max(0, Math.ceil((total * step) / steps)))
+}
+
+/** Labels of the agents a design replay adds that no node of the design claims. */
+export const REPLAY_STRAYS = ['fix lint', 'stray check'] as const
+
+/** How many agents a design replay gives a leaf: `×N` of its fan-out or votes when stated, else 2 to 4. */
+function replayAgents(knobs: { fanout?: string; votes?: number } | undefined, id: string): number {
+  const stated = /^[×x]\s*(\d+)/.exec(knobs?.fanout ?? '')?.[1]
+  const count = stated !== undefined ? Number(stated) : (knobs?.votes ?? 2 + (idNumber(id) % 3))
+
+  return Math.max(2, Math.min(6, count))
+}
+
+/**
+ * A made-up run of a design, for the overlay: several agents per leaf node, labelled
+ * `<nodeId>: <title> <k>` as a handed-off script would, node after node; one agent
+ * fails; two more carry labels no node claims (one plain, one with an id the design
+ * does not hold). Token counts are made up. `code` nodes spawn nothing.
+ */
+export function replayDesignEvents(design: Design, name: string = design.name): RunEvent[] {
+  const runId = `replay:design:${name}`
+  const events: RunEvent[] = [{ kind: 'run-start', runId, name }]
+  const rows = flatten(design)
+  const leaves = rows.filter(row => (row.node.children?.length ?? 0) === 0 && row.node.type !== 'code')
+  const phaseOf = new Map<string, string>()
+  let phase = ''
+  for (const row of rows) {
+    if (row.depth === 0) phase = `${row.node.id} ${row.node.title}`
+    phaseOf.set(row.node.id, phase)
+  }
+  const strayId = `n${rows.reduce((max, row) => Math.max(max, idNumber(row.node.id)), 0) + 90}`
+  const strays = [REPLAY_STRAYS[0], `${strayId}: ${REPLAY_STRAYS[1]}`]
+  // The failure lands in the second leaf when there is one, on its second agent.
+  const failing = leaves[Math.min(1, leaves.length - 1)]?.node.id
+
+  const run = (agentId: string, label: string, phase: string | undefined, ok: boolean): RunEvent[][] => {
+    const tokens = replayTokens(agentId)
+
+    return [
+      [{ kind: 'agent-start', runId, agentId, label, phase }],
+      [{ kind: 'agent-usage', agentId, tokens: Math.round(tokens / 2) }],
+      [{ kind: 'agent-end', agentId, ok, tokens, durationMs: 1000 + (tokens % 4000) }],
+    ]
+  }
+
+  for (const [at, { node }] of leaves.entries()) {
+    const count = replayAgents(node.knobs, node.id)
+    const agents = Array.from({ length: count }, (_, k) => run(`replay-${node.id}-${k + 1}`, `${node.id}: ${node.title} ${k + 1}`, phaseOf.get(node.id), !(node.id === failing && k === 1)))
+    // One stray beside the first leaf, one beside the last.
+    const stray = at === 0 ? strays[0] : at === leaves.length - 1 ? strays[1] : undefined
+    if (stray !== undefined) agents.push(run(`replay-stray-${at === 0 ? 1 : 2}`, stray, undefined, true))
+    // Starts together, then usage, then ends: a node's agents overlap as a fan-out does.
+    for (const stage of [0, 1, 2]) for (const agent of agents) events.push(...(agent[stage] ?? []))
+  }
+  if (leaves.length === 1) events.push(...run('replay-stray-2', strays[1] ?? '', undefined, true).flat())
+  events.push({ kind: 'run-end', runId, ok: true })
+
+  return events
 }

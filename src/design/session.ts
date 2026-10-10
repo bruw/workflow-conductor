@@ -3,7 +3,10 @@
 // edit. The hooks module reads state, calls one of these, writes state and
 // saves. Pure TypeScript: no `$`, no engine imports.
 
-import type { CanvasMessage, CanvasProps } from '../ui/canvas-model'
+import type { RunState } from '../run/events'
+import { UNMAPPED_ROW_ID, runNodeOpen } from '../ui/canvas-model'
+import type { CanvasMessage, CanvasProps, OverlayAgent, RunOverlay } from '../ui/canvas-model'
+import { togglePhase } from '../ui/rail'
 import { lint } from './lints'
 import { canHoldChildren, emptyDesign, findNode, flatten, parseDesign, toKebab } from './model'
 import type { Design, NodeType } from './model'
@@ -42,15 +45,70 @@ export type DesignUi = {
   picker: { at: Place; query: string } | null
   /** The container a first `x` asked about; a second `x` on it removes it. */
   confirmId: string | null
+  /** Agent lists the person opened or closed in the run overlay, by node id. */
+  runUi: { expanded: string[]; collapsed: string[] }
 }
 
+/** What stands in the way of an edit, and what a toggle of an agent list needs to know. */
+export type RunContext = {
+  /** A run of this design is in progress: every edit is refused. */
+  locked?: boolean
+  /** The run laid over this design, when there is one. */
+  run?: RunState
+}
+
+export const LOCK_NOTICE = 'run in progress · editing locked'
+
 /** What a toolbar key asks for. The canvas sends the same edits as messages. */
-export type ToolbarOp = 'down' | 'up' | 'grab' | 'addAfter' | 'addInside' | 'remove' | 'card' | 'cancel'
+export type ToolbarOp = 'down' | 'up' | 'grab' | 'addAfter' | 'addInside' | 'remove' | 'card' | 'cancel' | 'agents'
 
 export type Step = { design: Design | null; ui: DesignUi; changed: boolean }
 
 export function initialUi(): DesignUi {
-  return { name: DEFAULT_DESIGN_NAME, status: 'closed', error: null, selectedId: null, rev: 0, showCard: false, notice: null, grabbedId: null, picker: null, confirmId: null }
+  return { name: DEFAULT_DESIGN_NAME, status: 'closed', error: null, selectedId: null, rev: 0, showCard: false, notice: null, grabbedId: null, picker: null, confirmId: null, runUi: { expanded: [], collapsed: [] } }
+}
+
+/** Whether `run` is laid over the design the pane shows: it was started from that design and has begun. */
+export function overlaysDesign(run: RunState, runDesign: string | null, ui: DesignUi): boolean {
+  return runDesign !== null && runDesign === ui.name && ui.status === 'ready' && run.status !== 'idle'
+}
+
+/** The most agents handed to the canvas: its props have a size limit. */
+const OVERLAY_AGENTS_MAX = 300
+const OVERLAY_LABEL_MAX = 80
+
+/** The run as the canvas takes it: every count, and only the agents an open row lists. */
+export function runOverlay(run: RunState, ui: DesignUi, now = 0): RunOverlay {
+  const expanded = ui.runUi?.expanded ?? []
+  const collapsed = ui.runUi?.collapsed ?? []
+  const base: RunOverlay = { status: run.status, byNode: run.byNode, agents: {}, unmapped: run.unmapped, expandedRunNodes: expanded, collapsedRunNodes: collapsed, now }
+  const lean = (id: string): OverlayAgent | undefined => {
+    const agent = run.agents[id]
+    if (!agent) return undefined
+    const one: OverlayAgent = { agentId: agent.agentId, label: agent.label.slice(0, OVERLAY_LABEL_MAX), status: agent.status, tokens: agent.tokens }
+    if (agent.nodeId !== undefined) one.nodeId = agent.nodeId
+    return one
+  }
+  const agents: Record<string, OverlayAgent> = {}
+  let held = 0
+  const take = (id: string): void => {
+    const one = held < OVERLAY_AGENTS_MAX ? lean(id) : undefined
+    if (!one) return
+    agents[id] = one
+    held++
+  }
+  // Unmapped agents first: the group's counts are summed from them.
+  for (const id of run.unmapped) take(id)
+  const open = new Set(Object.keys(run.byNode).filter(id => runNodeOpen(base, id)))
+  for (const agent of Object.values(run.agents)) if (agent.nodeId !== undefined && open.has(agent.nodeId)) take(agent.agentId)
+  return { ...base, agents }
+}
+
+/** Flips one agent list, from what is drawn now to its opposite. */
+function toggleAgents(ui: DesignUi, run: RunState | undefined, id: string): DesignUi {
+  if (!run) return ui
+  const now = runOverlay(run, ui)
+  return { ...ui, runUi: togglePhase(ui.runUi ?? { expanded: [], collapsed: [] }, id, runNodeOpen(now, id)) }
 }
 
 export function designName(args: string): string {
@@ -90,8 +148,18 @@ function settle(design: Design, ui: DesignUi, result: OpResult, selectedId: stri
 }
 
 /** Applies one message from the canvas. A refused edit leaves the design as it was and sets `notice`. */
-export function applyMessage(design: Design | null, ui: DesignUi, message: CanvasMessage): Step {
+export function applyMessage(design: Design | null, ui: DesignUi, message: CanvasMessage, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
+  if (message.kind === 'locked') return { design, ui: context.locked ? { ...ui, notice: LOCK_NOTICE } : ui, changed: false }
+  if (message.kind === 'toggleRun') {
+    const known = findNode(design, message.id) !== undefined
+    if (!known && message.id !== UNMAPPED_ROW_ID) return { design, ui, changed: false }
+    return { design, ui: toggleAgents({ ...ui, selectedId: known ? message.id : ui.selectedId, confirmId: null }, context.run, message.id), changed: false }
+  }
+  if (context.locked && (message.kind === 'move' || message.kind === 'add' || message.kind === 'remove' || message.kind === 'edit')) {
+    // The new `rev` lets go of a row the canvas still holds lifted.
+    return { design, ui: { ...ui, notice: LOCK_NOTICE, grabbedId: null, confirmId: null, rev: ui.rev + 1 }, changed: false }
+  }
   switch (message.kind) {
     case 'select': {
       const selectedId = message.id !== null && findNode(design, message.id) ? message.id : null
@@ -105,7 +173,9 @@ export function applyMessage(design: Design | null, ui: DesignUi, message: Canva
       const result = message.to
         ? moveNode(design, message.id, message.to)
         : moveBy(design, message.id, message.delta ?? 0, { collapsed: message.collapsed ?? [] })
-      return settle(design, ui, result, message.id)
+      const step = settle(design, ui, result, message.id)
+      // A drop waits lifted on the canvas for its answer: landed or refused, a new `rev` lets it go.
+      return message.to ? { ...step, ui: { ...step.ui, rev: ui.rev + 1 } } : step
     }
     case 'add': {
       const result = addNode(design, { type: message.type }, message.at)
@@ -113,15 +183,23 @@ export function applyMessage(design: Design | null, ui: DesignUi, message: Canva
       return result.error ? step : { ...step, ui: { ...step.ui, rev: ui.rev + 1 } }
     }
     case 'remove': {
+      const node = findNode(design, message.id)
+      // A container that holds blocks goes only on the second ask, as from the toolbar.
+      if (node && (node.children?.length ?? 0) > 0) {
+        if (ui.confirmId !== node.id) return { design, ui: { ...ui, selectedId: node.id, confirmId: node.id, notice: confirmText(design, node.id) }, changed: false }
+        const step = settle(design, { ...ui, confirmId: null, grabbedId: null }, removeNode(design, node.id), afterRemoval(design, node.id))
+        return { ...step, ui: { ...step.ui, rev: ui.rev + 1 } }
+      }
       const next = message.select === undefined ? (ui.selectedId === message.id ? null : ui.selectedId) : message.select
-      return settle(design, ui, removeNode(design, message.id), next)
+      return settle(design, { ...ui, confirmId: null }, removeNode(design, message.id), next)
     }
   }
 }
 
 /** An inspector edit of one node. */
-export function patchNode(design: Design | null, ui: DesignUi, id: string, patch: NodePatch): Step {
+export function patchNode(design: Design | null, ui: DesignUi, id: string, patch: NodePatch, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
+  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE }, changed: false }
   return settle(design, ui, updateNode(design, id, patch), ui.selectedId)
 }
 
@@ -130,6 +208,11 @@ export function placeAfter(design: Design, selectedId: string | null): Place {
   const row = selectedId === null ? undefined : flatten(design).find(one => one.node.id === selectedId)
   if (!row) return { index: design.nodes.length }
   return row.parentId === undefined ? { index: row.index + 1 } : { parentId: row.parentId, index: row.index + 1 }
+}
+
+function confirmText(design: Design, id: string): string {
+  const inside = flatten({ ...design, nodes: findNode(design, id)?.children ?? [] }).length
+  return `${id} holds ${inside} ${inside === 1 ? 'block' : 'blocks'}: x again deletes them all (no undo)`
 }
 
 /** The row the selection lands on once `id` and what it holds are gone: the next one, else the one before. */
@@ -146,11 +229,24 @@ function afterRemoval(design: Design, id: string): string | null {
  * Applies one toolbar key. The selection and the grab live here so the keys
  * work before the canvas was ever clicked; `rev` tells the canvas to follow.
  */
-export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp): Step {
+export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
   const calm: DesignUi = { ...ui, confirmId: null, notice: null }
   const node = ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
+  if (context.locked && (op === 'grab' || op === 'addAfter' || op === 'addInside' || op === 'remove')) {
+    return { design, ui: { ...calm, grabbedId: null, picker: null, notice: LOCK_NOTICE }, changed: false }
+  }
+  // Nothing is grabbed while locked, so j and k move the selection.
+  if (context.locked && calm.grabbedId !== null) calm.grabbedId = null
   switch (op) {
+    case 'agents': {
+      if (!context.run) return { design, ui: { ...calm, notice: 'agents: no run to show' }, changed: false }
+      // With no block selected the key opens what the design does not hold.
+      const id = node?.id ?? (context.run.unmapped.length > 0 ? UNMAPPED_ROW_ID : undefined)
+      if (id === undefined) return { design, ui: { ...calm, notice: 'agents: select a block first' }, changed: false }
+      if (id !== UNMAPPED_ROW_ID && (context.run.byNode[id]?.total ?? 0) === 0) return { design, ui: { ...calm, notice: `${id} has no agents of its own` }, changed: false }
+      return { design, ui: toggleAgents(calm, context.run, id), changed: false }
+    }
     case 'down':
     case 'up': {
       const delta = op === 'down' ? 1 : -1
@@ -177,12 +273,7 @@ export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp): Ste
       if (!node) return { design, ui: { ...calm, notice: 'delete: select a block first' }, changed: false }
       const held = node.children?.length ?? 0
       if (held > 0 && ui.confirmId !== node.id) {
-        const inside = flatten({ ...design, nodes: node.children ?? [] }).length
-        return {
-          design,
-          ui: { ...calm, confirmId: node.id, notice: `${node.id} holds ${inside} ${inside === 1 ? 'block' : 'blocks'}: x again deletes them all (no undo)` },
-          changed: false,
-        }
+        return { design, ui: { ...calm, confirmId: node.id, notice: confirmText(design, node.id) }, changed: false }
       }
       const step = settle(design, { ...calm, grabbedId: null }, removeNode(design, node.id), afterRemoval(design, node.id))
       return { ...step, ui: { ...step.ui, rev: ui.rev + 1 } }
@@ -200,8 +291,9 @@ export function typePicker(ui: DesignUi, query: string): DesignUi {
 }
 
 /** Adds from the open picker: `type` when a match was pressed, else the best match for `query`. */
-export function pickBlock(design: Design | null, ui: DesignUi, choice: { type?: NodeType; query?: string }): Step {
+export function pickBlock(design: Design | null, ui: DesignUi, choice: { type?: NodeType; query?: string }, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready' || !ui.picker) return { design, ui, changed: false }
+  if (context.locked) return { design, ui: { ...ui, picker: null, notice: LOCK_NOTICE }, changed: false }
   const type = choice.type ?? fuzzy(choice.query ?? ui.picker.query)[0]
   if (type === undefined) return { design, ui: { ...ui, notice: 'no block matches that' }, changed: false }
   const step = applyMessage(design, ui, { kind: 'add', type, at: ui.picker.at })
@@ -221,13 +313,17 @@ export const INHERIT = 'inherit'
 export const MODEL_CHOICES: readonly string[] = ['haiku', 'sonnet', 'opus']
 
 /** What the canvas gets as props. */
-export function canvasProps(design: Design, ui: DesignUi, maxRows = 0): CanvasProps {
-  return {
+export function canvasProps(design: Design, ui: DesignUi, maxRows = 0, run?: RunOverlay): CanvasProps {
+  const locked = run?.status === 'running'
+  const props: CanvasProps = {
     design,
     lints: lint(design).map(one => ({ nodeId: one.nodeId, message: one.message })),
-    mode: 'design',
+    mode: locked ? 'run' : 'design',
     selectedId: ui.selectedId,
     rev: ui.rev,
     maxRows,
+    grabbedId: locked ? null : ui.grabbedId,
   }
+  if (run) props.run = run
+  return props
 }

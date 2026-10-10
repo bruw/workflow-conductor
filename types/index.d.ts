@@ -35,6 +35,7 @@ export type ConductorDesignUi = {
   grabbedId: string | null
   picker: { at: { parentId?: string; index: number }; query: string } | null
   confirmId: string | null
+  runUi: { expanded: string[]; collapsed: string[] }
 }
 
 declare module 'claude-code' {
@@ -65,6 +66,8 @@ declare module 'claude-code' {
       runUi: { expanded: string[]; collapsed: string[] }
       /** The run's tick clock in ms; advances only while an agent runs. */
       runClock: number
+      /** The design the tracked run was started from; null when it came from none. */
+      runDesign: string | null
       design: ConductorDesign | null
       designUi: ConductorDesignUi
     }

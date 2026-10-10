@@ -96,7 +96,8 @@ for (const surface of SURFACES) {
     expect(client?.props.module).toMatch(/canvas\.tsx$/)
     expect(await ui.find({ type: 'Text', text: 'n1  scout diff', in: 'canvas' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '│  ╰ ', in: 'canvas' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /j\/k move/, in: 'canvas' })).toBeDefined()
+    // The canvas has no hint line of its own: the toolbar shows the keys.
+    expect(await ui.find({ type: 'Text', text: /j\/k move/, in: 'canvas' })).toBe(undefined)
     expect((await ui.find({ type: 'Input', key: 'design-title' }))?.props.value).toBe('scout diff')
     expect(await ui.find({ type: 'Text', text: 'One subagent call' })).toBeDefined()
 
@@ -372,12 +373,13 @@ for (const surface of SURFACES) {
     expect(canvas?.props.height).toBe(8)
     expect(canvas?.props.props).toMatchObject({ maxRows: 8, selectedId: 'n1', mode: 'design' })
     const lines = async () => ((await short.drawn({ in: 'canvas' })) as { children?: unknown[] }).children?.length
-    expect(await lines()).toBe(7)
+    // Six rows and no hint line under them.
+    expect(await lines()).toBe(6)
     await short.key({ key: 'a' })
     expect(await lines()).toBe(8)
     expect(await short.find({ type: 'Text', text: /^↓5 type to filter/, in: 'canvas' })).toBeDefined()
     await short.key({ key: 'backspace' })
-    expect(await lines()).toBe(7)
+    expect(await lines()).toBe(6)
     expect(writes).toEqual([])
     await short.unmount()
 

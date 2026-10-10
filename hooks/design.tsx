@@ -8,6 +8,9 @@ import type { Design, NodeType } from '../src/design/model'
 import type { NodePatch } from '../src/design/ops'
 import {
   BLANK_TEMPLATE_ID,
+  LOCK_NOTICE,
+  overlaysDesign,
+  runOverlay,
   DESIGN_DIR,
   DESIGN_PANE_ID,
   DESIGN_PANE_TITLE,
@@ -26,9 +29,12 @@ import {
   startDesign,
   typePicker,
 } from '../src/design/session'
-import type { DesignUi, Step, ToolbarOp } from '../src/design/session'
+import type { DesignUi, RunContext, Step, ToolbarOp } from '../src/design/session'
 import { TEACH, fuzzy } from '../src/design/teach'
 import { TEMPLATES } from '../src/design/templates'
+import { emptyRunState } from '../src/run/events'
+import { replayDesignEvents } from '../src/run/replay'
+import type { Tracker } from '../src/run/tracker'
 import { PICKER_MAX, parseCanvasMessage } from '../src/ui/canvas-model'
 import { GLYPH } from '../src/ui/theme'
 
@@ -46,8 +52,8 @@ const HOME_KEY = 'key:down'
 export const SUBMIT_DELAY_MS = 64
 /** A redraw's worth of wait before the ring moves to an element just drawn. */
 export const FOCUS_DELAY_MS = 48
-/** The verbs of /conductor this module answers; run.tsx answers the rest. */
-export const DESIGN_VERBS = /^\s*(design|run|list)(\s|$)/
+/** What /conductor this module answers: its verbs, `replay design`, and no argument at all (a run shown on its design); run.tsx answers the rest. */
+export const DESIGN_VERBS = /^\s*((design|run|list)(\s|$)|replay\s+design(\s|$)|$)/
 /** One digit or one lowercase letter each: all a Button's `hotkey` takes (no space, no `?`). */
 const TOOLBAR: readonly { op: ToolbarOp | 'edit'; hotkey: string; label: string }[] = [
   { op: 'down', hotkey: 'j', label: 'down' },
@@ -66,16 +72,52 @@ const EDIT_HINT = 'click the title field, or press tab to reach it'
 // Rows of the pane that are not canvas: header, inspector, toolbar, pane chrome.
 const RESERVED_ROWS = 20
 
+// The run's state. Both hooks modules declare these (an atom must be spelled in the
+// file that reads it): run.tsx writes them through the tracker, design.tsx reads them.
+const runAtom = atom({ plugin: 'conductor', key: 'run' } as const, emptyRunState())
+const clockAtom = atom({ plugin: 'conductor', key: 'runClock' } as const, 0)
+/** The design the tracked run was started from (a handoff); null for any other run. */
+const runDesignAtom = atom({ plugin: 'conductor', key: 'runDesign' } as const, null)
 const designAtom = atom({ plugin: 'conductor', key: 'design' } as const, null)
 const uiAtom = atom({ plugin: 'conductor', key: 'designUi' } as const, initialUi())
 
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 160)
 
-export const registerDesign = (on: On): void => {
+export const registerDesign = (on: On, tracker: Tracker): void => {
   // run.tsx registers /conductor and answers its own verbs; it passes these on.
-  on('command.run', { command: 'conductor', args: DESIGN_VERBS }, async ($, e) => {
+  on('command.run', { command: 'conductor', args: DESIGN_VERBS }, async ($, e, next) => {
     const [verb = '', ...rest] = e.args.trim().split(/\s+/)
+    // No argument: the run, on its design when it came from one; else run.tsx's phase view.
+    const shown = verb === '' && (await read($, runAtom)).status !== 'idle' ? await read($, runDesignAtom) : null
+    if (verb === '' && shown === null) return next(e)
     const root = await $.session.root()
+
+    if (verb === 'replay') {
+      const [, templateId, speed] = rest
+      const template = TEMPLATES.find(one => one.id === templateId)
+      if (!template || (speed !== undefined && speed !== 'fast' && speed !== 'slow')) {
+        return { text: `Usage: /${COMMAND} replay design <${TEMPLATES.map(one => one.id).join('|')}> [fast|slow]` }
+      }
+      const name = designName(`replay-${template.id}`)
+      const path = designFile(root, name)
+      let made: Design = { ...template.make(), name }
+      if (await $.fs.exists(path)) {
+        // A design saved under that name is replayed as it is: its ids are what the labels use.
+        const parsed = parseDesign(await $.fs.read(path).catch(() => ''))
+        if (!parsed.ok) return { text: `Design ${name} is not valid, nothing was replayed: ${parsed.error}` }
+        made = parsed.design
+      } else {
+        await $.fs.write(path, serializeDesign(made)).catch(() => undefined)
+      }
+      const held = await read($, uiAtom)
+      await update($, designAtom, () => made)
+      await update($, uiAtom, () => ({ ...initialUi(), name, status: 'ready' as const, selectedId: made.nodes[0]?.id ?? null, rev: held.rev + 1 }))
+      await $.ui.open({ id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, focus: true })
+      tracker.handoff({ name, nodeIds: flatten(made).map(row => row.node.id) })
+      tracker.replay(replayDesignEvents(made, name), speed ?? 'fast')
+
+      return { text: `Replaying a made-up run over design ${name} (${speed ?? 'fast'}); token counts are made up.` }
+    }
 
     if (verb === 'list') {
       const entries = await $.fs.list(`${root.replace(/\/+$/, '')}/${DESIGN_DIR}`).catch(() => [])
@@ -106,6 +148,8 @@ export const registerDesign = (on: On): void => {
       if (parsed.design.nodes.length === 0) return { text: `Design ${name} is empty: add a block before running it.` }
 
       const handoff = buildHandoff(parsed.design, path)
+      // The next run to start is this design's: its agents count against these ids.
+      tracker.handoff({ name, nodeIds: flatten(parsed.design).map(row => row.node.id) })
       const prompt = `Implement and run the "${name}" workflow design.`
       const fill = async (): Promise<void> => {
         const filled = await $.prompt.fill({ text: prompt }).catch(() => ({ isFilled: false }))
@@ -129,9 +173,15 @@ export const registerDesign = (on: On): void => {
       return handoff
     }
 
-    const name = designName(rest.join(' '))
+    const name = shown ?? designName(rest.join(' '))
     const path = designFile(root, name)
     const previous = await read($, uiAtom)
+    // The run's design is often the one already open: it is shown as it stands.
+    if (shown !== null && previous.name === name && previous.status === 'ready' && (await read($, designAtom)) !== null) {
+      await $.ui.open({ id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, focus: true })
+
+      return { text: `Design ${name} opened with its run.` }
+    }
     let step = openDesign(name, undefined, previous.rev)
     if (await $.fs.exists(path)) {
       try {
@@ -157,7 +207,9 @@ export const registerDesign = (on: On): void => {
 
     const design = await read($, designAtom)
     const ui = await read($, uiAtom)
-    const step = applyMessage(design, ui, message)
+    const run = await read($, runAtom)
+    const over = overlaysDesign(run, await read($, runDesignAtom), ui)
+    const step = applyMessage(design, ui, message, over ? { run, locked: run.status === 'running' } : {})
     let nextUi = step.ui
     if (step.changed && step.design) {
       try {
@@ -167,7 +219,7 @@ export const registerDesign = (on: On): void => {
       }
     }
     // "Edit" hands the keyboard to the inspector's title field, where the engine lets it.
-    if (message.kind === 'edit') {
+    if (message.kind === 'edit' && step.ui.notice !== LOCK_NOTICE) {
       const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key: TITLE_KEY }).catch((error: unknown) => ({ deny: reason(error) }))
       if (moved.deny !== undefined) nextUi = { ...nextUi, notice: `edit: ${EDIT_HINT}` }
     }
@@ -185,10 +237,27 @@ export const registerDesign = (on: On): void => {
     const design = await read($, designAtom)
     const file = `${DESIGN_DIR}/${ui.name}.json`
     const columns = Math.max(20, Math.min(e.props.bodyColumns || 80, 100) - 2)
+    // The run laid over this design, when it was started from it.
+    const run = await read($, runAtom)
+    const over = overlaysDesign(run, await read($, runDesignAtom), ui)
+    const locked = over && run.status === 'running'
+    // The tick clock is read only while it matters, so an idle pane is not redrawn by it.
+    const overlay = over ? runOverlay(run, ui, locked ? await read($, clockAtom) : 0) : undefined
+    const context = async (): Promise<RunContext> => {
+      const now = await read($, runAtom)
+      const held = overlaysDesign(now, await read($, runDesignAtom), await read($, uiAtom))
+
+      return held ? { run: now, locked: now.status === 'running' } : {}
+    }
+    // The mode marker: the side that is live is lit.
     const header = (
       <Box flexDirection="row" justifyContent="space-between">
         <Text bold>{`wf: ${ui.name}`}</Text>
-        <Text color="subtle">{'design ▸ run'}</Text>
+        <Text>
+          <Text color={locked ? 'subtle' : 'claude'} bold={!locked}>design</Text>
+          <Text color="subtle">{' ▸ '}</Text>
+          <Text color={locked ? 'claude' : 'subtle'} bold={locked}>run</Text>
+        </Text>
       </Box>
     )
 
@@ -264,7 +333,7 @@ export const registerDesign = (on: On): void => {
     // An inspector edit: read the state as it is now, patch, save, write back.
     const edit = async (id: string, patch: NodePatch): Promise<void> => {
       const before = await read($, designAtom)
-      const step = patchNode(before, await read($, uiAtom), id, patch)
+      const step = patchNode(before, await read($, uiAtom), id, patch, await context())
       let nextUi = step.ui
       if (step.changed && step.design) {
         try {
@@ -278,10 +347,10 @@ export const registerDesign = (on: On): void => {
     }
 
     // A toolbar key or a picker choice: the same read, step, save, write back.
-    const commit = async (make: (design: Design, held: DesignUi) => Step): Promise<Step> => {
+    const commit = async (make: (design: Design, held: DesignUi, context: RunContext) => Step): Promise<Step> => {
       const before = await read($, designAtom)
       const held = await read($, uiAtom)
-      const step = make(before ?? design, held)
+      const step = make(before ?? design, held, await context())
       let nextUi = step.ui
       if (step.changed && step.design) {
         try {
@@ -301,13 +370,17 @@ export const registerDesign = (on: On): void => {
     }
     const press = async (op: ToolbarOp | 'edit'): Promise<void> => {
       if (op === 'edit') {
+        if ((await context()).locked) {
+          await update($, uiAtom, held => ({ ...held, notice: LOCK_NOTICE }))
+          return
+        }
         if (!node) {
           await update($, uiAtom, held => ({ ...held, notice: 'edit: select a block first' }))
           return
         }
         return focus(TITLE_KEY, `edit: ${EDIT_HINT}`)
       }
-      const step = await commit((before, held) => applyOp(before, held, op))
+      const step = await commit((before, held, ctx) => applyOp(before, held, op, ctx))
       if (op === 'cancel') home()
       // The picker's field exists once the update above is drawn, so the ring
       // is moved to it a frame later, from the clock.
@@ -324,7 +397,7 @@ export const registerDesign = (on: On): void => {
       })
     }
     const pick = async (choice: { type?: NodeType; query?: string }): Promise<void> => {
-      const step = await commit((before, held) => pickBlock(before, held, choice))
+      const step = await commit((before, held, ctx) => pickBlock(before, held, choice, ctx))
       if (!step.ui.picker) home()
     }
     // The same path as typing it. A plugin's own $.command.run skips its own
@@ -346,7 +419,7 @@ export const registerDesign = (on: On): void => {
       <Box flexDirection="column" paddingLeft={1}>
         {header}
         {'Client' in els ? (
-          <els.Client key={CANVAS_KEY} module="./canvas.tsx" width="100%" height={canvasHeight} props={canvasProps(design, ui, room)} />
+          <els.Client key={CANVAS_KEY} module="./canvas.tsx" width="100%" height={canvasHeight} props={canvasProps(design, ui, room, overlay)} />
         ) : (
           <Box flexDirection="column">
             {rows.map(row => (
@@ -391,6 +464,7 @@ export const registerDesign = (on: On): void => {
                 onPress={() => press(one.op)}
               />
             ))}
+            {over && <Button key="key:agents" hotkey="o" plain dimColor label="agents" onPress={() => press('agents')} />}
             <Button key="design-run" hotkey="r" plain dimColor label="run" onPress={handOff} />
           </Box>
         )}
@@ -473,7 +547,8 @@ export const registerDesign = (on: On): void => {
         ) : (
           <Text color="subtle">{design.nodes.length === 0 ? 'Empty design: press a on the canvas to add the first block.' : 'Press a to add a block at the end.'}</Text>
         )}
-        {ui.notice !== null && <Text color="warning">{ui.notice}</Text>}
+        {ui.notice !== null && ui.notice !== LOCK_NOTICE && <Text color="warning">{ui.notice}</Text>}
+        {ui.notice === LOCK_NOTICE && locked && <Text color="subtle">{LOCK_NOTICE}</Text>}
         <Text color="subtle" wrap="truncate-end">
           {ui.grabbedId !== null ? `${ui.grabbedId} grabbed: j/k move it, g drops it · ` : ''}
           {`${file}${'Client' in els ? ' · click the canvas for the pointer · esc hands the keys back' : ''}`}

@@ -186,8 +186,10 @@ test('enter posts edit, x posts remove, ? toggles the card', async () => {
   expect(middle.posts).toEqual([{ kind: 'remove', id: 'n3', select: 'n4' }])
   expect(middle.state.selectedId).toBe('n4')
 
-  // A container goes with its subtree: the selection lands after it.
-  expect(press(at('n2'), [key('x')]).posts).toEqual([{ kind: 'remove', id: 'n2', select: 'n5' }])
+  // A container that holds blocks is asked about by the hooks module: the selection stays until it answers.
+  const held = press(at('n2'), [key('x')])
+  expect(held.posts).toEqual([{ kind: 'remove', id: 'n2' }])
+  expect(held.state.selectedId).toBe('n2')
   // The last node: the selection steps back.
   expect(press(at('n5'), [key('x')]).posts).toEqual([{ kind: 'remove', id: 'n5', select: 'n4' }])
   expect(press(at('n4'), [key('delete')]).posts).toEqual([{ kind: 'remove', id: 'n4', select: 'n5' }])
@@ -318,16 +320,11 @@ test('the reducer keeps the window on the selection', async () => {
   expect(open.top).toBe(3)
 })
 
-test('the hint line names the keys of the mode', async () => {
-  const rows = buildDesignRows(design, { collapsed: ['n2'] })
-
-  expect(hintLine({ picker: null, grabbedId: null }, rows[0])).toMatch(/space grab.*a add.*enter edit.*x delete.*\? card/)
-  expect(hintLine({ picker: null, grabbedId: null }, rows[0])).not.toMatch(/collapse|expand/)
-  expect(hintLine({ picker: null, grabbedId: null }, rows[1])).toMatch(/^l expand · /)
-  expect(hintLine({ picker: null, grabbedId: null }, buildDesignRows(design)[1])).toMatch(/^h collapse · A add inside · j\/k move/)
-  expect(hintLine({ picker: null, grabbedId: 'n3' }, rows[0])).toMatch(/moving n3.*space drop/)
-  expect(hintLine({ picker: { query: '', index: 0, at: { index: 0 }, after: 0, depth: 0 }, grabbedId: null }, rows[0])).toMatch(/enter add.*backspace on empty cancels/)
-  expect(hintLine({ picker: null, grabbedId: null }, rows.at(-1))).toMatch(/a add/)
+test('the hint line speaks only for a drag and the canvas picker: the toolbar shows the keys', async () => {
+  expect(hintLine({ picker: null })).toBe('')
+  expect(hintLine({ picker: { query: '', index: 0, at: { index: 0 }, after: 0, depth: 0 } })).toMatch(/enter add.*backspace on empty cancels/)
+  expect(hintLine({ picker: null }, 'valid')).toMatch(/release to drop/)
+  expect(hintLine({ picker: null }, 'invalid')).toMatch(/release to cancel/)
 })
 
 test('posted data is read back as a message, or refused', async () => {

@@ -3,11 +3,12 @@ import type { On } from 'claude-code'
 
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
+import { DESIGN_PANE_ID } from '../src/design/session'
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
 import { replayEvents } from '../src/run/replay'
 import type { ReplayFixture } from '../src/run/replay'
-import { createTracker } from '../src/run/tracker'
+import type { Tracker } from '../src/run/tracker'
 import { buildRunRows, togglePhase } from '../src/ui/rail'
 import type { Part, Row } from '../src/ui/rail'
 import { GLYPH, PANE_ID, PANE_TITLE } from '../src/ui/theme'
@@ -17,18 +18,23 @@ const MAX_WIDTH = 96
 const MAX_ROWS = 400
 const HELP = [
   'Usage: /conductor [design [name] | run <name> | list | replay <fixture>]',
-  '  /conductor                  open the run view',
+  '  /conductor                  open the run view (on its design, when the run came from one)',
   '  /conductor design [name]    open the designer (name defaults to untitled)',
   '  /conductor run <name>       hand the saved design to Claude to implement and run',
   '  /conductor list             name the saved designs',
   '  /conductor replay <fixture|clear> [fast|slow]   replay a recorded run (dev)',
+  '  /conductor replay design <template> [fast|slow]   replay a made-up run over a design (dev)',
 ].join('\n')
 
 const FIXTURES: Record<string, ReplayFixture> = { 'review-41': review41, 'partial-29': partial29 }
 
+// The run's state. Both hooks modules declare these (an atom must be spelled in the
+// file that reads it): run.tsx writes them through the tracker, design.tsx reads them.
 const runAtom = atom({ plugin: 'conductor', key: 'run' } as const, emptyRunState())
-const uiAtom = atom({ plugin: 'conductor', key: 'runUi' } as const, { expanded: [], collapsed: [] })
 const clockAtom = atom({ plugin: 'conductor', key: 'runClock' } as const, 0)
+/** The design the tracked run was started from (a handoff); null for any other run. */
+const runDesignAtom = atom({ plugin: 'conductor', key: 'runDesign' } as const, null)
+const uiAtom = atom({ plugin: 'conductor', key: 'runUi' } as const, { expanded: [], collapsed: [] })
 
 // The reducer leaves optional fields present but undefined; the stored copy is plain data.
 const plain = (state: RunState): RunState => JSON.parse(JSON.stringify(state)) as RunState
@@ -45,9 +51,7 @@ const tokensOf = (usage: unknown): number | undefined => {
   return count(input_tokens) + count(output_tokens)
 }
 
-export const registerRun = (on: On): void => {
-  const tracker = createTracker()
-
+export const registerRun = (on: On, tracker: Tracker): void => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'conductor',
@@ -68,7 +72,9 @@ export const registerRun = (on: On): void => {
         },
         every: (ms, fn) => $.clock.every(ms, fn),
         after: (ms, fn) => $.clock.after(ms, fn),
-        paneShown: async () => (await $.ui.panes()).some(pane => pane.id === PANE_ID && pane.isShown && pane.isPlaced),
+        // Either pane shows the run: the run view, or the designer with the run laid over it.
+        paneShown: async () => (await $.ui.panes()).some(pane => (pane.id === PANE_ID || pane.id === DESIGN_PANE_ID) && pane.isShown && pane.isPlaced),
+        design: name => update($, runDesignAtom, () => name),
         status: line => $.ui.status(line),
         toast: line => $.ui.toast(line),
       },
@@ -82,13 +88,15 @@ export const registerRun = (on: On): void => {
     const [verb, name, speed] = e.args.trim().split(/\s+/)
 
     if (!verb) {
+      // One place to look: a run that came from a design is shown on that design, by design.tsx.
+      if ((await read($, runDesignAtom)) !== null && (await read($, runAtom)).status !== 'idle') return next(e)
       const opened = await $.ui.open({ id: PANE_ID, title: PANE_TITLE })
       if (opened.isPlaced) tracker.paneOpened()
 
       return { text: 'Conductor pane opened.' }
     }
     // design.tsx answers these, whichever of the two hooks the engine asks first.
-    if (verb === 'design' || verb === 'run' || verb === 'list') return next(e)
+    if (verb === 'design' || verb === 'run' || verb === 'list' || (verb === 'replay' && name === 'design')) return next(e)
     if (verb !== 'replay') return { text: HELP }
 
     if (name === 'clear') {
