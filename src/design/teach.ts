@@ -8,8 +8,10 @@ export type Teach = {
   /** One character for the rail. */
   glyph: string
   name: string
-  /** One line, at most HINT_MAX characters. */
+  /** One line, at most HINT_MAX characters, in plain words: what the block does. */
   hint: string
+  /** One line, at most HINT_MAX characters: the situation that calls for it. Shown as `use when: …`. */
+  when: string
   /** Three to six short lines: what it is, when to use it, cost or gotcha. */
   card: string[]
 }
@@ -24,7 +26,8 @@ export const TEACH: Record<NodeType, Teach> = {
   agent: {
     glyph: '●',
     name: 'agent',
-    hint: 'One subagent call; returns text, or an object when schema is set',
+    hint: 'One Claude subagent does one task and returns its answer',
+    when: 'a step needs reading or judgment: search, review, write, decide',
     card: [
       'One subagent with its own context. Its final text is the return value.',
       'Set a schema to force structured output: you get a validated object back, no parsing.',
@@ -36,7 +39,8 @@ export const TEACH: Record<NodeType, Teach> = {
   pipeline: {
     glyph: '◆',
     name: 'pipeline',
-    hint: 'Default for multi-stage work: no barrier between stages',
+    hint: 'Steps in a row; each item moves on alone, not waiting for the others',
+    when: 'each item takes several steps and no step needs all items at once',
     card: [
       'Each item runs through all stages on its own. Item A can be in stage 3 while B is in stage 1.',
       'The default for multi-stage work. When in doubt, use a pipeline.',
@@ -48,19 +52,21 @@ export const TEACH: Record<NodeType, Teach> = {
   parallel: {
     glyph: '≡',
     name: 'parallel',
-    hint: 'Barrier: runs tasks together and waits for every result',
+    hint: 'Runs its blocks at the same time and waits for all results',
+    when: 'the next step needs every result together: merge, compare, pick',
     card: [
       'Runs tasks concurrently and waits for all of them before the next step starts.',
       'Use only when the next step needs all results together: dedup or merge, compare, exit early on zero.',
       'Cost: fast tasks sit idle until the slowest one ends.',
       'A failed task becomes null in the results; the call itself never fails.',
-      'About 16 agents run at once, so a large fan-out queues behind the barrier.',
+      'About 16 agents run at once, so with a large fan-out the rest queue and the wait is long.',
     ],
   },
   loop: {
     glyph: '↻',
     name: 'loop',
-    hint: 'Repeat a step until a count, a condition or the budget is reached',
+    hint: 'Repeats its blocks until a count, a condition or the budget is reached',
+    when: 'you cannot tell up front how many rounds it takes; always set until',
     card: [
       'A plain while loop around one or more steps.',
       'Use to accumulate toward a target (10 findings) or to scale depth to a token budget.',
@@ -71,7 +77,8 @@ export const TEACH: Record<NodeType, Teach> = {
   branch: {
     glyph: 'ψ',
     name: 'branch',
-    hint: 'Plain if/else on an earlier result; decided in code, not by a model',
+    hint: 'If/else on an earlier result; plain code decides, not a model',
+    when: 'a result decides what runs next, e.g. nothing found: skip the checks',
     card: [
       'Control flow in the script: which path runs depends on an earlier result.',
       'Typical use: zero findings, so skip verification entirely.',
@@ -82,7 +89,8 @@ export const TEACH: Record<NodeType, Teach> = {
   subworkflow: {
     glyph: '▸',
     name: 'subworkflow',
-    hint: 'Run a saved workflow inline as one step; nests one level only',
+    hint: 'Runs a saved workflow as one step; one level deep only',
+    when: 'a saved workflow already does this part',
     card: [
       'Runs another workflow as a sub-step and returns whatever it returns.',
       'Use to reuse a saved workflow, passing it args.',
@@ -93,19 +101,21 @@ export const TEACH: Record<NodeType, Teach> = {
   code: {
     glyph: 'λ',
     name: 'code',
-    hint: 'Plain JS between agents: dedup, filter, map. Costs no tokens',
+    hint: 'Plain JavaScript between agents: dedup, filter, count. No tokens',
+    when: 'the step is exact and mechanical: never spend an agent on it',
     card: [
       'Deterministic JavaScript in the script: dedup, filter, flatten, count, vote tally.',
       'Use it for anything exact. Do not spend an agent on what a few lines can do.',
       'Agents feeding it need a schema, so the code receives objects and not prose.',
-      'A per-item transform belongs inside a pipeline stage; it does not need a barrier.',
+      'A per-item transform belongs inside a pipeline stage: it has no need to wait for the other items.',
       'No file access, no clock and no randomness inside a script.',
     ],
   },
   verify: {
     glyph: '◇',
-    name: 'adversarial verify',
-    hint: 'N independent skeptics try to refute each finding',
+    name: 'verify',
+    hint: 'Independent checkers try to disprove each result; survivors stay',
+    when: 'a wrong result costs more than checking it: after any finder',
     card: [
       'Each voter is prompted to refute the claim and to say refuted when unsure.',
       'A finding survives only if a majority fail to refute it.',
@@ -117,19 +127,21 @@ export const TEACH: Record<NodeType, Teach> = {
   'judge-panel': {
     glyph: '▽',
     name: 'judge panel',
-    hint: 'N independent attempts, scored by judges, built from the winner',
+    hint: 'Several attempts at one task; judges score them, the best one wins',
+    when: 'many answers are possible and a first try is rarely the best',
     card: [
       'Generate several attempts from different angles: MVP-first, risk-first, user-first.',
       'Parallel judges score them; synthesize from the winner and graft in the best of the rest.',
       'Use when the solution space is wide. Beats iterating on a single attempt.',
-      'A barrier is right here: the judges need every attempt at once.',
+      'Waiting for all results is right here: the judges need every attempt at once.',
       'Cost: attempts + judges + one synthesis.',
     ],
   },
   'loop-until-dry': {
     glyph: '∞',
     name: 'loop until dry',
-    hint: 'Keep finding until K rounds in a row turn up nothing new',
+    hint: 'Keeps searching until some rounds in a row find nothing new',
+    when: 'you do not know how many there are to find: bugs, edge cases',
     card: [
       'Repeats a round of finders until K consecutive rounds return nothing new.',
       'Use for discovery of unknown size: bugs, issues, edge cases. Fixed counts miss the tail.',
@@ -140,7 +152,8 @@ export const TEACH: Record<NodeType, Teach> = {
   sweep: {
     glyph: '◎',
     name: 'multi-modal sweep',
-    hint: 'Parallel searchers, each looking a different way',
+    hint: 'Several searchers at once, each looking a different way',
+    when: 'one way of searching would miss things',
     card: [
       'Parallel agents that each search differently: by container, content, entity or time.',
       'Use when one search angle will not find everything.',
@@ -151,7 +164,8 @@ export const TEACH: Record<NodeType, Teach> = {
   critic: {
     glyph: '◐',
     name: 'completeness critic',
-    hint: 'A final agent asks what is missing; gaps feed the next round',
+    hint: 'One agent at the end asks what is missing; gaps become more work',
+    when: 'before the final write-up of research, review or audit work',
     card: [
       'One agent at the end that asks what is missing.',
       'It looks for a search angle not run, a claim unverified, a source unread.',
@@ -159,6 +173,11 @@ export const TEACH: Record<NodeType, Teach> = {
       'What it finds becomes the next round of work. Give it a schema so the gaps can be acted on.',
     ],
   },
+}
+
+/** `use when: a step needs reading or judgment…`: the line under a type's hint, in the inspector and the add picker. */
+export function useWhen(type: NodeType): string {
+  return `use when: ${TEACH[type].when}`
 }
 
 /** What each knob says, in a phrase: the one place the knobs are explained in words (Claude reads it; see chat.ts). */
@@ -169,7 +188,7 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
   effort: `${EFFORTS.join(', ')}; unset inherits`,
   isolation: '"worktree", only for agents that edit files in parallel',
   agentType: 'a subagent type to run as',
-  fanout: 'what it runs once per, with a count when known: "changed files", "×4 dimensions"',
+  fanout: 'the items it runs once per, with a count when known: "changed files", "×4 dimensions" (no leading "each")',
   votes: 'a whole number, for verify and judge-panel',
   until: 'when a loop stops: "2 dry rounds", "budget < 50k"',
 }
@@ -235,12 +254,12 @@ export const FIELD_PLACEHOLDER = {
 export const PALETTE: PaletteEntry[] = [
   { type: 'agent', tier: 'primitive', keywords: ['subagent', 'prompt', 'task', 'step', 'schema', 'call'] },
   { type: 'pipeline', tier: 'primitive', keywords: ['stages', 'stream', 'chain', 'map', 'per item', 'no barrier', 'default'] },
-  { type: 'parallel', tier: 'primitive', keywords: ['barrier', 'concurrent', 'fan-out', 'fanout', 'wait', 'join'] },
+  { type: 'parallel', tier: 'primitive', keywords: ['barrier', 'concurrent', 'same time', 'together', 'fan-out', 'fanout', 'wait', 'join'] },
   { type: 'loop', tier: 'primitive', keywords: ['while', 'repeat', 'until', 'budget', 'iterate', 'count'] },
   { type: 'branch', tier: 'primitive', keywords: ['if', 'else', 'condition', 'switch', 'early exit', 'skip'] },
   { type: 'subworkflow', tier: 'primitive', keywords: ['workflow', 'nested', 'child', 'reuse', 'saved'] },
   { type: 'code', tier: 'primitive', keywords: ['js', 'javascript', 'transform', 'dedup', 'filter', 'flatten', 'script'] },
-  { type: 'verify', tier: 'pattern', keywords: ['adversarial', 'refute', 'skeptic', 'votes', 'check', 'confirm'] },
+  { type: 'verify', tier: 'pattern', keywords: ['adversarial', 'disprove', 'checkers', 'refute', 'skeptic', 'votes', 'check', 'confirm'] },
   { type: 'judge-panel', tier: 'pattern', keywords: ['judges', 'score', 'attempts', 'winner', 'tournament', 'rank'] },
   { type: 'loop-until-dry', tier: 'pattern', keywords: ['dry', 'exhaustive', 'discovery', 'converge', 'rounds', 'tail'] },
   { type: 'sweep', tier: 'pattern', keywords: ['multi-modal', 'search', 'angles', 'modes', 'broad', 'coverage'] },

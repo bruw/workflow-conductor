@@ -33,7 +33,7 @@ export function review(): Design {
             prompt: 'Review the diff for this dimension only and report concrete findings with evidence',
             schema: '{ findings: [{ file, line, severity, claim, evidence }] }',
           }),
-          node('n4', 'verify', 'adversarial verify', 'Each skeptic tries to refute a finding and defaults to refuted when unsure. Keep a finding only if at least 2 of 3 fail to refute it.', {
+          node('n4', 'verify', 'verify findings', 'Each skeptic tries to refute a finding and defaults to refuted when unsure. Keep a finding only if at least 2 of 3 fail to refute it.', {
             prompt: 'Try to refute this finding against the actual code',
             schema: '{ refuted: boolean, reason }',
             votes: 3,

@@ -41,6 +41,9 @@ export type ConductorDesignUi = {
   drafting: boolean
   freshId: string | null
   picks: Record<string, string>
+  describing: boolean
+  runCleared: boolean
+  saved: { name: string; blocks: number; description: string }[]
 }
 
 declare module 'claude-code' {

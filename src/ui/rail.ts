@@ -311,12 +311,22 @@ export function currentPhase(state: RunState): string | undefined {
   return (busy.at(-1) ?? groups.at(-1))?.phase
 }
 
-/** Status line while the pane is closed: `wf 7/12 ▸ verify`. */
-export function statusText(state: RunState): string {
+/**
+ * Status line while the pane is closed: `wf 7/12 ▸ verify`. With `titles` (the
+ * run came from a design: its blocks' titles by id, in design order) it names
+ * the block that is running, the last in that order: `wf 3/4 ▸ n3 review`.
+ * Agents with no phase are not named: there is nothing to say of them.
+ */
+export function statusText(state: RunState, titles?: Readonly<Record<string, string>>): string {
   const all = countOf(Object.values(state.agents))
+  const head = `wf ${all.done + all.failed}/${all.total}`
+  if (titles !== undefined) {
+    const busy = Object.keys(titles).filter(id => (state.byNode[id]?.running ?? 0) > 0).at(-1)
+    return busy === undefined ? head : `${head} ▸ ${busy} ${titles[busy] ?? ''}`.trimEnd()
+  }
   const phase = currentPhase(state)
 
-  return `wf ${all.done + all.failed}/${all.total}${phase === undefined ? '' : ` ▸ ${phase}`}`
+  return `${head}${phase === undefined || phase === NO_PHASE ? '' : ` ▸ ${phase}`}`
 }
 
 /** The one toast at run end. */

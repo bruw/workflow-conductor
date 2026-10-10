@@ -66,8 +66,8 @@ function subtreeHas(node: DesignNode, id: string): boolean {
 function parentError(design: Design, parentId: string | undefined): string | undefined {
   if (parentId === undefined) return undefined
   const parent = findNode(design, parentId)
-  if (!parent) return `no node ${parentId}`
-  return canHoldChildren(parent.type) ? undefined : `a ${parent.type} node cannot hold children`
+  if (!parent) return `no block ${parentId}`
+  return canHoldChildren(parent.type) ? undefined : `a ${parent.type} block cannot hold children`
 }
 
 /**
@@ -99,7 +99,7 @@ export function addNode(design: Design, spec: { type: NodeType; title?: string }
 
 /** Removes a node and everything nested in it. */
 export function removeNode(design: Design, id: string): OpResult {
-  if (!findNode(design, id)) return refuse(design, `no node ${id}`)
+  if (!findNode(design, id)) return refuse(design, `no block ${id}`)
   return { design: { ...design, nextId: nextIdNumber(design), nodes: without(design.nodes, id) } }
 }
 
@@ -109,9 +109,9 @@ export function removeNode(design: Design, id: string): OpResult {
  */
 export function moveNode(design: Design, id: string, to: Place): OpResult {
   const spot = locate(design, id)
-  if (!spot) return refuse(design, `no node ${id}`)
+  if (!spot) return refuse(design, `no block ${id}`)
   if (to.parentId !== undefined && subtreeHas(spot.node, to.parentId)) {
-    return refuse(design, to.parentId === id ? 'a node cannot be moved into itself' : 'a node cannot be moved into its own descendant')
+    return refuse(design, to.parentId === id ? 'a block cannot be moved into itself' : 'a block cannot be moved into a block it holds')
   }
   const error = parentError(design, to.parentId)
   if (error) return refuse(design, error)
@@ -126,7 +126,7 @@ export function moveNode(design: Design, id: string, to: Place): OpResult {
  */
 export function updateNode(design: Design, id: string, patch: NodePatch): OpResult {
   const node = findNode(design, id)
-  if (!node) return refuse(design, `no node ${id}`)
+  if (!node) return refuse(design, `no block ${id}`)
   const loose: Record<string, unknown> = patch
   if (loose.id !== undefined && loose.id !== node.id) return refuse(design, 'id cannot be changed')
   if (loose.type !== undefined && loose.type !== node.type) return refuse(design, 'type cannot be changed')
@@ -162,11 +162,11 @@ export function updateNode(design: Design, id: string, patch: NodePatch): OpResu
  */
 export function retypeNode(design: Design, id: string, type: NodeType): OpResult {
   const node = findNode(design, id)
-  if (!node) return refuse(design, `no node ${id}`)
+  if (!node) return refuse(design, `no block ${id}`)
   if (!isNodeType(type)) return refuse(design, `unknown type ${String(type)}`)
   if (node.type === type) return { design }
   if ((node.children?.length ?? 0) > 0 && !canHoldChildren(type)) {
-    return refuse(design, `${id} holds blocks and a ${type} node cannot hold children: move or remove them first`)
+    return refuse(design, `${id} holds blocks and a ${type} block cannot hold children: move or remove them first`)
   }
   const next: DesignNode = { ...node, type }
   if (canHoldChildren(type)) next.children = node.children ?? []
@@ -180,7 +180,7 @@ export function retypeNode(design: Design, id: string, type: NodeType): OpResult
 // always lands where it started.
 function step(design: Design, id: string, down: boolean, collapsed: ReadonlySet<string>): OpResult {
   const spot = locate(design, id)
-  if (!spot) return refuse(design, `no node ${id}`)
+  if (!spot) return refuse(design, `no block ${id}`)
   const { parent, index, siblings } = spot
   const neighbour = siblings[down ? index + 1 : index - 1]
 
@@ -192,7 +192,7 @@ function step(design: Design, id: string, down: boolean, collapsed: ReadonlySet<
   }
   if (!parent) return refuse(design, down ? 'already at the bottom' : 'already at the top')
   const outer = locate(design, parent.id)
-  if (!outer) return refuse(design, `no node ${parent.id}`)
+  if (!outer) return refuse(design, `no block ${parent.id}`)
   return moveNode(design, id, { parentId: outer.parent?.id, index: down ? outer.index + 1 : outer.index })
 }
 
@@ -203,7 +203,7 @@ function step(design: Design, id: string, down: boolean, collapsed: ReadonlySet<
 export function moveBy(design: Design, id: string, delta: number, options: MoveByOptions = {}): OpResult {
   const collapsed = new Set(options.collapsed ?? [])
   const steps = Number.isFinite(delta) ? Math.trunc(Math.abs(delta)) : 0
-  if (steps === 0) return findNode(design, id) ? { design } : refuse(design, `no node ${id}`)
+  if (steps === 0) return findNode(design, id) ? { design } : refuse(design, `no block ${id}`)
 
   let current = design
   for (let done = 0; done < steps; done++) {

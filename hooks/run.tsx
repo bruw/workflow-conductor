@@ -3,8 +3,8 @@ import type { On } from 'claude-code'
 
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
-import { flatten, parseDesign } from '../src/design/model'
-import { DESIGN_PANE_ID, bareTarget, designFile, followRun, initialTimes, initialUi, stampTimes } from '../src/design/session'
+import { parseDesign } from '../src/design/model'
+import { DESIGN_PANE_ID, bareTarget, designFile, endRun, followRun, handoffOf, initialTimes, initialUi, stampTimes } from '../src/design/session'
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
 import { USAGE_KEYS } from '../src/run/journal'
@@ -21,10 +21,10 @@ const MAX_ROWS = 400
 const HELP = [
   'Usage: /conductor [design [name] | draft <name> <description> | run <name> | list | replay <fixture>]',
   '  /conductor                  open the run (on its design, when it came from one); with no run, the design last opened',
-  '  /conductor design [name]    open the designer (name defaults to untitled)',
+  '  /conductor design [name]    open a design; with no name, pick a saved design or start one from a template',
   '  /conductor draft <name> <description>   have Claude draft a design for the description, on the board',
   '  /conductor run <name>       hand the saved design to Claude to implement and run',
-  '  /conductor list             name the saved designs',
+  '  /conductor list             the saved designs, each with its block count and what it is for',
   '  /conductor replay <fixture|clear> [fast|slow]   replay a recorded run (dev)',
   '  /conductor replay design <template> [fast|slow]   replay a made-up run over a design (dev)',
 ].join('\n')
@@ -75,7 +75,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     if (attached !== null) {
       const body = await $.fs.read(designFile(await $.session.root(), attached)).catch(() => '')
       const parsed = parseDesign(typeof body === 'string' ? body : '')
-      if (parsed.ok) claim = { name: attached, nodeIds: flatten(parsed.design).map(row => row.node.id) }
+      if (parsed.ok) claim = handoffOf(attached, parsed.design)
     }
 
     // The tracker's only way out: every `$` call it causes is spelled here. Its timers
@@ -89,10 +89,12 @@ export const registerRun = (on: On, tracker: Tracker): void => {
           if (stampTimes(times, state, now) !== times) await update($, timesAtom, held => stampTimes(held, state, now))
           // The designer's selection follows the block that is running, until the person moves it.
           const name = await read($, runDesignAtom)
-          if (name === null || state.status !== 'running') return
+          if (name === null || state.status === 'idle') return
           const design = await read($, designAtom)
           const shown = await read($, designUiAtom)
-          if (followRun(shown, design, state, name) !== shown) await update($, designUiAtom, held => followRun(held, design, state, name))
+          // Over: the selection goes to the first block with a failure, once.
+          const settle = state.status === 'running' ? followRun : endRun
+          if (settle(shown, design, state, name) !== shown) await update($, designUiAtom, held => settle(held, design, state, name))
         },
         frame: async tick => {
           await update($, clockAtom, () => tick)

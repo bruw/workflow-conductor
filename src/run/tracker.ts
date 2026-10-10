@@ -44,7 +44,7 @@ export type TrackerHost = {
 }
 
 /** A design handed off to be run: the next run that starts is its run. */
-export type Handoff = { name: string; nodeIds: readonly string[] }
+export type Handoff = { name: string; nodeIds: readonly string[]; titles?: Readonly<Record<string, string>> }
 
 export type RunStarted = { runId: string; name?: string; transcriptDir?: string }
 export type AgentSpawned = { runId: string; agentId: string; label: string; index?: number }
@@ -68,8 +68,8 @@ export function createTracker() {
   let shown = false
   let lastStatus: string | undefined
   /** The handoff waiting for its run, and the one the tracked run came from. */
-  let pending: { name: string; ids: ReadonlySet<string> } | undefined
-  let active: { name: string; ids: ReadonlySet<string> } | undefined
+  let pending: { name: string; ids: ReadonlySet<string>; titles?: Readonly<Record<string, string>> } | undefined
+  let active: { name: string; ids: ReadonlySet<string>; titles?: Readonly<Record<string, string>> } | undefined
   let expiry: Timer | undefined
 
   const dirs = new Map<string, string>()
@@ -93,7 +93,7 @@ export function createTracker() {
   const isDirty = (): boolean => dirty !== 0
 
   const syncStatus = (): void => {
-    const want = state.status === 'running' && !shown ? statusText(state) : undefined
+    const want = state.status === 'running' && !shown ? statusText(state, active?.titles) : undefined
     if (want === lastStatus) return
     lastStatus = want
     call(h => h.status(want))
@@ -265,7 +265,7 @@ export function createTracker() {
       host = next
       if (stored && state.status === 'idle' && Object.keys(state.agents).length === 0) {
         state = stored
-        if (claim && state.status !== 'idle') active = { name: claim.name, ids: new Set(claim.nodeIds) }
+        if (claim && state.status !== 'idle') active = { name: claim.name, ids: new Set(claim.nodeIds), titles: claim.titles }
         for (const agent of Object.values(state.agents)) {
           if (agent.status === 'running') totals.set(agent.agentId, agent.tokens)
         }
@@ -281,7 +281,7 @@ export function createTracker() {
      */
     handoff(next: Handoff): void {
       dropPending()
-      pending = { name: next.name, ids: new Set(next.nodeIds) }
+      pending = { name: next.name, ids: new Set(next.nodeIds), titles: next.titles }
       expiry = host?.after(HANDOFF_MS, dropPending)
     },
 

@@ -192,11 +192,16 @@ export function fanCount(fanout: string | undefined): number | undefined {
   return count ? Number(count[1]) : undefined
 }
 
-/** `×4` from a stated count (`×4 dimensions`, `4 angles`, votes), `×n` for any other fan-out, '' for none and for one: `×1` says nothing. */
+/**
+ * `×N` means a fan-out and nothing else: `×4` from a stated count (`×4 dimensions`,
+ * `4 angles`), `×n` for a fan-out in words, '' for none and for one (`×1` says
+ * nothing). Votes are never a `×`: they are said in words (`3 votes`).
+ */
 export function fanOf(node: Pick<DesignNode, 'knobs'>): string {
-  const knobs = node.knobs ?? {}
-  const count = knobs.fanout ? (fanCount(knobs.fanout) ?? NaN) : (knobs.votes ?? 1)
-  if (Number.isNaN(count)) return '×n'
+  const fanout = node.knobs?.fanout
+  if (!fanout) return ''
+  const count = fanCount(fanout)
+  if (count === undefined) return '×n'
   return count > 1 ? `×${count}` : ''
 }
 
@@ -204,7 +209,8 @@ export function fanOf(node: Pick<DesignNode, 'knobs'>): string {
 export function eachOf(node: Pick<DesignNode, 'knobs'>): string {
   const fanout = clean(node.knobs?.fanout ?? '')
   const rest = fanout.replace(/^[×x]?\s*\d+\b\s*/, '')
-  return rest === '' ? fanout.replace(/^[×x]\s*/, '') : rest
+  // The board says `each:` itself: a fan-out typed as "each finding" must not read `each: each finding`.
+  return (rest === '' ? fanout.replace(/^[×x]\s*/, '') : rest).replace(/^(for\s+)?each\b[\s:,-]*(of\s+(the\s+)?)?/i, '')
 }
 
 /** How a container arranges what it holds: stages chained along the flow, or branches stacked across it. */
@@ -223,7 +229,7 @@ const MANY: readonly NodeType[] = ['pipeline', 'parallel', 'sweep', 'judge-panel
  */
 export function edgeKind(parent: NodeType | undefined, from: Pick<DesignNode, 'type' | 'knobs'>): EdgeKind {
   if (parent === 'pipeline') return 'stream'
-  return MANY.includes(from.type) || fanOf(from) !== '' ? 'barrier' : 'stream'
+  return MANY.includes(from.type) || fanOf(from) !== '' || (from.knobs?.votes ?? 1) > 1 ? 'barrier' : 'stream'
 }
 
 /**
@@ -265,7 +271,7 @@ export function knobLine(node: DesignNode): string {
  */
 export function metaLine(node: DesignNode): string {
   const parts = [knobLine(node)]
-  if (!canHoldChildren(node.type) && node.knobs?.fanout) parts.push(`each: ${eachOf(node)}`)
+  if (!canHoldChildren(node.type) && node.knobs?.fanout && eachOf(node) !== '') parts.push(`each: ${eachOf(node)}`)
   if (node.knobs?.schema) parts.push(`out: ${clean(node.knobs.schema)}`)
   return parts.filter(part => part !== '').join(' · ')
 }

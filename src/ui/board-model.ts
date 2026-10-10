@@ -17,9 +17,9 @@ import type { Motion } from './tween'
 // Props and messages
 
 /** What a key or a toolbar Button asks for. */
-export type BoardOp = 'left' | 'right' | 'up' | 'down' | 'grab' | 'addAfter' | 'addInside' | 'remove' | 'edit' | 'compact' | 'card' | 'run' | 'cancel'
+export type BoardOp = 'left' | 'right' | 'up' | 'down' | 'grab' | 'addAfter' | 'addInside' | 'remove' | 'edit' | 'compact' | 'card' | 'run' | 'cancel' | 'describe' | 'nextLint' | 'review' | 'clearRun'
 
-export const BOARD_OPS: readonly BoardOp[] = ['left', 'right', 'up', 'down', 'grab', 'addAfter', 'addInside', 'remove', 'edit', 'compact', 'card', 'run', 'cancel']
+export const BOARD_OPS: readonly BoardOp[] = ['left', 'right', 'up', 'down', 'grab', 'addAfter', 'addInside', 'remove', 'edit', 'compact', 'card', 'run', 'cancel', 'describe', 'nextLint', 'review', 'clearRun']
 
 /** Client → hooks module (surface.post → ui.message). One per input: two posts in a frame can drop one. */
 export type BoardMessage =
@@ -244,6 +244,10 @@ export const KEY_OPS: Record<string, BoardOp> = {
   z: 'compact',
   c: 'card',
   r: 'run',
+  d: 'describe',
+  n: 'nextLint',
+  v: 'review',
+  q: 'clearRun',
   left: 'left',
   right: 'right',
   up: 'up',
@@ -429,8 +433,8 @@ export function dragHint(state: Pick<BoardState, 'drag' | 'panX' | 'panY'>, cont
 export const LEGEND: readonly string[] = [
   '│ ─▶  hands each result on as it arrives',
   '║ ═▶  waits for all results first',
-  '×N and a double bottom border ╘═══╛: the block runs that many times side by side',
-  'each: what a fan-out runs once for · out: what the block hands on',
+  '×N and a double bottom border ╘═══╛: a fan-out, the block runs once per item, N of them (×n: the count is not stated)',
+  'each: the items a fan-out runs once for · 3 votes: how many checkers or judges · out: what the block hands on',
   'in a run: 2/4 done · 1 failed = agents ended well of agents started, then the ones that failed',
   '+ adds a block there; more + show under the pointer',
   'drag a card to move it · drag the background to pan',

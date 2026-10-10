@@ -5,7 +5,18 @@
 import { canHoldChildren, flatten, walk } from './model'
 import type { Design, DesignNode } from './model'
 
-export type LintRule = 'barrier-not-needed' | 'worktree-read-only' | 'loop-unbounded' | 'code-input-no-schema' | 'fanout-over-cap'
+export type LintRule =
+  | 'barrier-not-needed'
+  | 'worktree-read-only'
+  | 'loop-unbounded'
+  | 'code-input-no-schema'
+  | 'fanout-over-cap'
+  // structural: what a block is missing to mean anything
+  | 'agent-no-brief'
+  | 'no-votes'
+  | 'verify-nothing-before'
+  | 'single-branch'
+  | 'loop-no-decider'
 
 export type Lint = { nodeId: string; rule: LintRule; message: string }
 
@@ -33,6 +44,32 @@ function producer(node: DesignNode): DesignNode {
   return last && node.type !== 'branch' ? producer(last) : node
 }
 
+/** Containers whose blocks run one after the other: a block in one receives what the block before it made. */
+const CHAINS: readonly string[] = ['pipeline', 'loop', 'loop-until-dry']
+/** Leaves whose result is a model's answer: free text unless a schema is set. */
+const ANSWERS: readonly string[] = ['agent', 'verify', 'judge-panel', 'critic']
+
+/**
+ * Whether anything reaches `node` to work on. It does when a block stands before
+ * it in a chain (its own, or any chain around it), when a container around it
+ * fans out over items, or when it sits in a loop beside other blocks (the round
+ * before feeds it). The top level is a chain.
+ */
+function hasInput(design: Design, id: string): boolean {
+  const rows = flatten(design)
+  let row = rows.find(one => one.node.id === id)
+  while (row) {
+    const parent = row.parentId === undefined ? undefined : rows.find(one => one.node.id === row?.parentId)
+    const chained = parent === undefined || CHAINS.includes(parent.node.type)
+    if (chained && row.index > 0) return true
+    if (parent === undefined) return false
+    if (!blank(parent.node.knobs?.fanout)) return true
+    if ((parent.node.type === 'loop' || parent.node.type === 'loop-until-dry') && (parent.node.children?.length ?? 0) > 1) return true
+    row = parent
+  }
+  return false
+}
+
 export function lint(design: Design): Lint[] {
   const lints: Lint[] = []
 
@@ -50,7 +87,7 @@ export function lint(design: Design): Lint[] {
       lints.push({
         nodeId: node.id,
         rule: 'barrier-not-needed',
-        message: `parallel waits for every item, but "${next.title}" does not seem to need them together: a pipeline lets each item move on as it finishes`,
+        message: `parallel waits for all results, but "${next.title}" does not seem to need them together: make it a pipeline so each item moves on as it finishes`,
       })
     }
 
@@ -62,7 +99,7 @@ export function lint(design: Design): Lint[] {
       lints.push({
         nodeId: node.id,
         rule: 'worktree-read-only',
-        message: 'worktree isolation costs setup time and disk per agent and only helps agents that edit files in parallel; this one looks read-only',
+        message: 'worktree isolation costs setup time and disk per agent and only helps agents that edit files at the same time; this one looks read-only: set isolation to none',
       })
     }
 
@@ -101,7 +138,69 @@ export function lint(design: Design): Lint[] {
         lints.push({
           nodeId: node.id,
           rule: 'fanout-over-cap',
-          message: `fan-out of ${largest} is above the ~${CONCURRENCY_CAP} agents that run at once: the rest queue, and the barrier holds everything until the last one ends`,
+          message: `fan-out of ${largest} is above the ~${CONCURRENCY_CAP} agents that run at once: the rest queue, and everything after waits for the last one. Use a pipeline, or fan out over fewer, larger items`,
+        })
+      }
+    }
+
+    // 6. An agent nobody briefed. Structural: an `agent` block with neither
+    // notes nor a prompt knob. Its title is all Claude has to write a prompt from.
+    if (node.type === 'agent' && blank(node.notes) && blank(node.knobs?.prompt)) {
+      lints.push({
+        nodeId: node.id,
+        rule: 'agent-no-brief',
+        message: 'agent has no notes and no prompt, so only its title says what it does: write its task in notes, or what to tell it in prompt',
+      })
+    }
+
+    // 7. A vote with no count. Structural: a `verify` or `judge-panel` whose
+    // `votes` knob is unset.
+    if ((node.type === 'verify' || node.type === 'judge-panel') && node.knobs?.votes === undefined) {
+      lints.push({
+        nodeId: node.id,
+        rule: 'no-votes',
+        message: `${node.type} has no votes, so how many ${node.type === 'verify' ? 'checkers look at each result' : 'judges score the attempts'} is left to chance: set votes (1 is a quick check, 3 a majority)`,
+      })
+    }
+
+    // 8. A verify with nothing to verify. Structural: see `hasInput`.
+    if (node.type === 'verify' && !hasInput(design, node.id)) {
+      lints.push({
+        nodeId: node.id,
+        rule: 'verify-nothing-before',
+        message: 'verify has nothing before it to check: put it after the block whose results it should check (g grabs it, the arrows move it)',
+      })
+    }
+
+    // 9. One branch side by side with nothing. Structural: a `parallel` or
+    // `sweep` holding exactly one block, where neither it nor that block states
+    // a fan-out (one block run once per item is a real use of both).
+    const only = node.children?.length === 1 ? node.children[0] : undefined
+    if ((node.type === 'parallel' || node.type === 'sweep') && only && blank(node.knobs?.fanout) && blank(only.knobs?.fanout)) {
+      lints.push({
+        nodeId: node.id,
+        rule: 'single-branch',
+        message: `${node.type} holds one block, so nothing runs side by side: add the other ${node.type === 'sweep' ? 'searchers' : 'blocks'} (i adds inside), set fanout to run it once per item, or take "${only.title}" out and delete the ${node.type}`,
+      })
+    }
+
+    // 10. A loop nothing decides. Structural: the last block of a round (the
+    // last stage, followed into containers) is what the stop test reads. The
+    // lint fires when that block is a model's answer with no `schema` (free
+    // text: `until` has nothing exact to test), or when it is a `critic` and
+    // the loop states no `until` (its gaps start another round, every round).
+    // A round that ends in `code`, a `branch` or a subworkflow is left alone.
+    if ((node.type === 'loop' || node.type === 'loop-until-dry') && (node.children?.length ?? 0) > 0) {
+      const last = producer(node)
+      const free = ANSWERS.includes(last.type) && blank(last.knobs?.schema)
+      const endless = last.type === 'critic' && blank(node.knobs?.until)
+      if (free || endless) {
+        lints.push({
+          nodeId: node.id,
+          rule: 'loop-no-decider',
+          message: free
+            ? `nothing decides the next round: the round ends with "${last.title}" (${last.id}), whose result is free text. Give ${last.id} a schema the stop test can read (e.g. { found: [...] }), or end the round with a code block that counts`
+            : `nothing decides the next round: "${last.title}" (${last.id}) ends each round with new gaps and the loop has no until. Say when it stops (e.g. until: no gaps, or 3 rounds)`,
         })
       }
     }
@@ -142,20 +241,30 @@ function leastAgents(node: DesignNode): number {
   return times
 }
 
-export type Preflight = { blocks: number; agents: number; lints: number }
+export type Preflight = { blocks: number; agents: number; lints: number; lintIds: string[] }
 
 /** What a hand-off is about to start: how many blocks, the fewest agents they imply, and how many lints stand. */
 export function preflight(design: Design): Preflight {
-  return { blocks: flatten(design).length, agents: design.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lints: lint(design).length }
+  const lints = lint(design)
+  return { blocks: flatten(design).length, agents: design.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lints: lints.length, lintIds: lintIds(lints) }
 }
 
+/** The blocks that carry a lint, each once, in the order the lints were raised. */
+export function lintIds(lints: readonly Lint[]): string[] {
+  return [...new Set(lints.map(one => one.nodeId))]
+}
+
+/** How many block ids a preflight line names before it says `…`. */
+export const LINT_IDS_MAX = 6
+
 /**
- * `6 blocks · at least 14 agents · 1 lint`. It informs; nothing is blocked.
+ * `6 blocks · at least 14 agents · 2 lints (n3, n5)`. It informs; nothing is blocked.
  * `blocks: false` leaves the first part out, where the count is already said.
  */
 export function preflightLine(design: Design, options: { blocks?: boolean } = {}): string {
-  const { blocks, agents, lints } = preflight(design)
+  const { blocks, agents, lints, lintIds: ids } = preflight(design)
   const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
-  const parts = [`at least ${plural(agents, 'agent')}`, lints === 0 ? 'no lints' : plural(lints, 'lint')]
+  const named = `${ids.slice(0, LINT_IDS_MAX).join(', ')}${ids.length > LINT_IDS_MAX ? ', …' : ''}`
+  const parts = [`at least ${plural(agents, 'agent')}`, lints === 0 ? 'no lints' : `${plural(lints, 'lint')} (${named})`]
   return (options.blocks === false ? parts : [plural(blocks, 'block'), ...parts]).join(' · ')
 }

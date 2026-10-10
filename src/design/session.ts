@@ -10,12 +10,12 @@ import { LEGEND } from '../ui/board-model'
 import type { BoardMessage, BoardOp, BoardProps, Placement } from '../ui/board-model'
 import type { RunOverlay } from '../ui/board-paint'
 import { fmtDuration, fmtTokens } from '../ui/rail'
-import { lint } from './lints'
-import { canHoldChildren, emptyDesign, findNode, flatten, parseDesign, toKebab } from './model'
+import { lint, lintIds } from './lints'
+import { NODE_TYPES, canHoldChildren, emptyDesign, findNode, flatten, parseDesign, toKebab } from './model'
 import type { Design, NodeType } from './model'
-import { addNode, moveBy, moveNode, removeNode, updateNode } from './ops'
+import { addNode, moveBy, moveNode, removeNode, retypeNode, updateNode } from './ops'
 import type { NodePatch, OpResult, Place } from './ops'
-import { TEACH, fuzzy } from './teach'
+import { TEACH, fuzzy, useWhen } from './teach'
 import { TEMPLATES } from './templates'
 
 export const DESIGN_PANE_ID = 'conductor-design'
@@ -64,6 +64,47 @@ export type DesignUi = {
   freshId: string | null
   /** The block last selected in each design opened this session, by design name: reopening one goes back to it. */
   picks: Record<string, string>
+  /** The design's description (its goal) is being typed in: its field is drawn under the header. */
+  describing: boolean
+  /** The results of a finished run were put away (by the first edit after it, or the key): the design is shown bare until the next run. */
+  runCleared: boolean
+  /** The saved designs, as read when the picker was opened: it lists them above the templates. */
+  saved: SavedDesign[]
+}
+
+/** A saved design as the picker and `/conductor list` name it. */
+export type SavedDesign = { name: string; blocks: number; description: string }
+
+/** Names kept for replays: such a design lives in the session only, is never saved and never listed. */
+export const SCRATCH_PREFIX = 'replay-'
+
+/** Whether a design of this name is written to disk: a replay's is not. */
+export function isSaved(name: string): boolean {
+  return !name.startsWith(SCRATCH_PREFIX)
+}
+
+/** A design file's content as a list entry; a file that does not read as a design is listed as such. */
+export function savedDesign(name: string, text: string): SavedDesign {
+  const parsed = parseDesign(text)
+  return parsed.ok ? { name, blocks: flatten(parsed.design).length, description: parsed.design.description.replace(/\s+/g, ' ').trim() } : { name, blocks: -1, description: 'not a valid design file' }
+}
+
+/** `demo · 9 blocks · Review the current diff…`, one line of `/conductor list` and of the picker. */
+export function savedLine(one: SavedDesign): string {
+  const count = one.blocks < 0 ? 'unreadable' : `${one.blocks} ${one.blocks === 1 ? 'block' : 'blocks'}`
+  return `${one.name} · ${count}${one.description === '' ? '' : ` · ${one.description}`}`
+}
+
+/** The name a new design gets when none was given: `untitled`, or the first `untitled-N` no saved design has. */
+export function freeName(taken: readonly string[]): string {
+  if (!taken.includes(DEFAULT_DESIGN_NAME)) return DEFAULT_DESIGN_NAME
+  for (let n = 2; ; n++) if (!taken.includes(`${DEFAULT_DESIGN_NAME}-${n}`)) return `${DEFAULT_DESIGN_NAME}-${n}`
+}
+
+/** What the tracker is told of a design handed off: its name, its block ids in design order, and their titles (the status line names the running one). */
+export function handoffOf(name: string, design: Design): { name: string; nodeIds: string[]; titles: Record<string, string> } {
+  const rows = flatten(design)
+  return { name, nodeIds: rows.map(row => row.node.id), titles: Object.fromEntries(rows.map(row => [row.node.id, row.node.title])) }
 }
 
 /** What stands in the way of an edit, and what an arrow key needs to know. */
@@ -79,8 +120,8 @@ export type RunContext = {
 }
 
 export const LOCK_NOTICE = 'run in progress · editing locked'
-/** Shown while a run is active: the handoff left the keyboard in the prompt, and the command reopens the pane with it. */
-export const RUN_KEYS_HINT = 'keys in the prompt? /conductor returns them'
+/** Shown while a run is active and the pane does not hold the keyboard (the handoff left it in the prompt): the command reopens the pane with it. */
+export const RUN_KEYS_HINT = 'type /conductor to use the keys here'
 
 /** What a toolbar key asks for. The board sends the same as `key` messages. */
 export type ToolbarOp = BoardOp
@@ -108,6 +149,9 @@ export function initialUi(): DesignUi {
     drafting: false,
     freshId: null,
     picks: {},
+    describing: false,
+    runCleared: false,
+    saved: [],
   }
 }
 
@@ -131,7 +175,7 @@ export function carryUi(previous: DesignUi, next: DesignUi): DesignUi {
 
 /** Whether `run` is laid over the design the pane shows: it was started from that design and has begun. */
 export function overlaysDesign(run: RunState, runDesign: string | null, ui: DesignUi): boolean {
-  return runDesign !== null && runDesign === ui.name && ui.status === 'ready' && run.status !== 'idle'
+  return runDesign !== null && runDesign === ui.name && ui.status === 'ready' && run.status !== 'idle' && ui.runCleared !== true
 }
 
 /** The run as the board takes it: every node's counts, and the sum of the agents no block claims. */
@@ -210,7 +254,9 @@ export function startDesign(ui: DesignUi, templateId: string): Step {
 function settle(design: Design, ui: DesignUi, result: OpResult, selectedId: string | null): Step {
   if (result.error) return { design, ui: { ...ui, notice: result.error }, changed: false }
   const kept = selectedId !== null && findNode(result.design, selectedId) ? selectedId : null
-  return { design: result.design, ui: { ...ui, selectedId: kept, notice: null }, changed: result.design !== design }
+  const changed = result.design !== design
+  // The first edit after a run puts its results away: nothing is edited under stale counts. (While it runs, no edit gets here.)
+  return { design: result.design, ui: { ...ui, selectedId: kept, notice: null, runCleared: changed ? true : ui.runCleared }, changed }
 }
 
 /** Applies one message from the board. A refused edit leaves the design as it was and sets `notice`. */
@@ -222,7 +268,7 @@ export function applyMessage(design: Design | null, ui: DesignUi, message: Board
     const selectedId = message.id !== null && (strays || findNode(design, message.id)) ? message.id : null
     const same = selectedId === ui.selectedId
     // The person chose a block: the selection stops following the run.
-    return { design, ui: { ...ui, selectedId, follow: false, confirmId: null, notice: same ? ui.notice : null, editing: ui.editing && same, freshId: same ? ui.freshId : null, grabbedId: ui.grabbedId === selectedId ? ui.grabbedId : null }, changed: false }
+    return { design, ui: { ...ui, selectedId, follow: false, confirmId: null, describing: false, notice: same ? ui.notice : null, editing: ui.editing && same, freshId: same ? ui.freshId : null, grabbedId: ui.grabbedId === selectedId ? ui.grabbedId : null }, changed: false }
   }
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, grabbedId: null, confirmId: null, picker: null, editing: false, freshId: null }, changed: false }
   switch (message.kind) {
@@ -240,7 +286,7 @@ export function applyMessage(design: Design | null, ui: DesignUi, message: Board
       return { design, ui: { ...ui, notice: null, confirmId: null, grabbedId: null, picker: { at: message.at, query: '' } }, changed: false }
     }
     case 'remove':
-      if (!findNode(design, message.id)) return { design, ui: { ...ui, notice: `no node ${message.id}` }, changed: false }
+      if (!findNode(design, message.id)) return { design, ui: { ...ui, notice: `no block ${message.id}` }, changed: false }
       // The same two asks as the toolbar's delete, on the card that was clicked.
       return applyOp(design, { ...ui, selectedId: message.id, confirmId: ui.confirmId === message.id ? message.id : null }, 'remove', context)
   }
@@ -252,6 +298,47 @@ export function patchNode(design: Design | null, ui: DesignUi, id: string, patch
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, editing: false, freshId: null }, changed: false }
   // A field was sent: the typing is over.
   return settle(design, { ...ui, editing: false, freshId: null }, updateNode(design, id, patch), ui.selectedId)
+}
+
+/** The inspector's type picker: the block becomes another type, keeping its title, notes, knobs and what it holds. */
+export function retypeBlock(design: Design | null, ui: DesignUi, id: string, type: NodeType, context: RunContext = {}): Step {
+  if (!design || ui.status !== 'ready') return { design, ui, changed: false }
+  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, editing: false, freshId: null }, changed: false }
+  return settle(design, { ...ui, editing: false, freshId: null }, retypeNode(design, id, type), ui.selectedId)
+}
+
+/** The types a block may become: all of them, or only containers while it holds blocks. */
+export function retypeChoices(node: { type: NodeType; children?: readonly unknown[] }): NodeType[] {
+  return (node.children?.length ?? 0) > 0 ? NODE_TYPES.filter(type => canHoldChildren(type)) : [...NODE_TYPES]
+}
+
+/** The design's description as typed in its field under the header. */
+export function describeDesign(design: Design | null, ui: DesignUi, text: string, context: RunContext = {}): Step {
+  if (!design || ui.status !== 'ready') return { design, ui, changed: false }
+  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, describing: false }, changed: false }
+  const description = text.replace(/\s+/g, ' ').trim()
+  const calm: DesignUi = { ...ui, describing: false, notice: null }
+  return description === design.description ? { design, ui: calm, changed: false } : { design: { ...design, description }, ui: calm, changed: true }
+}
+
+/**
+ * Where the add picker's block will go, in words: `after n4 (in n2)`, `first in n2`,
+ * `at the end`. The place is a list and an index; the words name the neighbour.
+ */
+export function placeLabel(design: Design, at: Place): string {
+  const parent = at.parentId === undefined ? undefined : findNode(design, at.parentId)
+  const list = parent ? (parent.children ?? []) : design.nodes
+  const before = list[at.index - 1]
+  if (before) return parent ? `after ${before.id} (in ${parent.id})` : at.index >= list.length ? `after ${before.id} (at the end)` : `after ${before.id}`
+  return parent ? `first in ${parent.id}` : list.length === 0 ? 'the first block' : 'at the start'
+}
+
+/** The block the lint key goes to: the next one with a lint after the selection, in the design's order, round again from the top. Null with no lints. */
+export function nextLint(design: Design, selectedId: string | null): string | null {
+  const marked = new Set(lintIds(lint(design)))
+  const rows = flatten(design).map(row => row.node.id)
+  const from = selectedId === null ? -1 : rows.indexOf(selectedId)
+  return [...rows.slice(from + 1), ...rows.slice(0, from + 1)].find(id => marked.has(id)) ?? null
 }
 
 /** Where `a` puts a block: after the selection, as its sibling; at the end with none. */
@@ -283,10 +370,10 @@ function afterRemoval(design: Design, id: string): string | null {
  */
 export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
-  const calm: DesignUi = { ...ui, confirmId: null, notice: null, editing: false, freshId: null }
+  const calm: DesignUi = { ...ui, confirmId: null, notice: null, editing: false, freshId: null, describing: false }
   const placement = context.placement ?? 'dock'
   const node = ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
-  if (context.locked && (op === 'grab' || op === 'addAfter' || op === 'addInside' || op === 'remove' || op === 'edit')) {
+  if (context.locked && (op === 'grab' || op === 'addAfter' || op === 'addInside' || op === 'remove' || op === 'edit' || op === 'describe')) {
     return { design, ui: { ...calm, grabbedId: null, picker: null, notice: LOCK_NOTICE }, changed: false }
   }
   // Nothing is grabbed while locked, so the arrows move the selection.
@@ -329,8 +416,20 @@ export function applyOp(design: Design | null, ui: DesignUi, op: ToolbarOp, cont
       // Page by page, then closed.
       return { design, ui: { ...calm, help: ((ui.help ?? 0) + 1) % (HELP_PAGES + 1) }, changed: false }
     case 'run':
-      // The hooks module puts the handoff command in the prompt; nothing changes here.
+    case 'review':
+      // The hooks module puts the request in the prompt box; nothing changes here.
       return { design, ui: calm, changed: false }
+    case 'describe':
+      // The description's field opens under the header; the hooks module moves the ring to it.
+      return { design, ui: { ...calm, grabbedId: null, describing: true }, changed: false }
+    case 'nextLint': {
+      const id = nextLint(design, node?.id ?? null)
+      if (id === null) return { design, ui: { ...calm, notice: 'no lints: nothing to go to' }, changed: false }
+      return { design, ui: { ...calm, grabbedId: null, selectedId: id, follow: false }, changed: false }
+    }
+    case 'clearRun':
+      // The results of a run that is over are put away; while it runs they stay.
+      return { design, ui: context.locked ? { ...calm, notice: LOCK_NOTICE } : { ...calm, runCleared: true }, changed: false }
     case 'cancel':
       return { design, ui: { ...calm, grabbedId: null, picker: null }, changed: false }
   }
@@ -375,6 +474,8 @@ export type ViewState = {
   compact?: boolean
   /** The rows the flow's direction is decided by, when not `room`: an inline pane's board loses rows while a field is typed in, and must not turn for it. */
   turnRoom?: number
+  /** The region takes all of `room` whatever the board's height: an inline pane then keeps its height as the selection moves. */
+  fill?: boolean
 }
 
 /**
@@ -390,7 +491,7 @@ export function boardView(design: Design, placement: 'dock' | 'inline', columns:
   const most = Math.max(3, room)
   const orientation = chooseOrientation(design, placement === 'dock' ? 'vertical' : 'horizontal', columns, Math.max(BOARD_MIN_ROWS, state.turnRoom ?? room), options)
   const { height } = layoutBoard(design, { ...options, orientation, selectedId: state.selectedId ?? null, noteRows: expandRows(orientation, most) })
-  return { orientation, columns, rows: Math.min(most, height), room: most }
+  return { orientation, columns, rows: state.fill ? most : Math.min(most, height), room: most }
 }
 
 /** What an empty board says while Claude drafts the design. */
@@ -477,24 +578,47 @@ export function helpPage(page: number, type: NodeType | undefined, file: string,
   const lines =
     page === 1
       ? type
-        ? [`${TEACH[type].name}: ${TEACH[type].hint}`, ...TEACH[type].card]
+        ? [`${TEACH[type].name}: ${TEACH[type].hint}`, useWhen(type), ...TEACH[type].card]
         : ['Select a block to read about its type.']
       : page === 2
         ? marks
-        : [...hands, 'z: compact, one row a card · c: this card · r: hand the design to Claude to run', `file: ${file}`]
+        : [
+            ...hands,
+            'd: the goal (the design\'s description) · n: next block with a lint · z: compact, one row a card · c: this card',
+            'r: puts the request to run the design in the prompt: add what to run it on, then Enter · v: asks Claude to review the design',
+            'q: puts away the results of a run that is over (the first edit does too)',
+            `file: ${file}`,
+          ]
   return lines.flatMap(line => wrapText(line, Math.max(12, columns)))
 }
 
-/** The run in one line for the pane's header: status, agents done of started, failures, tokens, time. */
-export function runSummary(run: RunState, elapsedMs: number | null): { text: string; color: 'claude' | 'success' | 'error' } {
+/**
+ * The run in one line for the pane's header, in the longest wording `room` cells
+ * hold. What goes first when it is tight: the long words, then the time, the
+ * tokens, the failures, the count; the status always stays.
+ * `run running · 5/9 agents done · 1 failed · 57.4k tokens · 4.5s` … `running · 5/9` … `running`.
+ */
+export function runSummary(run: RunState, elapsedMs: number | null, room: number = Infinity): { text: string; color: 'claude' | 'success' | 'error' } {
   const agents = Object.values(run.agents)
   const done = agents.filter(agent => agent.status === 'done').length
   const failed = agents.filter(agent => agent.status === 'failed').length
   const tokens = agents.reduce((sum, agent) => sum + agent.tokens, 0)
   const status = run.status === 'running' ? 'running' : 'finished'
-  const parts = [status, `${done}/${agents.length} agents done`, `${failed} failed`, `${fmtTokens(tokens)} tokens`]
-  if (elapsedMs !== null && elapsedMs >= 0) parts.push(fmtDuration(elapsedMs))
-  return { text: `run ${parts.join(' · ')}`, color: run.status === 'running' ? 'claude' : failed > 0 || run.status === 'failed' ? 'error' : 'success' }
+  const fails = failed > 0 ? [`${failed} failed`] : []
+  const time = elapsedMs !== null && elapsedMs >= 0 ? [fmtDuration(elapsedMs)] : []
+  const count = `${done}/${agents.length}`
+  const wordings = [
+    [`run ${status}`, `${count} agents done`, ...fails, `${fmtTokens(tokens)} tokens`, ...time],
+    [status, `${count} done`, ...fails, fmtTokens(tokens), ...time],
+    [status, `${count} done`, ...fails, fmtTokens(tokens)],
+    [status, `${count} done`, ...fails],
+    [status, count, ...fails],
+    // A failure outranks the count once only one of them fits.
+    failed > 0 ? [status, ...fails] : [status, count],
+    [status],
+  ].map(parts => parts.join(' · '))
+  const text = wordings.find(one => one.length <= room) ?? status
+  return { text, color: run.status === 'running' ? 'claude' : failed > 0 || run.status === 'failed' ? 'error' : 'success' }
 }
 
 /**
@@ -546,6 +670,23 @@ export function followRun(ui: DesignUi, design: Design | null, run: RunState, ru
   const id = runningBlock(design, run)
   if (id === null || id === ui.selectedId) return ui
   return { ...ui, selectedId: id, confirmId: null, grabbedId: null, editing: false, freshId: null }
+}
+
+/** The first block, in the design's order, that has a failed agent of its own; null with none. */
+export function failedBlock(design: Design, run: RunState): string | null {
+  return flatten(design).find(row => (run.byNode[row.node.id]?.failed ?? 0) > 0)?.node.id ?? null
+}
+
+/**
+ * The pane's state once the run it followed is over: the selection goes to the
+ * first block with a failure (where the person has to look), and following ends.
+ * Returns `ui` itself when there is nothing to do, and always after the first time.
+ */
+export function endRun(ui: DesignUi, design: Design | null, run: RunState, runDesign: string | null): DesignUi {
+  if (!ui.follow || !design || ui.status !== 'ready' || runDesign === null || ui.name !== runDesign || (run.status !== 'done' && run.status !== 'failed')) return ui
+  const id = failedBlock(design, run)
+  if (id === null) return { ...ui, follow: false }
+  return { ...ui, follow: false, selectedId: id, confirmId: null, grabbedId: null, editing: false, freshId: null }
 }
 
 /** The dock's width the pane asks for with nothing known of the terminal: narrow enough for a 110-column one. */

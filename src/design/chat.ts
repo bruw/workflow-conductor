@@ -25,9 +25,9 @@ export const OP_KINDS = ['add', 'update', 'move', 'remove'] as const
 
 const KNOB_NAMES = Object.keys(KNOB_HELP)
 
-/** One line per block type: its id, what it is and when to use it (the inspector's hint). */
+/** One line per block type: its id, what it does and when to use it (the inspector's two lines, word for word). */
 function typeLines(): string[] {
-  return NODE_TYPES.map(type => `- ${type}${canHoldChildren(type) ? ' (container)' : ''}: ${TEACH[type].hint}`)
+  return NODE_TYPES.map(type => `- ${type}${canHoldChildren(type) ? ' (container)' : ''}: ${TEACH[type].hint}. Use when ${TEACH[type].when}.`)
 }
 
 function knobLine(): string {
@@ -41,7 +41,7 @@ export function toolDescription(): string {
   return [
     `Reads and edits the user's Conductor workflow design: the board of blocks they see, saved at ${DESIGN_DIR_HINT}. Use it whenever the user asks to draft, add, change, move or remove workflow blocks or steps ("add a verify after n3", "this block"); do not edit that file by hand. A design is a spec the user reviews, not a script: never run it from here.`,
     'Actions: read = the design JSON, the block selected on the board ("this block") and the lints; read first unless you just did. apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures): keep the id of every block that stays, leave id off new ones. guide = the long help card of every type. `name` defaults to the design open on the board. An edit shows on the board at once and returns the lints: fix them or tell the user.',
-    'Block: { id, type, title, notes?, knobs?, children? }. Ids (n1, n2…) are assigned for you and never change. title is a short label; notes is free text saying what the block should do. Order is execution order. Only containers hold children.',
+    "Block: { id, type, title, notes?, knobs?, children? }. Ids (n1, n2…) are assigned for you and never change. title is a short label; notes is free text saying what the block should do. Order is execution order. Only containers hold children. The design's `description` is the goal of the whole workflow: set it when drafting, keep it true.",
     'Types:',
     ...typeLines(),
     `Knobs, all optional: ${knobLine()}.`,
@@ -62,7 +62,7 @@ export const TOOL_SCHEMA: Record<string, unknown> = {
   properties: {
     action: { enum: [...ACTIONS] },
     name: { type: 'string', description: 'Design name. Default: the one open on the board.' },
-    description: { type: 'string', description: "apply/write: the design's one-line description." },
+    description: { type: 'string', description: "apply/write: the design's one-line description: the goal of the workflow." },
     ops: {
       type: 'array',
       description:
@@ -85,7 +85,7 @@ export const TOOL_SCHEMA: Record<string, unknown> = {
 export function guideText(): string {
   const lines: string[] = [`Containers (the only blocks that hold children): ${CONTAINER_TYPES.join(', ')}.`, `Knobs: ${knobLine()}.`, `Effort values: ${EFFORTS.join(', ')}.`, '']
   for (const type of NODE_TYPES) {
-    lines.push(`${type} — ${TEACH[type].name}: ${TEACH[type].hint}`)
+    lines.push(`${type}${TEACH[type].name === type ? '' : ` — ${TEACH[type].name}`}: ${TEACH[type].hint}. Use when ${TEACH[type].when}.`)
     for (const line of TEACH[type].card) lines.push(`  ${line}`)
   }
   return lines.join('\n')
@@ -222,14 +222,14 @@ function placeOf(design: Design, op: Record<string, unknown>): Place | string {
   if (beside !== undefined) {
     if (typeof beside !== 'string') return 'after/before must be a block id'
     const row = flatten(design).find(one => one.node.id === beside)
-    if (!row) return `no node ${beside}`
+    if (!row) return `no block ${beside}`
     const index = op.after !== undefined ? row.index + 1 : row.index
     return row.parentId === undefined ? { index } : { parentId: row.parentId, index }
   }
   if (op.parent !== undefined && op.parent !== null) {
     if (typeof op.parent !== 'string') return 'parent must be a block id'
     const parent = findNode(design, op.parent)
-    if (!parent) return `no node ${op.parent}`
+    if (!parent) return `no block ${op.parent}`
     return { parentId: parent.id, index: parent.children?.length ?? 0 }
   }
   return { index: design.nodes.length }
@@ -293,7 +293,7 @@ export function applyOps(before: Design, rawOps: unknown, description?: unknown)
     const id = op.id
     if (kind !== 'update' && kind !== 'move' && kind !== 'remove') return refuse(`op must be one of ${OP_KINDS.join(', ')}`)
     if (typeof id !== 'string') return refuse('needs the `id` of a block')
-    if (!findNode(design, id)) return refuse(`no node ${id}`)
+    if (!findNode(design, id)) return refuse(`no block ${id}`)
     if (kind === 'remove') {
       design = removeNode(design, id).design
       continue
@@ -302,7 +302,7 @@ export function applyOps(before: Design, rawOps: unknown, description?: unknown)
       // The place is read with the block lifted out, as moveNode counts it.
       if (op.after === undefined && op.before === undefined && (op.parent === undefined || op.parent === null)) return refuse('needs after, before or parent')
       const at = placeOf(removeNode(design, id).design, op)
-      if (typeof at === 'string') return refuse(at.startsWith('no node') ? `${at} outside ${id}` : at)
+      if (typeof at === 'string') return refuse(at.startsWith('no block') ? `${at} outside ${id}` : at)
       const moved = moveNode(design, id, at)
       if (moved.error) return refuse(moved.error)
       design = moved.design
@@ -388,7 +388,8 @@ export const FLASH_CLEAR_MS = FLASH_MS + 400
 export function showEdit(ui: DesignUi, name: string, design: Design, change: Change): DesignUi {
   const same = ui.name === name && ui.status === 'ready'
   // The draft has landed (or the file changed): the board no longer says Claude is drafting.
-  const base: DesignUi = same ? { ...ui, grabbedId: null, picker: null, confirmId: null, editing: false, freshId: null, drafting: false, notice: null } : { ...carryUi(ui, initialUi()), name, status: 'ready' }
+  // An edit never lands under the results of a run that is over: they are put away.
+  const base: DesignUi = same ? { ...ui, grabbedId: null, picker: null, confirmId: null, editing: false, describing: false, freshId: null, drafting: false, notice: null, runCleared: true } : { ...carryUi(ui, initialUi()), name, status: 'ready' }
   const still = same && ui.selectedId !== null && findNode(design, ui.selectedId) ? ui.selectedId : null
   const selectedId = change.added[0] ?? still ?? change.changed[0] ?? design.nodes[0]?.id ?? null
   return { ...base, selectedId, flash: { ids: [...change.added, ...change.changed], seq: (ui.flash?.seq ?? 0) + 1 } }

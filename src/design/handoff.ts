@@ -24,8 +24,23 @@ export function outline(design: Design): string[] {
     const tail = [knobs.length > 0 ? `[${knobs.join(' ')}]` : '', row.node.notes ? '(has notes)' : ''].filter(Boolean).join(' ')
     return `${'  '.repeat(row.depth + 1)}${row.node.id} ${row.node.type} "${row.node.title}"${tail ? ` ${tail}` : ''}`
   })
-  if (rows.length > OUTLINE_MAX) lines.push(`  … ${rows.length - OUTLINE_MAX} more nodes: see the file`)
-  return lines.length > 0 ? lines : ['  (no nodes)']
+  if (rows.length > OUTLINE_MAX) lines.push(`  … ${rows.length - OUTLINE_MAX} more blocks: see the file`)
+  return lines.length > 0 ? lines : ['  (no blocks)']
+}
+
+/** What `r` puts in the prompt box, and what a hand-off submits: the person adds what to run it on. The sentence also tells the mod which design a prompt hands off. */
+export function handoffPrompt(name: string): string {
+  return `Implement and run the "${name}" workflow design on: `
+}
+
+/** The design a prompt hands off, when it opens with the hand-off sentence; null for any other prompt. */
+export function handoffTarget(text: string): string | null {
+  return /^\s*Implement and run the "([a-z0-9-]+)" workflow design\b/.exec(text)?.[1] ?? null
+}
+
+/** What the review key puts in the prompt box: the chat tool hands Claude the design, the selection and the lints. */
+export function reviewPrompt(name: string): string {
+  return `Review the "${name}" workflow design: is the structure right for its goal, what is missing, what is wasteful? `
 }
 
 /** The visible line and the hidden instructions for one design saved at `designPath`. */
@@ -33,15 +48,18 @@ export function buildHandoff(design: Design, designPath: string): Handoff {
   const count = flatten(design).length
   const phases = design.nodes.map(node => `"${node.id} ${node.title}"`)
   const first = design.nodes[0]
+  const goal = design.description.replace(/\s+/g, ' ').trim()
   const example = first ? `${first.id}: ${first.title}` : 'n1: scout diff'
 
   const lines = [
     `Conductor handoff: implement and run the workflow design "${design.name}".`,
+    goal === '' ? 'The design states no goal (its `description` is empty): take the goal from the user\'s request.' : `Goal of the workflow (the design's \`description\`): ${goal}`,
     '',
     `1. Read the design file: ${designPath}`,
     '   It is a SPEC, not a program. Implement it as a real Workflow script and run it with the Workflow tool.',
     '   Each node has a type (the primitive or pattern to use), a title, optional `notes` and `knobs`.',
-    '   `notes` and `knobs` express intent; where the design leaves a gap, resolve it sensibly.',
+    '   `notes` and `knobs` express intent; where the design leaves a gap, resolve it sensibly toward the goal.',
+    "   A block's `prompt` knob is the intent for that agent's prompt, not its wording: write the real prompt from it.",
     '',
     '2. Mapping rules. The run view reads them back, so follow them exactly:',
     '   - Label: every agent() call sets label: "<nodeId>: <short text>", where nodeId is the id of the design',
@@ -63,7 +81,7 @@ export function buildHandoff(design: Design, designPath: string): Handoff {
   ]
 
   return {
-    text: `handing off design "${design.name}" (${count} ${count === 1 ? 'node' : 'nodes'})`,
+    text: `handing off design "${design.name}" (${count} ${count === 1 ? 'block' : 'blocks'})`,
     context: [lines.join('\n')],
   }
 }

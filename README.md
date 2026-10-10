@@ -33,18 +33,18 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 | Command | What it does |
 | --- | --- |
 | `/conductor` | With a run in progress: that run, on its design when it came from one. Otherwise the design last opened in this session, with the keyboard, or the template picker when there is none. |
-| `/conductor design [name]` | Opens the designer on a saved design, or offers templates for a new one. The name defaults to `untitled`. |
+| `/conductor design [name]` | Opens the designer on a saved design, or offers templates for a new one. With no name: the saved designs to open (each with its block count and what it is for), above the templates for a new one. |
 | `/conductor draft <name> <description…>` | Claude drafts a design for the description, saves it under that name and shows it on the board. Refused when a design of that name already holds blocks. |
-| `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt. With `fill`, the prompt is left in the box for you to send. The answer says what the design implies: `at least 18 agents · no lints`. |
-| `/conductor list` | Names the saved designs. |
+| `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt; the pane switches to that design. With `fill`, the request is left in the box, ending `on: `, for you to say what to run it on and send. The answer says what the design implies: `at least 18 agents · 2 lints (n3, n5)`. |
+| `/conductor list` | The saved designs, each with its block count and description. |
 | `/conductor replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
-| `/conductor replay design <template> [fast\|slow]` | Dev: replays a made-up run over a template's design (`review`, `research`, `migrate`, `judge-panel`). |
+| `/conductor replay design <template> [fast\|slow]` | Dev: replays a made-up run over a template's design (`review`, `research`, `migrate`, `judge-panel`). The design is named `replay-<template>`, lives in the session only, and is never saved or listed (the `replay-` prefix is kept for this). |
 
 ## Designing by talking
 
 You do not have to assemble blocks by hand. `/conductor draft review-pr review this PR thoroughly`
 has Claude draft the design; with a design open, plain messages change it:
-"add an adversarial verify with 3 votes after n3", "set this block to low effort"
+"add a verify with 3 votes after n3", "set this block to low effort"
 ("this block" is the one selected on the board). The board follows at once and the
 touched blocks light up for a moment. Claude edits through the `mcp__conductor__design`
 tool, which checks every edit against the design model, keeps block ids stable and
@@ -71,7 +71,7 @@ the transcript it flows top to bottom and every card is as wide as the pane:
 │ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━ edit ━ del ━┛ │
 │   │  +                                     │
 │ ╭─▼ n4 verify ×3 ────────────────────────╮ │
-│ │ adversarial verify                     │ │
+│ │ verify findings                        │ │
 │ │ 3 votes · out: { refuted: boolean, re… │ │
 │ ╘════════════════════════════════════════╛ │
 ╘═ + ════════════════════════════════════════╛
@@ -84,7 +84,7 @@ Above the prompt (inline) it flows left to right. It starts compact there (one r
 ```
 ╭ n1 agent ──────────────────╮    ╭ n2 pipeline ×4 · review · each: dimensions ──────────────────────╮    ╭ n5 agent ────╮
 │ scout diff                 │ ─▶ │ ╭ n3 agent ──────────────────╮    ╭ n4 verify ×3 ──────────────╮ │ ═▶ │ synthesize   │ +
-│ effort: low · out: { dime… │    │ │ review                     │ ─▶ │ adversarial verify         │ │    │              │
+│ effort: low · out: { dime… │    │ │ review                     │ ─▶ │ verify findings            │ │    │              │
 ╰────────────────────────────╯    │ │ out: { findings: [{ file,… │    │ 3 votes · out: { refuted:… │ │    ╰──────────────╯
                                   │ ╰────────────────────────────╯    ╘════════════════════════════╛ │
                                   ╘══════════════════════════════════════════════════════════════════╛
@@ -98,13 +98,14 @@ Above the prompt (inline) it flows left to right. It starts compact there (one r
 - A container is a box around its blocks. A pipeline or loop chains them along the flow;
   a parallel, sweep or branch puts them side by side across it.
 - `│` (or `─▶`) hands each result on as it arrives; `║` (or `═▶`) waits for all results first.
-- `×4` and a double bottom border (`╘═══╛`) mean it runs many times (a fan-out, or votes); no badge for one.
+- `×4` and a double bottom border (`╘═══╛`) mean a fan-out and nothing else: the block runs once per item (`×n` when the count is not stated; no badge for one). Votes are said in words, `3 votes`.
   A container's header says what each run is for (`each: …`); its knobs and `out: …` are on its bottom border.
 - `+` adds a block there. The ones around the selection and at the ends are always drawn; the rest
   show under the pointer. A `+` on a container's bottom border adds at the end of that container.
 - `▲ 3 more above` / `▼ 5 more below` on the board's edge say it goes on; a container whose header
   has scrolled off keeps it pinned on the first row.
-- `▲` on a border is a lint; the inspector under the board says what it is.
+- `▲` on a border is a lint; the inspector under the board says what is wrong and how to fix it. The header counts them (`▲ 2`) and `n` goes to the next one.
+- Under the header, `goal: …` is the design's description: what the workflow is for. `d` edits it. Claude is handed it as the goal.
 
 Under the board: a line for whatever needs saying about it (the delete question, what a grab's keys do,
 a refused edit, the lock), one row of keys, then the inspector. Inline the inspector is one line until you press `e`.
@@ -125,7 +126,9 @@ The inspector has a field for everything a block can carry, and shows only what 
 | `votes` | picker | verify, judge panel |
 
 A knob a block carries that its type does not list (set from chat, or in the file) gets its field too.
-Enter in a field saves it and returns the keys to the key row.
+Enter in a field saves it, with everything typed in the block's other fields since it was selected (Tab between them loses nothing), and returns the keys to the key row.
+The row of pickers starts with `type`: the block becomes another type and keeps its title, notes and knobs; one that holds blocks can only become another container.
+Under the block's id the inspector says its type in two lines: what it does, and `use when: …`.
 
 With the mouse:
 
@@ -144,14 +147,18 @@ With the keyboard. The keys do the same whether the pane's key row or the board 
 | Key | Action |
 | --- | --- |
 | `h` `j` `k` `l` | move the selection: along the flow to the next or previous block, across it into a container or back out |
-| `a` | add a block after the selection: a list of the block types, each with a line on what it is for; type to narrow, Enter adds the first. The new block's title is typed next (Enter keeps the default) |
+| `a` | add a block after the selection (the field says where: `+ add after n4 (in n2)`): a list of the block types, each with a line on what it does, and for the best match `use when: …`; type to narrow, Enter adds that match. The new block's title is typed next (Enter keeps the default) |
 | `i` | add a block inside the selected container, the same way |
 | `x` | delete (a container that holds blocks asks first) |
 | `g` | grab the selected block; the direction keys then move it a step at a time, `g` drops it |
 | `e` | edit: the title field takes the keyboard, Tab reaches the other fields and the pickers; Enter saves |
 | `z` | compact: every card but the selected one becomes one row (branches one under the other); `z` again brings them back. Inline starts compact, docked starts whole; each keeps its own setting for the session, whatever design is open |
 | `c` | help, a page a press, in the inspector's place: the block type's card, what the board's marks mean, mouse and keys and the design file's path; then closed |
-| `r` | put `/conductor run <name>` in the prompt; Enter sends it. The line under the board says what the design implies first: `run: 6 blocks · at least 18 agents · no lints` |
+| `d` | the goal: the design's description opens as a field under the header |
+| `n` | go to the next block with a lint (shown while there is one) |
+| `v` | ask Claude: puts `Review the "<name>" workflow design: is the structure right for its goal, what is missing, what is wasteful?` in the prompt, not sent |
+| `r` | run: puts `Implement and run the "<name>" workflow design on: ` in the prompt, for you to say what to run it on and send. The line under the board says what the design implies first: `run: 6 blocks · at least 18 agents · 2 lints (n3, n5)` |
+| `q` | put away the results of a run that is over (shown while they are on the board; the first edit does the same) |
 
 After a click on the board the arrow keys also move the selection and Enter edits. Escape hands the keys back to the prompt.
 After a handoff the keyboard is in the prompt: `/conductor` reopens the pane with the keyboard.
@@ -161,7 +168,9 @@ Reopening a design brings back the block it was left on.
 
 A run started from a design is laid over it:
 
-- The header says the run in one line: `run running · 5/9 agents done · 1 failed · 57.4k tokens · 4.5s`.
+- The header says the run in one row, always: `run running · 5/9 agents done · 1 failed · 57.4k tokens · 4.5s`, in fewer words where the pane is narrow (the time goes first, then the tokens; the status stays).
+- When it ends with failures the header says `run finished · … · 1 failed` and the selection goes to the first block that failed. The results stay on the board until your first edit, or `q`.
+- With the pane closed the status line names the block that is running: `wf 3/4 ▸ n3 review`.
 - Each card's bottom border says its agents: `⠹ 2/4 done · 1 failed · 22.3k` (ended well, of started; failures; tokens).
   A container sums what it holds. `waiting` has no agent yet; `not run` never got one.
 - The selection follows the block that is running (the furthest along when several are), and the board scrolls
@@ -170,7 +179,8 @@ A run started from a design is laid over it:
 
 ## How a design becomes a workflow
 
-A design is a spec, not a program. `/conductor run <name>` gives Claude the design
+A design is a spec, not a program. `/conductor run <name>` (or `r`, which leaves the request in the prompt for you to finish)
+gives Claude the design's goal (its description), the design
 file's path, an outline and the mapping rules, and asks it to write a real Workflow
 script and run it with the Workflow tool. The rules the run view depends on:
 
