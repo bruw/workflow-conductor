@@ -4,9 +4,12 @@
 
 import { canHoldChildren, findNode, flatten, isNodeType } from '../design/model'
 import type { Design, DesignNode, NodeType } from '../design/model'
+import { removeNode } from '../design/ops'
 import type { Place } from '../design/ops'
 import { TEACH, fuzzy } from '../design/teach'
 import { GLYPH } from './theme'
+import { FRAME_MS, motionActive, placeRows, rowOffsets, settleMotion, stepMotion, stillMotion } from './tween'
+import type { Motion } from './tween'
 
 // ---------------------------------------------------------------------------
 // Messages: Client → hooks module (surface.post → ui.message)
@@ -239,12 +242,41 @@ export type CanvasState = {
   top: number
   /** The props `rev` this state last took its selection from. */
   rev: number
+  /** The row the pointer holds, from `down` until the drop has landed. */
+  drag: DragState | null
+  /** Where the rows were last drawn, and the ones still sliding to their place. */
+  motion: Motion
+  /** The motion clock, in ms: moved on by the ticker, 0 while idle. */
+  clock: number
+  /** Whether the shared ticker runs. */
+  ticking: boolean
+}
+
+/** Where a dragged row would land: the place, the line it opens a gap at, and its depth there. */
+export type DropTarget = { place: Place; slot: number; depth: number }
+
+export type DragState = {
+  id: string
+  /** Where the pointer went down, in region cells. */
+  downX: number
+  downY: number
+  /** Where the pointer is now. */
+  x: number
+  y: number
+  /** The scroll window's first line when the pointer went down. */
+  top: number
+  /** False until the pointer leaves the row it went down on: until then it is a click. */
+  active: boolean
+  /** Set at the drop: the row waits here, lifted, until the design that holds the move arrives. */
+  settling: DropTarget | null
 }
 
 export type CanvasKey = { type: 'key'; key: string; ctrl?: true; shift?: true; meta?: true }
 
-/** Pointer input joins this union in the next phase. */
-export type CanvasInput = CanvasKey
+/** `x` and `y` are cells of the canvas's region, 0 at its top left. */
+export type CanvasPointer = { type: 'pointer'; event: 'down' | 'move' | 'up' | 'enter' | 'leave'; x: number; y: number }
+
+export type CanvasInput = CanvasKey | CanvasPointer
 
 export type CanvasContext = {
   design: Design
@@ -257,7 +289,11 @@ export type CanvasResult = { state: CanvasState; post?: CanvasMessage }
 export const PICKER_MAX = 5
 
 export function initialCanvas(): CanvasState {
-  return { selectedId: ADD_ROW_ID, grabbedId: null, collapsed: [], picker: null, top: 0, rev: -1 }
+  return { selectedId: ADD_ROW_ID, grabbedId: null, collapsed: [], picker: null, top: 0, rev: -1, drag: null, motion: stillMotion(), clock: 0, ticking: false }
+}
+
+function samePlace(a: Place, b: Place): boolean {
+  return a.parentId === b.parentId && a.index === b.index
 }
 
 function ancestorsOf(design: Design, id: string): string[] {
@@ -277,7 +313,14 @@ export function syncCanvas(state: CanvasState, props: Pick<CanvasProps, 'design'
   let next = state
 
   if (props.rev !== state.rev) {
-    next = { ...next, rev: props.rev, selectedId: props.selectedId ?? ADD_ROW_ID, picker: null }
+    next = { ...next, rev: props.rev, selectedId: props.selectedId ?? ADD_ROW_ID, picker: null, drag: null }
+  }
+  if (next.drag !== null) {
+    const { id, settling } = next.drag
+    const now = flatten(design).find(row => row.node.id === id)
+    // A dropped row stays lifted until the design shows it where it was dropped.
+    const landed = settling !== null && now !== undefined && samePlace(settling.place, now.parentId === undefined ? { index: now.index } : { parentId: now.parentId, index: now.index })
+    if (!now || landed) next = { ...next, drag: null }
   }
   if (next.selectedId !== ADD_ROW_ID && !exists(next.selectedId)) {
     next = { ...next, selectedId: design.nodes[0]?.id ?? ADD_ROW_ID }
@@ -412,11 +455,126 @@ function reduceKey(state: CanvasState, input: CanvasKey, design: Design): Canvas
  * to post when the hooks module has to act on it.
  */
 export function canvasReduce(state: CanvasState, input: CanvasInput, context: CanvasContext): CanvasResult {
-  const result = reduceKey(state, input, context.design)
+  // A key lets go of whatever the pointer holds.
+  const result = input.type === 'pointer' ? reducePointer(state, input, context) : reduceKey(state.drag ? { ...state, drag: null } : state, input, context.design)
   if (result.state === state) return result
+  // The window stays put under a row in flight: the pointer's line must keep meaning the same row.
+  if (isDragging(result.state.drag)) return result
   const layout = layoutCanvas(buildDesignRows(context.design, { collapsed: result.state.collapsed, selectedId: result.state.selectedId }), result.state.picker)
   const top = scrollTop(result.state.top, layout, context.capacity ?? 0)
-  return top === result.state.top ? result : { ...result, state: { ...result.state, top } }
+  const { drag } = result.state
+  if (top === result.state.top && (!drag || drag.top === top)) return result
+  return { ...result, state: { ...result.state, top, drag: drag ? { ...drag, top } : null } }
+}
+
+// ---------------------------------------------------------------------------
+// Pointer: click to select, press and move to drag a row (with its subtree)
+
+/** Columns one level of nesting takes on the rail. */
+export const INDENT = 3
+
+function isDragging(drag: DragState | null): boolean {
+  return drag !== null && (drag.active || drag.settling !== null)
+}
+
+/**
+ * Where a row dropped at `line` lands. `rest` is the rows without the dragged
+ * subtree, `+ add` last. The line picks the slot (the row lands before
+ * `rest[slot]`); where a slot is ambiguous (the end of a container against
+ * after it), `depth` picks, clamped to what the slot allows. Null when the
+ * line is outside the list.
+ */
+export function dropTarget(rest: readonly DesignRow[], line: number, depth: number): DropTarget | null {
+  const count = rest.length - 1
+  if (count < 0 || line < 0 || line > count + 1) return null
+  const slot = Math.min(line, count)
+  const above = rest[slot - 1]
+  const below = rest[slot]
+  const shallowest = below && below.kind === 'node' ? below.depth : 0
+  const deepest = above ? (above.container && !above.collapsed ? above.depth + 1 : above.depth) : 0
+  const at = Math.max(shallowest, Math.min(deepest, depth))
+
+  let parentId: string | undefined
+  if (at > 0) {
+    for (let i = slot - 1; i >= 0; i--) {
+      const row = rest[i]
+      if (row && row.depth === at - 1) {
+        parentId = row.id
+        break
+      }
+    }
+    // Only a container opens a deeper slot, so this does not happen; refuse rather than guess.
+    if (parentId === undefined) return null
+  }
+  const index = rest.slice(0, slot).filter(row => row.depth === at && row.parentId === parentId).length
+  return { place: parentId === undefined ? { index } : { parentId, index }, slot, depth: at }
+}
+
+export type DragView = {
+  /** The dragged row, folded: its subtree travels inside it. */
+  lifted: DesignRow
+  /** The rows without it, as they would be drawn. */
+  rest: DesignRow[]
+  /** Null over an invalid place: no gap is shown and a drop there does nothing. */
+  target: DropTarget | null
+}
+
+/** What a drag in flight looks like; null when no row is being dragged. */
+export function dragView(design: Design, state: Pick<CanvasState, 'drag' | 'collapsed'>, options: { lints?: readonly LintMark[]; capacity?: number } = {}): DragView | null {
+  const { drag } = state
+  if (drag === null || !isDragging(drag)) return null
+  const lifted = buildDesignRows(design, { collapsed: [...state.collapsed, drag.id], lints: options.lints ?? [] }).find(row => row.id === drag.id)
+  if (!lifted) return null
+  const rest = buildDesignRows(removeNode(design, drag.id).design, { collapsed: state.collapsed, lints: options.lints ?? [] })
+  if (drag.settling) return { lifted, rest, target: drag.settling }
+  const capacity = options.capacity ?? 0
+  const outside = drag.y < 0 || (capacity > 0 && drag.y >= capacity)
+  const depth = lifted.depth + Math.round((drag.x - drag.downX) / INDENT)
+  return { lifted, rest, target: outside ? null : dropTarget(rest, drag.top + drag.y, depth) }
+}
+
+function reducePointer(state: CanvasState, input: CanvasPointer, context: CanvasContext): CanvasResult {
+  const { design } = context
+  const capacity = context.capacity ?? 0
+  const { x, y } = input
+
+  if (input.event === 'down') {
+    const base: CanvasState = state.drag === null && state.grabbedId === null ? state : { ...state, drag: null, grabbedId: null }
+    // A press outside an open picker closes it and does nothing else.
+    if (base.picker) return { state: { ...base, picker: null } }
+    if (y < 0 || (capacity > 0 && y >= capacity)) return { state: base }
+    const rows = buildDesignRows(design, { collapsed: base.collapsed, selectedId: base.selectedId })
+    const top = scrollTop(base.top, layoutCanvas(rows, null), capacity)
+    const row = rows[top + y]
+    if (!row) return { state: base }
+
+    const result = (next: CanvasState): CanvasResult =>
+      row.id === state.selectedId ? { state: next } : { state: next, post: { kind: 'select', id: row.kind === 'add' ? null : row.id } }
+    const picked: CanvasState = { ...base, selectedId: row.id }
+    if (row.kind === 'add') return result(openPicker(picked, rows, false, design))
+    // The glyph (and the cell after it) of a container folds and unfolds it.
+    if (row.container && x >= row.rail.length && x <= row.rail.length + 1) {
+      const collapsed = row.collapsed ? base.collapsed.filter(id => id !== row.id) : [...base.collapsed, row.id]
+      return result({ ...picked, collapsed })
+    }
+    return result({ ...picked, drag: { id: row.id, downX: x, downY: y, x, y, top, active: false, settling: null } })
+  }
+
+  const { drag } = state
+  // Crossing the region's edge changes nothing: the instance holds the pointer until `up`.
+  if (!drag || drag.settling || input.event === 'enter' || input.event === 'leave') return { state }
+  const held: DragState = { ...drag, x, y, active: drag.active || y !== drag.downY }
+  if (input.event === 'move') return held.x === drag.x && held.y === drag.y ? { state } : { state: { ...state, drag: held } }
+
+  // up: a click was settled at `down`; a drag commits with one move, or cancels.
+  const dropped: CanvasState = { ...state, drag: null }
+  if (!held.active) return { state: dropped }
+  const view = dragView(design, { drag: held, collapsed: state.collapsed }, { capacity })
+  if (!view || !view.target) return { state: dropped }
+  const { lifted, target } = view
+  const from: Place = lifted.parentId === undefined ? { index: lifted.index } : { parentId: lifted.parentId, index: lifted.index }
+  if (samePlace(from, target.place)) return { state: dropped }
+  return { state: { ...state, drag: { ...held, settling: target } }, post: { kind: 'move', id: drag.id, to: target.place } }
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +585,10 @@ export type CanvasLine =
   | { kind: 'picker'; rail: string; query: string }
   | { kind: 'match'; rail: string; type: NodeType; glyph: string; name: string; hint: string; active: boolean }
   | { kind: 'empty'; rail: string }
+  /** The dragged row, in the gap its drop would fill, indented for `depth`. */
+  | { kind: 'lifted'; row: DesignRow; rail: string }
+  /** A line no row is on while rows slide. */
+  | { kind: 'blank' }
 
 export type CanvasLayout = {
   lines: CanvasLine[]
@@ -485,8 +647,83 @@ export function windowCanvas(layout: CanvasLayout, top: number, capacity: number
   return { top: first, lines, above: first, below: layout.lines.length - first - lines.length }
 }
 
+// ---------------------------------------------------------------------------
+// The whole view: what canvas.tsx draws for a state, and its motion
+
+function liftedRail(depth: number): string {
+  return depth <= 0 ? '' : `${GLYPH.rail}  ${' '.repeat(INDENT * (depth - 1))}${GLYPH.railBranch} `
+}
+
+export type CanvasView = {
+  rows: DesignRow[]
+  layout: CanvasLayout
+  /** The first line of the window to ask `windowCanvas` for. */
+  top: number
+  /** The row the pointer holds: it follows the pointer and never tweens. */
+  pinned: string | null
+  /** Whether a drag is in flight, and whether a drop now would move the row. */
+  dragging: 'valid' | 'invalid' | null
+}
+
+/** The lines for a state: the rows and picker, or, during a drag, the rest of the rows with the lifted row in its gap. */
+export function viewCanvas(state: CanvasState, props: Pick<CanvasProps, 'design' | 'lints'>, capacity: number = 0): CanvasView {
+  const drag = dragView(props.design, state, { lints: props.lints, capacity })
+  if (drag && drag.target) {
+    const { slot, depth } = drag.target
+    const lines: CanvasLine[] = drag.rest.map(row => ({ kind: 'row', row }))
+    lines.splice(slot, 0, { kind: 'lifted', row: drag.lifted, rail: liftedRail(depth) })
+    return { rows: drag.rest, layout: { lines, focus: slot, focusEnd: slot }, top: state.drag?.top ?? state.top, pinned: drag.lifted.id, dragging: 'valid' }
+  }
+  // Over an invalid place the rows stand as they are, the dragged one lit where it came from.
+  const rows = buildDesignRows(props.design, {
+    selectedId: state.selectedId,
+    grabbedId: drag ? drag.lifted.id : state.grabbedId,
+    collapsed: state.collapsed,
+    lints: props.lints,
+  })
+  return { rows, layout: layoutCanvas(rows, state.picker), top: drag ? (state.drag?.top ?? state.top) : state.top, pinned: null, dragging: drag ? 'invalid' : null }
+}
+
+/** The line each row belongs on: what the motion animator compares between drawings. */
+export function lineYs(lines: readonly CanvasLine[]): Record<string, number> {
+  const ys: Record<string, number> = {}
+  for (const [at, line] of lines.entries()) if (line.kind === 'row' || line.kind === 'lifted') ys[line.row.id] = at
+  return ys
+}
+
+/**
+ * Takes the lines about to be drawn into the motion state: rows whose line
+ * changed start sliding. Returns `state` itself when nothing moved.
+ */
+export function moveCanvas(state: CanvasState, view: Pick<CanvasView, 'layout' | 'pinned'>): CanvasState {
+  const motion = stepMotion(state.motion, lineYs(view.layout.lines), state.clock, view.pinned)
+  return motion === state.motion ? state : { ...state, motion }
+}
+
+/** Whether rows are sliding: the only time the ticker should run. */
+export function canvasMoving(state: Pick<CanvasState, 'motion' | 'clock'>): boolean {
+  return motionActive(state.motion, state.clock)
+}
+
+/** One tick of the shared ticker: the clock moves a frame; when every row has arrived, `ticking` goes false and the clock rests. */
+export function tickCanvas(state: CanvasState): CanvasState {
+  const clock = state.clock + FRAME_MS
+  const motion = settleMotion(state.motion, clock)
+  return motionActive(motion, clock) ? { ...state, clock, motion } : { ...state, clock: 0, motion: { ys: motion.ys, tweens: {} }, ticking: false }
+}
+
+/** The layout with every sliding row on the line it is passing; emptied lines are blank. */
+export function animateLayout(layout: CanvasLayout, state: Pick<CanvasState, 'motion' | 'clock'>): CanvasLayout {
+  const offsets = rowOffsets(state.motion, state.clock)
+  if (Object.keys(offsets).length === 0) return layout
+  const placed = placeRows(layout.lines, line => (line.kind === 'row' ? (offsets[line.row.id] ?? 0) : 0))
+  return { ...layout, lines: placed.map(line => line ?? { kind: 'blank' }) }
+}
+
 /** The dim hotkey line under the canvas, for the state the canvas is in. */
-export function hintLine(state: Pick<CanvasState, 'picker' | 'grabbedId'>, row: DesignRow | undefined): string {
+export function hintLine(state: Pick<CanvasState, 'picker' | 'grabbedId'>, row: DesignRow | undefined, dragging: CanvasView['dragging'] = null): string {
+  if (dragging === 'valid') return 'release to drop · left/right picks the depth · release on this line to cancel'
+  if (dragging === 'invalid') return 'no place here: release to cancel'
   if (state.picker) return 'type to filter · ↑/↓ choose · enter add · backspace on empty cancels'
   if (state.grabbedId !== null) return `moving ${state.grabbedId} · j/k move · space drop`
   if (!row || row.kind === 'add') return 'j/k move · a add · ? card'
