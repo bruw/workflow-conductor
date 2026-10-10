@@ -1,0 +1,118 @@
+{
+  "a036516173c1c3d38": {
+    "description": "review:widgets",
+    "workflowPhase": "Review"
+  },
+  "a045b3e5c1c07a68f": {
+    "description": "impl:settings-pages",
+    "workflowPhase": "Implement"
+  },
+  "a096a3f48c923358d": {
+    "description": "review:pages",
+    "workflowPhase": "Review"
+  },
+  "a1076d93c0d232cc4": {
+    "description": "review:ranking",
+    "workflowPhase": "Review"
+  },
+  "a145aea4a5b29eb48": {
+    "description": "triage",
+    "workflowPhase": "Triage"
+  },
+  "a3a60ffa00f754bf4": {
+    "description": "review:gui-blocking",
+    "workflowPhase": "Review"
+  },
+  "a49603d5b7532c77f": {
+    "description": "impl:render-pipeline",
+    "workflowPhase": "Implement"
+  },
+  "a4aaef07b15aa1820": {
+    "description": "impl:shared-terms",
+    "workflowPhase": "Implement"
+  },
+  "a4ada4df99aebadba": {
+    "description": "review:startup",
+    "workflowPhase": "Review"
+  },
+  "a4de6352076938243": {
+    "description": "impl:store-writes",
+    "workflowPhase": "Implement"
+  },
+  "a50c045a94d81a487": {
+    "description": "review:local-models",
+    "workflowPhase": "Review"
+  },
+  "a52933b1db3bc4067": {
+    "description": "review:ai-and-background",
+    "workflowPhase": "Review"
+  },
+  "a55fd3b66b3458a80": {
+    "description": "review:store",
+    "workflowPhase": "Review"
+  },
+  "a5d3dd83a4f5e3f3d": {
+    "description": "impl:sweep-pipeline",
+    "workflowPhase": "Implement"
+  },
+  "a66000acb5895a994": {
+    "description": "impl:startup",
+    "workflowPhase": "Implement"
+  },
+  "a6898877c16d1e5d5": {
+    "description": "impl:home-refresh",
+    "workflowPhase": "Implement"
+  },
+  "a7783b46c13fbbe32": {
+    "description": "impl:tracker-pages",
+    "workflowPhase": "Implement"
+  },
+  "a81cc10c95bdcb2b6": {
+    "description": "impl:local-models",
+    "workflowPhase": "Implement"
+  },
+  "a83960c75df460a6a": {
+    "description": "impl:fonts-and-form",
+    "workflowPhase": "Implement"
+  },
+  "a8474af1ed82044d2": {
+    "description": "impl:ollama-num-ctx",
+    "workflowPhase": "Implement"
+  },
+  "a849e988eb216919f": {
+    "description": "impl:chat-stream",
+    "workflowPhase": "Implement"
+  },
+  "aaef8294c03faf5cf": {
+    "description": "impl:jobs-page",
+    "workflowPhase": "Implement"
+  },
+  "ab20be2a681bdbf03": {
+    "description": "impl:gui-crossings",
+    "workflowPhase": "Implement"
+  },
+  "abcec64518f19f7d9": {
+    "description": "review:resume-render",
+    "workflowPhase": "Review"
+  },
+  "abf06411f4afb091d": {
+    "description": "integrate",
+    "workflowPhase": "Integrate"
+  },
+  "ac6c4f332d412d2d6": {
+    "description": "triage",
+    "workflowPhase": "Triage"
+  },
+  "acbcbba98f6e40b15": {
+    "description": "review:widgets",
+    "workflowPhase": "Review"
+  },
+  "ad17f157f69f8674c": {
+    "description": "review:gui-blocking",
+    "workflowPhase": "Review"
+  },
+  "ae377b3d3142267de": {
+    "description": "review:sourcing",
+    "workflowPhase": "Review"
+  }
+}
