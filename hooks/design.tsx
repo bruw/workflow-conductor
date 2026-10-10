@@ -150,6 +150,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const handoff = buildHandoff(parsed.design, path)
       // The next run to start is this design's: its agents count against these ids.
       tracker.handoff({ name, nodeIds: flatten(parsed.design).map(row => row.node.id) })
+      // The designer's "run: … is in the prompt" hint is spent once the command has been sent.
+      await update($, uiAtom, held => (held.notice?.startsWith('run: ') ? { ...held, notice: null } : held))
       const prompt = `Implement and run the "${name}" workflow design.`
       const fill = async (): Promise<void> => {
         const filled = await $.prompt.fill({ text: prompt }).catch(() => ({ isFilled: false }))

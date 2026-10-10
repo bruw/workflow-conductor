@@ -333,6 +333,9 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'design-run' })
     expect(fills).toEqual(['/conductor run demo'])
     expect(state.ui?.notice).toMatch(/esc, then Enter/)
+    // Sending that command spends the hint: it must not sit under the run it started.
+    await $.command.run({ command: 'conductor', args: 'run demo', ...RUN })
+    expect(state.ui?.notice).toBe(null)
 
     await ui.unmount()
   })
