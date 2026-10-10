@@ -220,3 +220,12 @@ The test kit checks the tree a hook returns, not the surface's paint.
 - **Handoff:** `$.prompt.submit` is refused inside a `command.run` hook; it is sent from `$.clock.after(64)`. `/conductor run <name> fill` fills the prompt instead. The Run button and `r` fill `/conductor run <name>` (a plugin's own `$.command.run` skips its own hooks). Conventions text lives in `src/design/handoff.ts`.
 - **Drag:** depth follows horizontal movement since the press (3 columns per level); release outside the rows or any key cancels; rows are placed by line order with blank lines; one module-level ticker (one canvas at a time).
 - **Open canvas items:** the canvas hint line duplicates the toolbar; toolbar grab is not drawn on the canvas (needs a `grabbedId` prop); the canvas's own `x` deletes containers without confirming; a refused move leaves the row lifted; no auto-scroll during drag.
+
+## Findings from P6b
+
+- **Overlay:** the designer canvas shows per-node status glyph, settled/total, tokens and (from 72 columns) a bar; containers aggregate descendants; an `unmapped ×N` group lists agents whose label matched no node; `o` or a click opens a node's agent list (capped at 12).
+- **Attribution:** `runDesign` is set by handoff only. A handoff never followed by a run would claim the next unrelated run.
+- **Lock:** editing is refused while the run is active; selection and expand still work.
+- **Dev aid:** `/conductor replay design <template> [fast|slow]` feeds a synthetic run mapped to a template's node ids.
+- **Atoms** are declared in both hooks files: validate refuses a shared atoms module.
+- **Lost on reload:** known node ids are not restored if the plugin reloads mid-run.
