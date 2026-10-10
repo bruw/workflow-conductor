@@ -1,0 +1,235 @@
+import { expect, test } from 'claude-code/testing'
+
+import type { RunState } from '../src/run/events'
+import { replayDue, replayEvents } from '../src/run/replay'
+import { createTracker, QUIET_MS, REPLAY_MS, TICK_MS } from '../src/run/tracker'
+import type { TrackerHost } from '../src/run/tracker'
+import * as review41 from '../fixtures/review-41'
+
+// A host in memory: timers fire when the test moves the time, everything else is recorded.
+function fakeHost(journal: () => string = () => '') {
+  type Pending = { at: number; every?: number; fn: () => void; off: boolean }
+  const timers: Pending[] = []
+  const log = { writes: [] as RunState[], frames: [] as number[], reads: [] as number[], statuses: [] as (string | undefined)[], toasts: [] as string[] }
+  let now = 0
+  let shown = false
+
+  const add = (ms: number, fn: () => void, every?: number) => {
+    const timer: Pending = { at: now + ms, every, fn, off: false }
+    timers.push(timer)
+
+    return { cancel: () => void (timer.off = true) }
+  }
+  const host: TrackerHost = {
+    write: state => void log.writes.push(state),
+    frame: at => void log.frames.push(at),
+    readText: async () => {
+      log.reads.push(now)
+
+      return journal()
+    },
+    every: (ms, fn) => add(ms, fn, ms),
+    after: (ms, fn) => add(ms, fn),
+    paneShown: async () => shown,
+    status: text => void log.statuses.push(text),
+    toast: text => void log.toasts.push(text),
+  }
+  const advance = async (ms: number) => {
+    const until = now + ms
+    for (;;) {
+      const due = timers.filter(timer => !timer.off && timer.at <= until).sort((a, b) => a.at - b.at)[0]
+      if (!due) break
+      now = due.at
+      if (due.every === undefined) due.off = true
+      else due.at += due.every
+      due.fn()
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    now = until
+    await Promise.resolve()
+  }
+
+  return { host, log, advance, live: () => timers.filter(timer => !timer.off).length, show: (isShown: boolean) => void (shown = isShown) }
+}
+
+const started = (agentId: string, phase?: string) => `${JSON.stringify({ type: 'started', agentId, label: agentId, phase })}\n`
+
+test('a burst of spawns reads the journal at most about twice a second', async () => {
+  let journal = ''
+  const { host, log, advance } = fakeHost(() => journal)
+  const tracker = createTracker()
+  tracker.attach(host)
+  tracker.runStarted({ runId: 'wf_1', name: 'burst', transcriptDir: '/t/wf_1' })
+
+  // 16 agents at once, then one more every 50 ms for two seconds: 56 spawns.
+  for (let i = 0; i < 16; i++) {
+    journal += started(`a${i}`, 'One')
+    tracker.agentSpawned({ runId: 'wf_1', agentId: `a${i}`, label: `a${i}` })
+  }
+  for (let i = 16; i < 56; i++) {
+    await advance(50)
+    journal += started(`a${i}`, 'Two')
+    tracker.agentSpawned({ runId: 'wf_1', agentId: `a${i}`, label: `a${i}` })
+  }
+  await advance(1000)
+
+  expect(log.reads.length).toBeLessThanOrEqual(7)
+  for (let i = 1; i < log.reads.length; i++) expect((log.reads[i] ?? 0) - (log.reads[i - 1] ?? 0)).toBeGreaterThanOrEqual(5 * TICK_MS)
+  expect(tracker.state().byPhase).toMatchObject({ One: { total: 16 }, Two: { total: 40 } })
+  expect(Object.values(tracker.state().agents).every(agent => agent.phase !== undefined)).toBe(true)
+
+  // Every phase is known: the journal is left alone from here on.
+  const reads = log.reads.length
+  await advance(3000)
+  expect(log.reads.length).toBe(reads)
+})
+
+test('an agent the journal never names is given up on, and stays without a phase', async () => {
+  const { host, log, advance } = fakeHost(() => started('other', 'Elsewhere'))
+  const tracker = createTracker()
+  tracker.attach(host)
+  tracker.runStarted({ runId: 'wf_1', transcriptDir: '/t/wf_1' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'lost' })
+
+  await advance(20_000)
+  expect(log.reads.length).toBe(8)
+  expect(tracker.state().agents.a1?.phase).toBe(undefined)
+  expect(tracker.state().byPhase).toEqual({})
+})
+
+test('state writes are coalesced: full changes per tick, token counts twice a second', async () => {
+  const { host, log, advance } = fakeHost(() => started('a1', 'One'))
+  const tracker = createTracker()
+  tracker.attach(host)
+  tracker.runStarted({ runId: 'wf_1' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'a1' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a2', label: 'a2' })
+  expect(log.writes.length).toBe(0)
+
+  await advance(TICK_MS)
+  expect(log.writes.length).toBe(1)
+  expect(Object.keys(log.writes[0]?.agents ?? {})).toEqual(['a1', 'a2'])
+
+  // Forty usage reports in two seconds reach the store four or five times.
+  const before = log.writes.length
+  for (let i = 0; i < 40; i++) {
+    tracker.agentUsage('a1', 10)
+    await advance(50)
+  }
+  const usageWrites = log.writes.length - before
+  expect(usageWrites).toBeGreaterThanOrEqual(3)
+  expect(usageWrites).toBeLessThanOrEqual(5)
+  expect(tracker.state().agents.a1?.tokens).toBe(400)
+
+  await advance(1000)
+  expect(log.writes.at(-1)?.agents.a1?.tokens).toBe(400)
+})
+
+test('the tick runs only while something is running, and the spinner only while the pane shows', async () => {
+  const { host, log, advance, live, show } = fakeHost(() => started('a1', 'One'))
+  const tracker = createTracker()
+  tracker.attach(host)
+  expect(live()).toBe(0)
+
+  tracker.runStarted({ runId: 'wf_1', transcriptDir: '/t/wf_1' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'a1' })
+  await advance(2000)
+  expect(log.frames).toEqual([])
+  expect(log.statuses.at(-1)).toBe('wf 0/1 ▸ One')
+
+  show(true)
+  await advance(2000)
+  expect(log.frames.length).toBeGreaterThan(5)
+  expect(log.statuses.at(-1)).toBe(undefined)
+
+  tracker.agentEnded('a1', { ok: true, tokens: 50 })
+  await advance(500)
+  const frames = log.frames.length
+  // Only the quiet timer is left; it ends the run and then nothing is pending at all.
+  expect(live()).toBe(1)
+  await advance(QUIET_MS)
+  expect(log.frames.length).toBe(frames)
+  expect(tracker.state().status).toBe('done')
+  expect(log.toasts).toEqual(['wf wf_1 done: 1/1 agents · 50 tokens'])
+  expect(live()).toBe(0)
+})
+
+test('a newer run takes over; late agents of the old one are ignored', async () => {
+  const { host, advance } = fakeHost()
+  const tracker = createTracker()
+  tracker.attach(host)
+  tracker.runStarted({ runId: 'wf_1', name: 'old' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'old agent' })
+  tracker.runStarted({ runId: 'wf_2', name: 'new' })
+  tracker.agentSpawned({ runId: 'wf_2', agentId: 'b1', label: 'new agent' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a2', label: 'late old agent' })
+  tracker.agentUsage('a1', 500)
+  tracker.agentEnded('a1', { ok: false })
+  await advance(200)
+
+  expect(tracker.state()).toMatchObject({ runId: 'wf_2', name: 'new', status: 'running' })
+  expect(Object.keys(tracker.state().agents)).toEqual(['b1'])
+  expect(tracker.state().agents.b1?.tokens).toBe(0)
+})
+
+test('a stored run is picked up after a reload', async () => {
+  const first = createTracker()
+  const one = fakeHost()
+  first.attach(one.host)
+  first.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'a1' })
+  first.agentUsage('a1', 300)
+  await one.advance(1000)
+
+  const two = fakeHost()
+  const second = createTracker()
+  second.attach(two.host, one.log.writes.at(-1))
+  second.agentUsage('a1', 100)
+  second.agentEnded('a1', { ok: true })
+  await two.advance(QUIET_MS + 200)
+
+  expect(second.state().agents.a1).toMatchObject({ status: 'done', tokens: 400 })
+  expect(second.state().status).toBe('done')
+})
+
+test('a slow replay spreads the fixture over ten seconds; a fast one lands at once', async () => {
+  const events = replayEvents('review-41', review41)
+  const slow = fakeHost()
+  const tracker = createTracker()
+  tracker.attach(slow.host)
+  tracker.replay(events, 'slow')
+
+  await slow.advance(REPLAY_MS / 2)
+  const mid = tracker.state()
+  expect(mid.status).toBe('running')
+  expect(Object.keys(mid.agents).length).toBeGreaterThan(5)
+  expect(Object.keys(mid.agents).length).toBeLessThan(41)
+  expect(slow.log.toasts).toEqual([])
+
+  await slow.advance(REPLAY_MS / 2 + 200)
+  expect(tracker.state().status).toBe('done')
+  expect(Object.keys(tracker.state().agents).length).toBe(41)
+  expect(slow.log.writes.at(-1)).toEqual(tracker.state())
+  expect(slow.log.toasts.length).toBe(1)
+  await slow.advance(500)
+  expect(slow.live()).toBe(0)
+
+  const fast = fakeHost()
+  const other = createTracker()
+  other.attach(fast.host)
+  other.replay(events, 'fast')
+  expect(fast.log.writes.length).toBe(1)
+  expect(fast.log.writes[0]).toEqual(tracker.state())
+  expect(fast.log.toasts.length).toBe(1)
+
+  other.clear()
+  expect(fast.log.writes.at(-1)?.status).toBe('idle')
+})
+
+test('replayDue hands out every event exactly once', async () => {
+  expect(replayDue(83, 0, 105)).toBe(0)
+  expect(replayDue(83, 105, 105)).toBe(83)
+  expect(replayDue(83, 200, 105)).toBe(83)
+  expect(replayDue(10, 1, 0)).toBe(10)
+  for (let step = 1; step <= 105; step++) expect(replayDue(83, step, 105)).toBeGreaterThanOrEqual(replayDue(83, step - 1, 105))
+})

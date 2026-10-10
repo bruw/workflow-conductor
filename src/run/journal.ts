@@ -65,6 +65,25 @@ export function journalToEvents(journalText: string, metas: Record<string, Agent
   return events
 }
 
+/**
+ * The phase of every agent the journal has a `started` line for: its title, or null when
+ * the line names none. An agent missing from the map has not been journalled yet.
+ */
+export function journalPhases(journalText: string): Map<string, string | null> {
+  const phases = new Map<string, string | null>()
+  if (typeof journalText !== 'string') return phases
+
+  for (const line of journalText.split('\n')) {
+    const entry = parseLine(line)
+    if (entry?.type !== 'started') continue
+
+    const agentId = text(entry.agentId)
+    if (agentId !== undefined) phases.set(agentId, text(entry.phase) ?? null)
+  }
+
+  return phases
+}
+
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }

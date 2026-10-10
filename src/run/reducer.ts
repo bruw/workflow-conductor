@@ -44,18 +44,38 @@ export function reduce(state: RunState, event: RunEvent, knownNodeIds?: Readonly
     }
 
     case 'agent-start': {
-      if (typeof event.agentId !== 'string' || state.agents[event.agentId]) return state
+      if (typeof event.agentId !== 'string') return state
+
+      const known = state.agents[event.agentId]
+      if (known) {
+        // A start seen again never counts twice, but it may carry the phase the first lacked.
+        const phase = typeof event.phase === 'string' && event.phase.length > 0 ? event.phase : undefined
+        if (known.phase !== undefined || phase === undefined) return state
+
+        return {
+          ...state,
+          agents: { ...state.agents, [known.agentId]: { ...known, phase } },
+          byPhase: patchBucket(state.byPhase, phase, one => ({
+            ...one,
+            total: one.total + 1,
+            [known.status]: one[known.status] + 1,
+            tokens: one.tokens + known.tokens,
+          })),
+        }
+      }
 
       const label = typeof event.label === 'string' ? event.label : ''
       const parsed = parseNodeId(label)
       const nodeId = parsed !== undefined && (!knownNodeIds || knownNodeIds.has(parsed)) ? parsed : undefined
       const agent: AgentRun = { agentId: event.agentId, label, nodeId, phase: event.phase, status: 'running', tokens: 0 }
+      // A spawn for the run that was held finished (the quiet period is a guess) reopens it.
+      const sameRun = state.runId === undefined || state.runId === event.runId
 
       return {
         ...state,
         // Agents can be seen before the run itself is announced.
         runId: state.runId ?? event.runId,
-        status: state.status === 'idle' ? 'running' : state.status,
+        status: state.status === 'idle' || sameRun ? 'running' : state.status,
         agents: { ...state.agents, [agent.agentId]: agent },
         ...patchAgentBuckets(state, agent, one => ({ ...one, total: one.total + 1, running: one.running + 1 })),
         unmapped: nodeId === undefined ? [...state.unmapped, agent.agentId] : state.unmapped,

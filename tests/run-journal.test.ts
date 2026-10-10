@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { NodeRun, RunState } from '../src/run/events'
-import { journalToEvents, sumUsage } from '../src/run/journal'
+import { journalPhases, journalToEvents, sumUsage } from '../src/run/journal'
 import type { AgentMeta } from '../src/run/journal'
 import { reduce, reduceAll } from '../src/run/reducer'
 // The runner loads code files only, so each fixture has a generated .ts mirror.
@@ -249,4 +249,26 @@ test('sumUsage survives malformed transcripts', async () => {
   expect(sumUsage(text)).toBe(11)
   expect(sumUsage('')).toBe(0)
   expect(sumUsage(undefined as unknown as string)).toBe(0)
+})
+
+test('journalPhases maps each started agent to its phase, or null when it has none', async () => {
+  const phases = journalPhases(
+    jsonl(
+      { type: 'launched' },
+      { type: 'started', agentId: 'a1', label: 'n1: plan', phase: 'Plan' },
+      { type: 'started', agentId: 'a2', label: 'n2: build' },
+      { type: 'started', agentId: 'a3', phase: '' },
+      { type: 'started', phase: 'No agent' },
+      '{"type":"started","agentId":"a4","pha',
+      { type: 'result', agentId: 'a9', phase: 'Not a start' },
+    ),
+  )
+
+  expect([...phases]).toEqual([
+    ['a1', 'Plan'],
+    ['a2', null],
+    ['a3', null],
+  ])
+  expect(journalPhases(review41.journal).size).toBe(41)
+  expect(journalPhases(undefined as unknown as string).size).toBe(0)
 })

@@ -245,3 +245,41 @@ test('an event of an unknown kind is ignored', async () => {
   const state = reduceAll([start('a1', 'n1: plan')])
   expect(reduce(state, { kind: 'something-new' } as unknown as RunEvent)).toBe(state)
 })
+
+test('a repeated agent-start fills in a missing phase without counting twice', async () => {
+  const before = reduceAll([
+    { kind: 'run-start', runId: 'wf_1' },
+    { kind: 'agent-start', runId: 'wf_1', agentId: 'a1', label: 'n1: plan' },
+    { kind: 'agent-usage', agentId: 'a1', tokens: 700 },
+    { kind: 'agent-end', agentId: 'a1', ok: false, tokens: 900 },
+  ])
+  expect(before.byPhase).toEqual({})
+
+  const after = reduce(before, { kind: 'agent-start', runId: 'wf_1', agentId: 'a1', label: 'ignored', phase: 'Plan' })
+  expect(after.agents.a1).toMatchObject({ label: 'n1: plan', phase: 'Plan', status: 'failed', tokens: 900 })
+  expect(after.byPhase).toEqual({ Plan: { total: 1, running: 0, done: 0, failed: 1, tokens: 900 } })
+  expect(after.byNode).toEqual(before.byNode)
+  expect(after.unmapped).toEqual(before.unmapped)
+
+  // A phase once known is never replaced, and an empty one is no phase.
+  expect(reduce(after, { kind: 'agent-start', runId: 'wf_1', agentId: 'a1', label: 'n1: plan', phase: 'Other' })).toBe(after)
+  expect(reduce(before, { kind: 'agent-start', runId: 'wf_1', agentId: 'a1', label: 'n1: plan', phase: '' })).toBe(before)
+})
+
+test('a spawn for the finished run reopens it; one for another run does not', async () => {
+  const done = reduceAll([
+    { kind: 'run-start', runId: 'wf_1' },
+    { kind: 'agent-start', runId: 'wf_1', agentId: 'a1', label: 'n1: plan' },
+    { kind: 'agent-end', agentId: 'a1', ok: true },
+    { kind: 'run-end', runId: 'wf_1', ok: true },
+  ])
+  expect(done.status).toBe('done')
+
+  // Filling in a phase is not a spawn.
+  expect(reduce(done, { kind: 'agent-start', runId: 'wf_1', agentId: 'a1', label: 'n1: plan', phase: 'Plan' }).status).toBe('done')
+  expect(reduce(done, { kind: 'agent-start', runId: 'wf_other', agentId: 'b1', label: 'n1: plan' }).status).toBe('done')
+
+  const reopened = reduce(done, { kind: 'agent-start', runId: 'wf_1', agentId: 'a2', label: 'n1: more' })
+  expect(reopened.status).toBe('running')
+  expect(Object.keys(reopened.agents)).toEqual(['a1', 'a2'])
+})
