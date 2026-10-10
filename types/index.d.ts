@@ -32,6 +32,9 @@ export type ConductorDesignUi = {
   rev: number
   showCard: boolean
   notice: string | null
+  grabbedId: string | null
+  picker: { at: { parentId?: string; index: number }; query: string } | null
+  confirmId: string | null
 }
 
 declare module 'claude-code' {
