@@ -16,7 +16,8 @@ const KNOB_KEYS = ['model', 'effort', 'isolation', 'agentType', 'schema', 'fanou
 
 const clip = (value: string): string => (value.length > 24 ? `${value.slice(0, 23)}…` : value).replace(/\s+/g, ' ')
 
-function outline(design: Design): string[] {
+/** One row per block, indented by nesting: `n3 verify "title" [votes=3] (has notes)`. */
+export function outline(design: Design): string[] {
   const rows = flatten(design)
   const lines = rows.slice(0, OUTLINE_MAX).map(row => {
     const knobs = KNOB_KEYS.filter(key => row.node.knobs?.[key] !== undefined).map(key => `${key}=${clip(String(row.node.knobs?.[key]))}`)

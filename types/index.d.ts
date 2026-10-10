@@ -36,6 +36,7 @@ export type ConductorDesignUi = {
   confirmId: string | null
   compact: boolean
   editing: boolean
+  flash: { ids: string[]; seq: number } | null
 }
 
 declare module 'claude-code' {

@@ -1,6 +1,6 @@
 import type { ClientModule, JsonValue } from 'claude-code'
 
-import { boardLayout, boardOffsets, boardReduce, boardTicking, dragHint, dragTarget, dragging, initialBoard, moveBoard, syncBoard, tickBoard } from '../src/ui/board-model'
+import { boardFlash, boardLayout, boardOffsets, boardReduce, boardTicking, dragHint, dragTarget, dragging, flashBoard, initialBoard, moveBoard, syncBoard, tickBoard } from '../src/ui/board-model'
 import type { BoardContext, BoardInput, BoardProps, BoardState } from '../src/ui/board-model'
 import { paintBoard, paintWeight } from '../src/ui/board-paint'
 import type { PaintOptions, Span } from '../src/ui/board-paint'
@@ -50,7 +50,8 @@ const Board: ClientModule<JsonValue, BoardState> = (raw, surface) => {
   // Motion. Cards whose place changed since the last drawing start sliding, and
   // the ticker starts with them. At most one setState per drawing, and none
   // once the places are as recorded, so a drawing never chains into a loop.
-  const moved = moveBoard(state, layout)
+  // An edit from chat marks the blocks it touched: the same ticker counts the mark down.
+  const moved = moveBoard(flashBoard(state, props.flash), layout)
   const start = boardTicking(moved, context) && (!moved.ticking || stopTicker === null)
   if (start) {
     stopTicker?.()
@@ -86,6 +87,7 @@ const Board: ClientModule<JsonValue, BoardState> = (raw, surface) => {
     hoverAt: state.hover,
     drag: held !== null && state.drag?.kind === 'card' ? { id: held, target: dragTarget(state, context), x: state.drag.x, y: state.drag.y, hint: dragHint(state, context) } : null,
     offsets: boardOffsets(state),
+    flash: boardFlash(state),
   }
   let lines = paintBoard(layout, options)
   if (paintWeight(lines) > WEIGHT_MAX) lines = paintBoard(layout, { ...options, plain: true })

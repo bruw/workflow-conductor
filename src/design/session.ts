@@ -51,6 +51,8 @@ export type DesignUi = {
   compact: boolean
   /** The selected block's fields are being typed in: an inline pane shows them only meanwhile. */
   editing: boolean
+  /** Blocks an edit from chat just touched: the board marks them for a moment. `seq` counts the edits; the ids are emptied once shown. */
+  flash: { ids: string[]; seq: number } | null
 }
 
 /** What stands in the way of an edit, and what an arrow key needs to know. */
@@ -73,7 +75,7 @@ export type ToolbarOp = BoardOp
 export type Step = { design: Design | null; ui: DesignUi; changed: boolean }
 
 export function initialUi(): DesignUi {
-  return { name: DEFAULT_DESIGN_NAME, status: 'closed', error: null, selectedId: null, showCard: false, notice: null, grabbedId: null, picker: null, confirmId: null, compact: false, editing: false }
+  return { name: DEFAULT_DESIGN_NAME, status: 'closed', error: null, selectedId: null, showCard: false, notice: null, grabbedId: null, picker: null, confirmId: null, compact: false, editing: false, flash: null }
 }
 
 /** Whether `run` is laid over the design the pane shows: it was started from that design and has begun. */
@@ -346,6 +348,7 @@ export function boardProps(design: Design, ui: DesignUi, view: BoardView, run?: 
     rows: view.rows,
     room: view.room,
   }
+  if (ui.flash && ui.flash.ids.length > 0) props.flash = ui.flash
   if (run) props.run = run
   return props
 }

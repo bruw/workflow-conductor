@@ -21,7 +21,7 @@ hooks/run.tsx               run hooks + run pane tree
 hooks/design.tsx            design hooks, inspector, commands (rename from .ts when it draws)
 hooks/canvas.tsx            Client module: the flow board
 src/run/                    events.ts reducer.ts journal.ts
-src/design/                 model.ts ops.ts lints.ts templates.ts teach.ts
+src/design/                 model.ts ops.ts lints.ts templates.ts teach.ts chat.ts
 src/ui/                     rail.ts theme.ts tween.ts board-layout.ts board-paint.ts board-model.ts
 types/index.d.ts            $.state contract
 tests/ fixtures/
@@ -301,3 +301,38 @@ The tree showed containment; a workflow is flow. The designer draws the design a
 - A string sent to a focused Client in one burst arrives as a single paste key and is ignored; Escape first hands the keys back to the prompt.
 - Text measures by code unit: a title with wide or combined characters misaligns its card.
 - No wheel reaches a Client (`ClientPointerEvent` has none). The pane's own `ui.scroll` event carries wheel ticks; panning the board from it is not built.
+
+## Design from chat
+
+Claude drafts and changes a design; the board follows live. Pure logic in `src/design/chat.ts`, hooks in `hooks/design.tsx`.
+
+**Mechanism**
+- **A model-callable tool**, `mcp__conductor__design`, registered with `$.tool.register` in a `session.start` hook (`isDeferred: false`, so its schema is in the tool list and a plain chat message reaches it without ToolSearch) and served by a `tool.call` hook on that name. The hook edits the mod's own atoms, so the pane redraws from state and nothing unchecked is saved.
+- **No system-prompt section.** The tool's description carries the vocabulary; `prompt.compose` is not hooked.
+- **The description is generated** (`toolDescription()`): one line per type from `NODE_TYPES` + `TEACH[type].hint` + `canHoldChildren`, the knobs from `KNOB_HELP` (new, in `teach.ts`, typed `Record<keyof Knobs, string>` so a new knob cannot be left out). About 2,600 characters. The long cards (`TEACH[type].card`) are behind the `guide` action and in the draft's hidden context, not in every turn.
+- **`/conductor draft <name> <description…>`**: saves an empty design with that description, shows it (pane opened without `focus`), answers with `context` (`draftBrief`: what to do, plus the full guide) and submits `Draft the "<name>" workflow design: …` from `$.clock.after(SUBMIT_DELAY_MS)`, as the handoff does. Refused when a design of that name already holds blocks.
+- **Write/Edit follow-up**: a `tool.call` hook on `{ tool: ['Write', 'Edit'] }`. When `file_path` is a design file (`designOfPath`), after `next(e)` the open design of that name is re-read and re-parsed: valid, it replaces the board's; invalid, a toast and the last good design stays. Before `next(e)` the run lock denies the call.
+
+**Tool contract** (`TOOL_SCHEMA`)
+- `action: read` → the design JSON, whether it is open, the selected block ("this block"), whether a run locks it, the lints.
+- `action: apply`, `ops: [...]`, in order, all or nothing (`applyOps`): `add` (type, title, notes?, knobs?, children? nested; placed by `after` | `before` a sibling id, or `parent` a container id, else the end of the top level), `update` (`id` + title | notes | knobs | type; a knob set to `""` is cleared), `move` (`id` + after | before | parent), `remove` (`id`).
+- `action: write`, `nodes: [...]` (`replaceDesign`): the whole tree. A block whose id exists in the design as it stood keeps it; every other block gets a fresh id from the high-water mark, whatever id it came with.
+- `action: guide` → every type's long card.
+- `name` defaults to the open design; a name that is not open is loaded from its file (or started empty) and becomes the design shown. `description` sets the design's description.
+- Answer to an edit (`editReport`): `added / changed / removed` ids, the outline (the handoff's `outline`), the lints. A refusal is `{ deny }`, which the model reads as an error: `ops[1] (move): no node n9. Nothing was changed.`, with the list to pick from appended for an unknown type, knob or a non-container parent.
+- Validation: ops go through `ops.ts` (`addNode`, `updateNode`, `moveNode`, `removeNode`, new `retypeNode`); the result is serialized and read back by `parseDesign` before it counts. Unknown knob keys are refused here (`parseDesign` alone drops them silently).
+- Run lock: an edit is denied while `runDesign` is this design and the run is `running`.
+
+**Board**
+- `designUi.flash = { ids, seq }` (`showEdit`): the added and changed blocks. The selection moves to the first added block, so the board scrolls to it; with none added it stays.
+- The Client takes a new `seq` (`flashBoard`), counts `FLASH_MS` 800 down on the shared ticker (`boardTicking` includes it; the ticker stops when it ends) and paints those cards in `claude`, the header inverse for the first 400 ms. The hooks module empties `ids` after `FLASH_CLEAR_MS` with one `$.clock.after`, so a pane reopened later does not flash again.
+- After an edit the pane is opened without `focus`: the keyboard stays in the prompt.
+
+**Findings**
+- A registered tool is served as an MCP tool of a server named after the plugin (`conductor - design (MCP)` in the transcript); it was visible about 0.5 s after `session.start`.
+- A `tool.call` hook that returns `{ result: string }` is what the model reads; `{ deny }` reads as an error.
+- The tool's arguments arrive spread on `e` beside `tool` and `tool_use_id`, so no argument may be named `tool`, `tool_use_id` or `agentId`.
+- In the dev session (auto mode) no permission question was asked for the tool. Other permission modes were not tried; `tool.check` can allow it if they ask.
+- A matcher's array is any-of: `{ tool: ['Write', 'Edit'] }` is one hook for both.
+- Real use, one session: a draft was one `write` call with no retry (6 blocks, no lints); "add a completeness critic after n4" was one `apply`; "set this block to low effort, and make n1 fan out over changed files" was a `read` then one `apply`, which also reworded two blocks' notes nobody asked about.
+- Not built: following a design file changed outside Claude's tools (no file watch), undo of a chat edit, a diff shown before applying.

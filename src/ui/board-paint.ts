@@ -124,6 +124,8 @@ export type PaintOptions = {
   offsets?: Record<string, { dx: number; dy: number; dh?: number }>
   /** Colours and hovers left out: what a board too large for one tree falls back to. */
   plain?: boolean
+  /** Blocks an edit from chat just touched: drawn in `claude`, their header inverse while `strong`. */
+  flash?: { ids: readonly string[]; strong: boolean } | null
 }
 
 const ROUND = ['╭', '─', '╮', '│', '╰', '╯'] as const
@@ -205,7 +207,9 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
   const dragId = options.drag?.id ?? null
   const subtle = look({ color: 'subtle' })
 
-  type Tone = { selected: boolean; grabbed: boolean; lifted: boolean; lit: boolean; faded: boolean; tint: string; frame: typeof ROUND | typeof HEAVY | typeof DASHED; edge: number; run: CardRun | undefined }
+  const flashIds = new Set(options.flash?.ids ?? [])
+  const flashStrong = options.flash?.strong === true
+  type Tone = { selected: boolean; grabbed: boolean; lifted: boolean; lit: boolean; faded: boolean; flashed: boolean; loud: boolean; tint: string; frame: typeof ROUND | typeof HEAVY | typeof DASHED; edge: number; run: CardRun | undefined }
   const toneOf = (card: BoardCard): Tone => {
     const selected = card.id === options.selectedId
     const grabbed = card.id === options.grabbedId
@@ -214,14 +218,17 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
     const run = runs?.get(card.id)
     // Dim is for a block the run never reached (and a card in the hand): a type is never dim by itself.
     const faded = lifted || run?.reached === false
-    const tint = faded ? 'inactive' : accentOf(card.type)
+    // A block an edit from chat just touched borrows `claude` for a moment, whatever its type.
+    const flashed = !faded && flashIds.has(card.id)
+    const tint = faded ? 'inactive' : flashed ? 'claude' : accentOf(card.type)
     // Selection is the heavy border and the bold words; the colour stays the type's.
-    return { selected, grabbed, lifted, lit, faded, tint, frame: lifted ? DASHED : lit ? HEAVY : ROUND, edge: look(lit && !faded ? { color: tint, bold: true } : { color: tint }), run }
+    return { selected, grabbed, lifted, lit, faded, flashed, loud: flashed && flashStrong, tint, frame: lifted ? DASHED : lit ? HEAVY : ROUND, edge: look((lit || flashed) && !faded ? { color: tint, bold: true } : { color: tint }), run }
   }
 
   /** A box card's top border and what is written on it. `kept` columns at its right end are left for other words. */
   const drawTop = (card: BoardCard, x: number, y: number, tone: Tone, kept: number = 0): void => {
-    const { frame, edge, tint, lit, grabbed, lifted } = tone
+    const { frame, edge, tint, lit, lifted } = tone
+    const grabbed = tone.grabbed || tone.loud
     put(x, y, `${frame[0]}${frame[1].repeat(Math.max(0, card.w - 2))}${frame[2]}`, edge)
     const marked = lints.has(card.id)
     const hx = x + (vertical ? 3 : 1)
@@ -267,7 +274,7 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
       const room = card.w - 7 - tail - mark
       if (room >= 2) {
         const head = clip(card.header, room)
-        const flags = grabbed || lifted ? { inverse: true as const } : {}
+        const flags = grabbed || lifted || tone.loud ? { inverse: true as const } : {}
         put(x + 3, y, ` ${head}`, look({ color: tint, ...flags }))
         const rest = room - head.length
         const title = rest >= 5 && card.title !== '' ? ` · ${clip(card.title, rest - 3)}` : ''

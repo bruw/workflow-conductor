@@ -60,6 +60,8 @@ export type BoardProps = {
   room: number
   /** The run of this design, drawn over its cards. */
   run?: RunOverlay
+  /** Blocks an edit from chat just touched: marked for FLASH_MS. A new `seq` is a new edit. */
+  flash?: { ids: string[]; seq: number }
 }
 
 /** The layout the props describe: the hooks module sizes the region from the same call. */
@@ -135,6 +137,10 @@ export type BoardState = {
   clock: number
   /** Whether the shared ticker runs. */
   ticking: boolean
+  /** The mark on blocks an edit from chat touched: which edit, which blocks, and the ms it still shows. */
+  flashSeq?: number
+  flashIds?: string[]
+  flashLeft?: number
 }
 
 export type BoardKey = { type: 'key'; key: string; ctrl?: true; shift?: true; meta?: true }
@@ -352,10 +358,27 @@ export function boardMoving(state: Pick<BoardState, 'motionX' | 'motionY' | 'mot
   return motionActive(state.motionX, state.clock) || motionActive(state.motionY, state.clock) || motionActive(state.motionH, state.clock)
 }
 
-/** Whether the ticker should run: cards are sliding, or a drag is held at an edge that pans. */
+/** How long the mark on freshly edited blocks shows, and how long its first, louder part lasts. */
+export const FLASH_MS = 800
+export const FLASH_STRONG_MS = 400
+
+/** Takes the edit the props announce: a `seq` not seen before starts the mark. Returns `state` itself otherwise. */
+export function flashBoard(state: BoardState, flash: BoardProps['flash']): BoardState {
+  if (!flash) return (state.flashSeq ?? 0) === 0 ? state : { ...state, flashSeq: 0 }
+  if (flash.seq === state.flashSeq) return state
+  return { ...state, flashSeq: flash.seq, flashIds: flash.ids, flashLeft: flash.ids.length > 0 ? FLASH_MS : 0 }
+}
+
+/** The blocks marked right now, and whether the mark is in its louder part; null with none. */
+export function boardFlash(state: Pick<BoardState, 'flashIds' | 'flashLeft'>): { ids: string[]; strong: boolean } | null {
+  const left = state.flashLeft ?? 0
+  return left > 0 && state.flashIds && state.flashIds.length > 0 ? { ids: state.flashIds, strong: left > FLASH_MS - FLASH_STRONG_MS } : null
+}
+
+/** Whether the ticker should run: cards are sliding, a mark is showing, or a drag is held at an edge that pans. */
 export function boardTicking(state: BoardState, context: BoardContext): boolean {
   const way = dragScroll(state, context)
-  return boardMoving(state) || way.dx !== 0 || way.dy !== 0
+  return boardMoving(state) || (state.flashLeft ?? 0) > 0 || way.dx !== 0 || way.dy !== 0
 }
 
 /** One tick of the shared ticker. When every card has arrived and nothing pans, `ticking` goes false and the clock rests. */
@@ -368,8 +391,9 @@ export function tickBoard(state: BoardState, context: BoardContext): BoardState 
   const motionX = settleMotion(state.motionX, clock)
   const motionY = settleMotion(state.motionY, clock)
   const motionH = settleMotion(state.motionH, clock)
-  if (panning || motionActive(motionX, clock) || motionActive(motionY, clock) || motionActive(motionH, clock)) return { ...panned, clock, motionX, motionY, motionH }
-  return { ...panned, clock: 0, motionX: { ys: motionX.ys, tweens: {} }, motionY: { ys: motionY.ys, tweens: {} }, motionH: { ys: motionH.ys, tweens: {} }, ticking: false }
+  const flashLeft = Math.max(0, (state.flashLeft ?? 0) - FRAME_MS)
+  if (panning || flashLeft > 0 || motionActive(motionX, clock) || motionActive(motionY, clock) || motionActive(motionH, clock)) return { ...panned, clock, motionX, motionY, motionH, flashLeft }
+  return { ...panned, flashLeft: 0, flashIds: [], clock: 0, motionX: { ys: motionX.ys, tweens: {} }, motionY: { ys: motionY.ys, tweens: {} }, motionH: { ys: motionH.ys, tweens: {} }, ticking: false }
 }
 
 /** Every sliding or growing card's distance from its place and its size, in cells. */

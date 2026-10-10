@@ -1,9 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { On } from 'claude-code'
 
+import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, guideText, readReport, replaceDesign, showEdit, toolDescription } from '../src/design/chat'
 import { lint } from '../src/design/lints'
 import { buildHandoff } from '../src/design/handoff'
-import { EFFORTS, findNode, flatten, parseDesign, serializeDesign } from '../src/design/model'
+import { EFFORTS, emptyDesign, findNode, flatten, parseDesign, serializeDesign } from '../src/design/model'
 import type { Design, NodeType } from '../src/design/model'
 import type { NodePatch } from '../src/design/ops'
 import {
@@ -67,7 +68,7 @@ export const SUBMIT_DELAY_MS = 64
 /** A redraw's worth of wait before the ring moves to an element just drawn. */
 export const FOCUS_DELAY_MS = 48
 /** What /conductor this module answers: its verbs, `replay design`, and no argument at all (a run shown on its design); run.tsx answers the rest. */
-export const DESIGN_VERBS = /^\s*((design|run|list)(\s|$)|replay\s+design(\s|$)|$)/
+export const DESIGN_VERBS = /^\s*((design|run|list|draft)(\s|$)|replay\s+design(\s|$)|$)/
 /** One digit or one lowercase letter each: all a Button's `hotkey` takes (no space, no `?`). One row of them. */
 const TOOLBAR: readonly { op: ToolbarOp; hotkey: string; label: string }[] = [
   { op: 'left', hotkey: 'h', label: '←' },
@@ -92,6 +93,8 @@ export const PANE_ROWS = 28
 /** Columns asked for when the pane is docked beside the transcript: the toolbar on one row, and room for a card's notes. */
 export const PANE_COLUMNS = 86
 const PANE_OPEN = { id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, focus: true, rows: PANE_ROWS, columns: PANE_COLUMNS } as const
+/** The pane shown without the keyboard: an edit from chat opens it and the person goes on typing in the prompt. */
+const PANE_SHOW = { id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, rows: PANE_ROWS, columns: PANE_COLUMNS } as const
 
 // The run's state. Both hooks modules declare these (an atom must be spelled in the
 // file that reads it): run.tsx writes them through the tracker, design.tsx reads them.
@@ -147,6 +150,44 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         .sort()
 
       return { text: names.length === 0 ? `No saved designs yet: /${COMMAND} design <name> starts one.` : `Saved designs (${DESIGN_DIR}): ${names.join(', ')}` }
+    }
+
+    if (verb === 'draft') {
+      const [first = '', ...words] = rest
+      const brief = words.join(' ').trim()
+      if (first === '' || brief === '') return { text: `Usage: /${COMMAND} draft <name> <what the workflow should do>` }
+      const name = designName(first)
+      const path = designFile(root, name)
+      if (await $.fs.exists(path)) {
+        const saved = parseDesign(await $.fs.read(path).catch(() => ''))
+        // A draft never writes over work: an existing design is changed by asking in chat.
+        if (!saved.ok || saved.design.nodes.length > 0) {
+          return { text: `A design named ${name} exists (${DESIGN_DIR}/${name}.json). Open it with /${COMMAND} design ${name} and ask for changes in chat, or draft under another name.` }
+        }
+      }
+      const blank: Design = { ...emptyDesign(name), description: brief }
+      try {
+        await $.fs.write(path, serializeDesign(blank))
+      } catch (error) {
+        return { text: `Design ${name} could not be saved: ${reason(error)}` }
+      }
+      await update($, designAtom, () => blank)
+      await update($, uiAtom, held => ({ ...initialUi(), name, status: 'ready' as const, compact: held.compact }))
+      await $.ui.open(PANE_SHOW)
+      const prompt = `Draft the "${name}" workflow design: ${brief}`
+      // As the handoff: `prompt.submit` is refused inside this hook, so it is sent once the command has settled.
+      $.clock.after(SUBMIT_DELAY_MS, () => {
+        const fill = async (): Promise<void> => {
+          const filled = await $.prompt.fill({ text: prompt }).catch(() => ({ isFilled: false }))
+          $.ui.toast(filled.isFilled ? 'conductor: press Enter to start the draft' : `conductor: type "${prompt}" to start the draft`)
+        }
+        void $.prompt
+          .submit({ text: prompt })
+          .then(entered => (entered.drop === undefined ? undefined : fill()))
+          .catch(() => fill())
+      })
+
+      return { text: `drafting design "${name}"`, context: draftBrief(name, brief) }
     }
 
     if (verb === 'run') {
@@ -221,6 +262,91 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     if (step.ui.status === 'error') return { text: `Design ${name} could not be opened: ${step.ui.error}` }
 
     return { text: step.ui.status === 'pick' ? `No design named ${name} yet: pick a template in the pane.` : `Design ${name} opened.` }
+  })
+
+  // The tool Claude edits a design with. The matcher is always true: run.tsx holds the unmatched session.start.
+  on('session.start', { cwd: /^/ }, async ($, e, next) => {
+    await $.tool.register({ name: TOOL_NAME, description: toolDescription(), inputSchema: TOOL_SCHEMA, isDeferred: false })
+
+    return next(e)
+  })
+
+  // The design tool. Every edit is made by src/design/chat.ts on the mod's own
+  // state, so the board redraws from the atoms and nothing unchecked is saved.
+  on('tool.call', { tool: TOOL_FULL_NAME }, async ($, e) => {
+    const input = e as unknown as Record<string, unknown>
+    const action = input.action
+    if (action === 'guide') return { result: guideText() }
+    if (action !== 'read' && action !== 'apply' && action !== 'write') return { deny: 'action must be one of read, apply, write, guide' }
+
+    const ui = await read($, uiAtom)
+    const asked = typeof input.name === 'string' && input.name.trim() !== '' ? designName(input.name) : null
+    const name = asked ?? (ui.status === 'ready' ? ui.name : null)
+    if (name === null) return { deny: `No design is open on the board and no name was given. Pass name, or ask the user to open one with /${COMMAND} design <name>.` }
+    const path = designFile(await $.session.root(), name)
+    const isOpen = ui.status === 'ready' && ui.name === name
+    let design: Design | null = isOpen ? await read($, designAtom) : null
+    if (design === null) {
+      if (await $.fs.exists(path)) {
+        const parsed = parseDesign(await $.fs.read(path).catch(() => ''))
+        if (!parsed.ok) return { deny: `${DESIGN_DIR}/${name}.json is not a valid design (${parsed.error}). Nothing was changed.` }
+        design = parsed.design
+      } else if (action === 'read') {
+        return { deny: `No design named ${name}. An apply or write with that name starts it.` }
+      } else design = emptyDesign(name)
+    }
+    const locked = (await read($, runDesignAtom)) === name && (await read($, runAtom)).status === 'running'
+    if (action === 'read') return { result: readReport(design, { open: isOpen, selectedId: isOpen ? ui.selectedId : null, locked }) }
+    // The lock the board applies to the person's own edits.
+    if (locked) return { deny: `Design ${name} is being run: editing is locked until the run ends, for the board and for you alike. Tell the user; do not retry.` }
+
+    const edit = action === 'apply' ? applyOps(design, input.ops, input.description) : replaceDesign(design, input.nodes, input.description)
+    if (!edit.ok) return { deny: edit.error }
+    try {
+      await $.fs.write(path, serializeDesign(edit.design))
+    } catch (error) {
+      return { deny: `Design ${name} could not be saved, nothing was changed: ${reason(error)}` }
+    }
+    await update($, designAtom, () => edit.design)
+    await update($, uiAtom, held => showEdit(held, name, edit.design, edit))
+    const seq = (await read($, uiAtom)).flash?.seq ?? 0
+    // Shown, but the keyboard stays where the person is typing.
+    await $.ui.open(PANE_SHOW).catch(() => undefined)
+    $.clock.after(FLASH_CLEAR_MS, () => {
+      void update($, uiAtom, held => clearFlash(held, seq))
+    })
+
+    return { result: editReport(edit.design, edit) }
+  })
+
+  // The design file written with the built-in tools: the open board follows it,
+  // and keeps the last good design when the file no longer reads as one.
+  on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
+    const target = (e as unknown as { file_path?: unknown }).file_path
+    const root = await $.session.root()
+    const name = typeof target === 'string' ? designOfPath(root, await $.session.cwd().catch(() => root), target) : null
+    if (name === null) return next(e)
+    if ((await read($, runDesignAtom)) === name && (await read($, runAtom)).status === 'running') {
+      return { deny: `Design ${name} is being run: its file is locked until the run ends.` }
+    }
+    const answer = await next(e)
+    const ui = await read($, uiAtom)
+    if (answer.deny !== undefined || answer.isError === true || ui.name !== name || ui.status === 'closed') return answer
+    const parsed = parseDesign(await $.fs.read(designFile(root, name)).catch(() => ''))
+    if (!parsed.ok) {
+      $.ui.toast(`conductor: ${name}.json is not a valid design (${parsed.error.slice(0, 80)}); the board keeps the last good one`)
+
+      return answer
+    }
+    const before = ui.status === 'ready' ? await read($, designAtom) : null
+    await update($, designAtom, () => parsed.design)
+    await update($, uiAtom, held => showEdit(held, name, parsed.design, diffDesigns(before, parsed.design)))
+    const seq = (await read($, uiAtom)).flash?.seq ?? 0
+    $.clock.after(FLASH_CLEAR_MS, () => {
+      void update($, uiAtom, held => clearFlash(held, seq))
+    })
+
+    return answer
   })
 
   on('ui.message', { requestId: DESIGN_PANE_ID, element: CANVAS_KEY }, async ($, e, next) => {

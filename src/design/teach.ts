@@ -1,7 +1,8 @@
 // Teaching content for every node type, and the palette the add-picker
 // searches. Facts follow the Workflow script reference. Pure TypeScript.
 
-import type { NodeType } from './model'
+import { EFFORTS } from './model'
+import type { Knobs, NodeType } from './model'
 
 export type Teach = {
   /** One character for the rail. */
@@ -158,6 +159,19 @@ export const TEACH: Record<NodeType, Teach> = {
       'What it finds becomes the next round of work. Give it a schema so the gaps can be acted on.',
     ],
   },
+}
+
+/** What each knob says, in a phrase: the one place the knobs are explained in words (Claude reads it; see chat.ts). */
+export const KNOB_HELP: Record<keyof Knobs, string> = {
+  prompt: 'intent of the agent prompt, not its final wording',
+  schema: 'the output, in words or as JSON Schema text',
+  model: 'haiku, sonnet or opus; unset inherits the session',
+  effort: `${EFFORTS.join(', ')}; unset inherits`,
+  isolation: '"worktree", only for agents that edit files in parallel',
+  agentType: 'a subagent type to run as',
+  fanout: 'what it runs once per, with a count when known: "changed files", "×4 dimensions"',
+  votes: 'a whole number, for verify and judge-panel',
+  until: 'when a loop stops: "2 dry rounds", "budget < 50k"',
 }
 
 /** Picker order: primitives first, then patterns. */

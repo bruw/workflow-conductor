@@ -33,10 +33,23 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 | --- | --- |
 | `/conductor` | Opens the run view. If the current run came from a design, opens that design with the run laid over it. |
 | `/conductor design [name]` | Opens the designer on a saved design, or offers templates for a new one. The name defaults to `untitled`. |
+| `/conductor draft <name> <description…>` | Claude drafts a design for the description, saves it under that name and shows it on the board. Refused when a design of that name already holds blocks. |
 | `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt. With `fill`, the prompt is left in the box for you to send. |
 | `/conductor list` | Names the saved designs. |
 | `/conductor replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
 | `/conductor replay design <template> [fast\|slow]` | Dev: replays a made-up run over a template's design (`review`, `research`, `migrate`, `judge-panel`). |
+
+## Designing by talking
+
+You do not have to assemble blocks by hand. `/conductor draft review-pr review this PR thoroughly`
+has Claude draft the design; with a design open, plain messages change it:
+"add an adversarial verify with 3 votes after n3", "set this block to low effort"
+("this block" is the one selected on the board). The board follows at once and the
+touched blocks light up for a moment. Claude edits through the `mcp__conductor__design`
+tool, which checks every edit against the design model, keeps block ids stable and
+answers with the lints; a refused edit changes nothing. While a run of the design is
+live, edits from chat are refused, as edits on the board are. A design file changed
+with Claude's Write or Edit tools is reloaded into the open board too.
 
 ## The designer: a flow board
 

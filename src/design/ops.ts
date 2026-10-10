@@ -156,6 +156,24 @@ export function updateNode(design: Design, id: string, patch: NodePatch): OpResu
   return { design: { ...design, nodes: replace(design.nodes, id, next) } }
 }
 
+/**
+ * Changes a node's type and nothing else. A block that holds others can only
+ * become another container.
+ */
+export function retypeNode(design: Design, id: string, type: NodeType): OpResult {
+  const node = findNode(design, id)
+  if (!node) return refuse(design, `no node ${id}`)
+  if (!isNodeType(type)) return refuse(design, `unknown type ${String(type)}`)
+  if (node.type === type) return { design }
+  if ((node.children?.length ?? 0) > 0 && !canHoldChildren(type)) {
+    return refuse(design, `${id} holds blocks and a ${type} node cannot hold children: move or remove them first`)
+  }
+  const next: DesignNode = { ...node, type }
+  if (canHoldChildren(type)) next.children = node.children ?? []
+  else delete next.children
+  return { design: { ...design, nodes: replace(design.nodes, id, next) } }
+}
+
 // One keyboard step. Down: swap with the next sibling, or step into it as its
 // first child when it is an open container; from the last slot of a container,
 // step out to just after it. Up mirrors this, so a step down then a step up

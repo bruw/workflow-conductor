@@ -19,9 +19,10 @@ const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
 const MAX_ROWS = 400
 const HELP = [
-  'Usage: /conductor [design [name] | run <name> | list | replay <fixture>]',
+  'Usage: /conductor [design [name] | draft <name> <description> | run <name> | list | replay <fixture>]',
   '  /conductor                  open the run view (on its design, when the run came from one)',
   '  /conductor design [name]    open the designer (name defaults to untitled)',
+  '  /conductor draft <name> <description>   have Claude draft a design for the description, on the board',
   '  /conductor run <name>       hand the saved design to Claude to implement and run',
   '  /conductor list             name the saved designs',
   '  /conductor replay <fixture|clear> [fast|slow]   replay a recorded run (dev)',
@@ -57,8 +58,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'conductor',
-      description: 'Workflow designer and run view: no argument opens the run view; design [name], run <name>, list, replay <fixture>',
-      argumentHint: '[design [name] | run <name> | list | replay <fixture>]',
+      description: 'Workflow designer and run view: no argument opens the run view; design [name], draft <name> <description>, run <name>, list, replay <fixture>',
+      argumentHint: '[design [name] | draft <name> <description> | run <name> | list | replay <fixture>]',
     })
 
     // A run a previous load of the module was following: when it came from a design, its
@@ -110,7 +111,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       return { text: 'Conductor pane opened.' }
     }
     // design.tsx answers these, whichever of the two hooks the engine asks first.
-    if (verb === 'design' || verb === 'run' || verb === 'list' || (verb === 'replay' && name === 'design')) return next(e)
+    if (verb === 'design' || verb === 'draft' || verb === 'run' || verb === 'list' || (verb === 'replay' && name === 'design')) return next(e)
     if (verb !== 'replay') return { text: HELP }
 
     if (name === 'clear') {
