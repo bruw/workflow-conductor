@@ -137,9 +137,22 @@ export const HANDED_NOTICE = 'keys are off here while the prompt box holds text 
 /** The cue drawn while the pane does not hold the keyboard. */
 export const KEYS_CUE = 'keys are in the prompt · click the board or /conductor'
 
+/** A notice as it may follow the cue while the keys are in the prompt: without the key it ends on, and not at all when it names any other key. */
+export function withoutKeys(text: string): string | null {
+  // A request waiting in the prompt box speaks of the prompt's own Enter: true while the keys are there.
+  if (/^(run|ask): /.test(text)) return text
+  const bare = text.replace(new RegExp(` · (${UNDO_HINT}|${REDO_HINT})$`), '')
+  return /(^|[\s(])[a-z]( again|: | [a-z] | adds )/.test(bare) || /\b(Enter|Esc|Tab)\b/i.test(bare) ? null : bare
+}
+
+/** Whether a design name is the one given when none was asked for: `untitled`, `untitled-2`. */
+export function isDefaultName(name: string): boolean {
+  return name === DEFAULT_DESIGN_NAME || new RegExp(`^${DEFAULT_DESIGN_NAME}-\\d+$`).test(name)
+}
+
 /** Whether a notice only informs (a change that was made, a request filled): drawn plain; anything else is a refusal or a question. */
 export function noticeInforms(text: string): boolean {
-  return text.endsWith(UNDO_HINT) || text.endsWith(REDO_HINT) || /^(run|ask|undone|redone): /.test(text)
+  return text.endsWith(UNDO_HINT) || text.endsWith(REDO_HINT) || /^(run|ask|undone|redone): /.test(text) || text.startsWith('named ')
 }
 
 /** Inline the pane is short, so it starts compact; docked it has the height for whole cards. */
@@ -789,5 +802,6 @@ export function bareTarget(status: RunState['status'], runDesign: string | null,
   if (status === 'running') return runDesign === null ? { view: 'run' } : { view: 'design', name: runDesign, live: true }
   if (ui.status !== 'closed') return { view: 'design', name: ui.name, live: false }
   if (status !== 'idle' && runDesign === null) return { view: 'run' }
-  return { view: 'design', name: runDesign ?? DEFAULT_DESIGN_NAME, live: false }
+  // A replay's design is the session's only: once it is gone it is never offered as a design to create.
+  return { view: 'design', name: runDesign !== null && isSaved(runDesign) ? runDesign : DEFAULT_DESIGN_NAME, live: false }
 }

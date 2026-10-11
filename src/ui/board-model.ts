@@ -226,7 +226,8 @@ export function syncBoard(state: BoardState, context: BoardContext): BoardState 
   }
   // A selected card that moved or grew (a drop, a block added before it, its notes opening) is followed as a new selection is.
   const card = context.layout.cards.find(one => one.id === context.selectedId)
-  const seen = card ? `${card.id}@${card.x},${card.y},${card.w},${card.h}` : context.selectedId
+  // The window's size is part of it: a pane that grew or shrank (a second key row, a resize) shows its selected card whole again.
+  const seen = card ? `${card.id}@${card.x},${card.y},${card.w},${card.h}/${context.columns}x${context.rows}` : context.selectedId
   if (seen !== next.seen) {
     next = { ...next, seen }
     if (card) {

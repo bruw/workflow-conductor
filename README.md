@@ -11,6 +11,19 @@ implement and run, and watch the run's progress on the same design.
 - The pane asks the dock for a width that leaves the transcript about half the terminal. A dock width you dragged (Claude Code keeps it) wins over that.
 - For development: `bun` (the gate runs `bunx tsc`).
 
+## Before you start
+
+- **Use a wide terminal and the docked pane.** About 160×40 or more: the pane then docks beside the transcript with the whole inspector and two key rows. Above the prompt (inline, under 110 columns) is a reduced view: a compact board of a few rows, one line for the selected block, the fields only while you edit. In a terminal as short as 30 rows the board shrinks to the selected card, and to nothing while the fields, the add list or a help page are open; the header row always stays.
+- **A dock width you once dragged is remembered by Claude Code** and wins over the width Conductor asks for. Drag the dock's border to change it.
+- **Escape always hands the keyboard back to the prompt.** No mod can keep it. Text you typed into a field is not lost: it is saved as an edit (the pane says `n3 changed: notes`, and `u` undoes it) on Escape and on every other way out of a field: Tab, Enter, a click on the board or on a key, a picker's choice, a `/conductor` command, a prompt you send, an edit from chat, a resize, closing the pane. Press `u` afterwards if you did not mean it.
+- **Move with `h` `j` `k` `l`.** The arrow keys, Tab and Enter belong to Claude Code's focus ring, not to the board. On the key rows the ring stays on `c: help`, so Up, Down or Tab there do nothing and Enter opens a help page: no arrow-then-Enter can run or delete. Inside the fields (after `e`, `d` or a click on one) Tab and the arrows walk the fields and pickers as usual. The Left arrow opens Claude Code's own agents list; Conductor cannot change that, and on coming back from it the pane was seen to start afresh (saved designs are on disk; the selection and undo history were gone).
+- **If letters appear in the prompt, the pane has lost the keyboard** (it says `keys are in the prompt · click the board or /conductor`). Clear the box, then click the board or type `/conductor`. A letter or digit that is no key in the pane is swallowed and the pane keeps the keyboard (`b is not a key here`); other characters go to the prompt.
+- **The design is a spec.** Claude writes the workflow script from it; the structure follows the design, details vary between runs.
+- **A run counts as ended after 8 quiet seconds** (no agent running, no new one started). Its results stay on the board until the first edit or `q`.
+- **Undo is per design, fifty steps, for the session.** It is not saved with the design. It survives `/reload-plugins`; it is lost when the session ends, when the mod's code is reloaded after a change, and after a visit to the agents list.
+- **No scroll wheel on the board.** Drag the background, or move the selection.
+- **Names.** `/conductor design <name>` names a design before you start it; a design started without a name is `untitled`, and `/conductor rename <old> <new>` renames any saved design. Names starting with `replay-` are kept for replays.
+
 ## Install for development
 
 Terminal:
@@ -37,6 +50,7 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 | `/conductor draft <name> <description…>` | Claude drafts a design for the description, saves it under that name and shows it on the board. Refused when a design of that name already holds blocks. |
 | `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt; the pane switches to that design. With `fill`, the request is left in the box, ending `on: `, for you to say what to run it on and send. The answer says what the design implies: `at least 18 agents · 2 lints (n3, n5)`. |
 | `/conductor list` | The saved designs, each with its block count and description. |
+| `/conductor rename <old> <new>` | Renames a saved design (the file, and this session's undo history of it). Refused when `<new>` exists or starts with `replay-`. |
 | `/conductor delete <name>` | Deletes a saved design. Asks once more: it answers with what would go, and `/conductor delete <name> confirm` does it. |
 | `/conductor replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
 | `/conductor replay design <template> [fast\|slow]` | Dev: replays a made-up run over a template's design (`review`, `research`, `migrate`, `judge-panel`). The design is named `replay-<template>`, lives in the session only, and is never saved or listed (the `replay-` prefix is kept for this). |
@@ -112,11 +126,13 @@ The keys and the inspector stand at the bottom of the pane and the board takes e
 not when another block is selected, not when something is said. Docked, from the bottom up: two rows of keys (the first
 acts on the selected block, the second on the design; each key keeps its place whether it is shown or not), one row for
 whatever needs saying (a change just made and `u: undo`, the delete question, a refused edit, the lock), the inspector, the board.
-Inline: one row of keys under short labels (the least needed are left out where the pane is too narrow for all), one line
-for the selected block, the board; the inspector's fields open when you press `e`.
+Inline: every key that works now under a short label (`a: +`, `z: fold`, `c: ?`, `n: lint`, `q: clear`) on one row, or on two
+where one cannot hold them (about 100 columns with redo, a lint or run results to show); one line for the selected block;
+the board; the inspector's fields open when you press `e`. No key is left out, so nothing the pane says names a key that is not drawn.
 
 The key rows say who has the keyboard. While the pane has it, each key's letter is lit. While it does not (after a chat
-turn, a reload, a resize, Escape), the keys are dim and the pane says `keys are in the prompt · click the board or /conductor`.
+turn, a reload, a resize, Escape), the keys are dim and the message row says `keys are in the prompt · click the board or /conductor`
+first, before anything else: what was just said follows it only without its key hint (`· n3 changed: notes`), and only where both fit.
 A click on the board gives the keys to the key rows. `r` and `v` put a request in the prompt box and the keys go there with
 it, so what you type next is typed into the prompt. If the prompt box already holds text when you click the board, the keys
 here stay off and the pane says so (`Esc returns to the prompt`).
@@ -137,7 +153,8 @@ The inspector has a field for everything a block can carry, and shows only what 
 | `votes` | picker | verify, judge panel |
 
 A knob a block carries that its type does not list (set from chat, or in the file) gets its field too.
-Enter in a field saves it, with everything typed in the block's other fields since it was selected (Tab between them loses nothing), and returns the keys to the key row.
+Enter in a field saves it and returns the keys to the key row. Text typed into a field is never dropped: every other way out of the field saves it too (Tab to the next field, a picker's choice, a click on the board or a key, Escape, a command, a prompt sent, an edit from chat, a resize, closing the pane), each as an edit `u` undoes.
+The keyboard is in a field only after `e`, `d` or a click on that field: when a run ends, when the pane is opened or shown again, the ring is on the key rows.
 The row of pickers starts with `type`, which opens the same list a block is added from (every type with what it does): the block becomes another type and keeps its notes and knobs; a title it never got (still the old type's name) becomes the new type's; one that holds blocks can only become another container.
 While the board leaves rows free, the headline and a long `notes` or `prompt` wrap into them; the goal under the header wraps to three rows.
 Under the block's id the inspector says its type in two lines: what it does, and `use when: …`.
@@ -173,8 +190,9 @@ With the keyboard, from the pane's key rows:
 | `r` | run: puts `Implement and run the "<name>" workflow design on: ` in the prompt, for you to say what to run it on and send. The keys go to the prompt. The message row says what the design implies first: `run: 6 blocks · 18 agents · 2 lints (n3, n5)`, or `12+ agents (more: 2 blocks fan out over an unknown number)` where the drawing does not say how many |
 | `q` | put away the results of a run that is over (shown while they are on the board; the first edit does the same) |
 
-Escape hands the keys back to the prompt (and closes the add or type picker to the eye). `/conductor` gives them back to the pane.
-The arrow keys belong to the pane's focus ring; `h` `j` `k` `l` move the selection.
+Escape hands the keys back to the prompt (it saves an open field's text, and closes the add or type picker to the eye). `/conductor` gives them back to the pane.
+The arrow keys, Tab and Enter belong to the pane's focus ring; `h` `j` `k` `l` move the selection. On the key rows the ring rests on `c: help` and cannot be walked onto another key, so Enter there only opens help.
+A letter or digit that is no key here is swallowed (`b is not a key here`) instead of dropping into the prompt and taking the keyboard with it.
 
 Blocks that do not follow one another are drawn so: the arms of a `branch` have `or` between them, the blocks of a `parallel` or `sweep` have `∥`, side by side when the board is whole and on a dotted row between them when it is compact.
 
@@ -223,8 +241,8 @@ Known limits:
 - Phases rely on the journal file, an internal format that may change.
 - A handoff claims the first Workflow run that starts within 3 minutes. A run started later, or without a handoff, is shown in the phase view only.
 - One run is tracked at a time, and one board is mounted at a time.
-- Undo history is kept for the session only, and is lost when the plugin reloads.
-- Inline at about 100 columns one key row cannot hold every key: `y`, `n`, `d`, `q`, `i` are left out first, and a key that is not drawn does nothing until the pane is wider or docked.
+- Undo history is kept for the session only. It survives `/reload-plugins`; it is lost when the mod's code is reloaded after a change, and after a visit to Claude Code's agents list (Left arrow).
+- Inline at about 100 columns the keys take two rows when redo, a lint or run results add theirs; in a 30-row terminal the board then has four rows and shows the top of the selected card only.
 - Replayed token counts are made up.
 
 ## Develop and test

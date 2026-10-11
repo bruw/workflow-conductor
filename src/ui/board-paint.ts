@@ -398,6 +398,10 @@ export function paintBoard(layout: BoardLayout, options: PaintOptions): Span[][]
   // Where the board goes on past the window: a sticky header for the container the top row is inside, and dim words at the edges.
   if (height >= 3 && width >= 8) {
     const marks = edgeMarks(layout, { columns: width, rows: height, panX: options.panX, panY: options.panY })
+    // In a window just as tall as the selected card, the words would be written over its border: the card is shown whole instead.
+    const chosen = layout.cards.find(card => card.id === options.selectedId && !card.container)
+    if (chosen !== undefined && chosen.y === options.panY) marks.above = ''
+    if (chosen !== undefined && chosen.y + chosen.h === options.panY + height) marks.below = ''
     if (marks.above !== '') {
       const pinned = moving ? [] : stickyCards(layout, options.panY)
       const first = pinned[0]
