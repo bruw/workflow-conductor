@@ -1,11 +1,11 @@
-// Teaching content for every node type, and the palette the add-picker
+// Teaching content for every node type, and the palette the add list
 // searches. Facts follow the Workflow script reference. Pure TypeScript.
 
 import { EFFORTS } from './model'
 import type { Knobs, NodeType } from './model'
 
 export type Teach = {
-  /** One character for the rail. */
+  /** One character, for the plain list drawn where a surface has no `Client`. */
   glyph: string
   /** The type's one name, everywhere: its id. */
   name: string
@@ -17,9 +17,16 @@ export type Teach = {
   card: string[]
 }
 
-export type Tier = 'primitive' | 'pattern'
+/** The add list's two groups: the blocks that do work themselves, and the ones that hold blocks. */
+export type PaletteGroup = 'work' | 'holds'
 
-export type PaletteEntry = { type: NodeType; tier: Tier; keywords: string[] }
+export type PaletteEntry = { type: NodeType; group: PaletteGroup; keywords: string[] }
+
+/** Each group's heading in the add list, in the order the groups are listed. */
+export const PALETTE_GROUPS: readonly { group: PaletteGroup; heading: string }[] = [
+  { group: 'work', heading: 'Blocks that do work' },
+  { group: 'holds', heading: 'Blocks that hold blocks' },
+]
 
 export const HINT_MAX = 70
 
@@ -78,13 +85,15 @@ export const TEACH: Record<NodeType, Teach> = {
   branch: {
     glyph: 'ψ',
     name: 'branch',
-    hint: 'If/else on an earlier result; plain code decides, not a model',
+    hint: 'If/else on an earlier result: one arm runs; code decides',
     when: 'a result decides what runs next, e.g. nothing found: skip the checks',
     card: [
-      'Control flow in the script: which path runs depends on an earlier result.',
+      'Control flow in the script: which arm runs depends on an earlier result. Plain code decides, not a model.',
+      'Each block directly inside it is one arm, and exactly one arm runs. An arm of several steps is a pipeline.',
+      'Every arm says its condition in `when` ("no findings"); the last arm may leave it empty: that one is the else.',
       'Typical use: zero findings, so skip verification entirely.',
       'The deciding result should come from an agent with a schema, so the test is exact.',
-      'Costs no tokens. Say in notes which condition picks which path.',
+      'Costs no tokens.',
     ],
   },
   subworkflow: {
@@ -102,10 +111,11 @@ export const TEACH: Record<NodeType, Teach> = {
   code: {
     glyph: 'λ',
     name: 'code',
-    hint: 'Plain JavaScript between agents: dedup, filter, count. No tokens',
+    hint: 'Plain JS between agents: dedup, filter, group, reduce. No tokens',
     when: 'the step is exact and mechanical: never spend an agent on it',
     card: [
       'Deterministic JavaScript in the script: dedup, filter, flatten, count, vote tally.',
+      'Grouping results (by file, by kind) and reducing many to one (merge, sum, pick the top) are code too.',
       'Use it for anything exact. Do not spend an agent on what a few lines can do.',
       'Agents feeding it need a schema, so the code receives objects and not prose.',
       'A per-item transform belongs inside a pipeline stage: it has no need to wait for the other items.',
@@ -174,9 +184,36 @@ export const TEACH: Record<NodeType, Teach> = {
       'What it finds becomes the next round of work. Give it a schema so the gaps can be acted on.',
     ],
   },
+  args: {
+    glyph: '⇢',
+    name: 'args',
+    hint: 'What the workflow is run on: its input, named once, up front',
+    when: 'the workflow takes input; left empty, it takes none',
+    card: [
+      'Declares the input the script reads from `args`: say in notes what it is, and its shape in schema.',
+      'Every design has one, always its first block: it is not added, moved or deleted.',
+      'Left empty, the workflow takes no input.',
+      'Later blocks draw on it: a fan-out over "the files in args", a prompt that quotes the question.',
+      'The values come from the request the workflow is run with.',
+      'Spawns no agent and costs no tokens.',
+    ],
+  },
+  phase: {
+    glyph: '▭',
+    name: 'phase',
+    hint: 'A named group around blocks: it only frames them, nothing more',
+    when: 'a long design reads better in named parts: gather, check, write up',
+    card: [
+      'A frame with a title and nothing else: no knobs, no fan-out, no condition.',
+      'Its blocks run one after the other where the phase stands, exactly as if it were not there.',
+      'Holds any block. At the top level its title is also the name of that part of the run.',
+      'For steps that each item takes on its own, use a pipeline: a phase adds no behaviour.',
+      'Spawns no agent and costs no tokens.',
+    ],
+  },
 }
 
-/** `use when: a step needs reading or judgment…`: the line under a type's hint, in the inspector and the add picker. */
+/** `use when: a step needs reading or judgment…`: the line under a type's hint, in the detail pane and the add list. */
 export function useWhen(type: NodeType): string {
   return `use when: ${TEACH[type].when}`
 }
@@ -192,13 +229,15 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
   fanout: 'the items it runs once per, with a count when known: "changed files", "×4 dimensions" (no leading "each")',
   votes: 'a whole number, for verify and judge-panel',
   until: 'when a loop stops: "2 dry rounds", "budget < 50k"',
+  when: 'on a block directly in a branch: the condition that picks this arm, "no findings"; the last arm with none is the else',
 }
 
 /**
  * Which knobs make sense on which type: the one place that says so. The
- * inspector offers a field for each, in this order; a knob a block carries
- * anyway (set from chat or by hand in the file) is offered after them, so
- * nothing set is ever out of reach.
+ * detail pane offers a field for each one typed as text, the card a chip for
+ * model, effort and votes; a text knob a block carries anyway (set from chat
+ * or by hand in the file) is offered after them. `isolation` has no control:
+ * Claude sets it, and the detail pane only says where it is set.
  *
  * Reasoning: a knob the script passes to `agent()` (prompt, model, effort,
  * agentType, isolation) belongs to the types that spawn agents; `votes` to the
@@ -218,11 +257,23 @@ export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
   branch: ['schema'],
   code: ['schema'],
   subworkflow: ['prompt', 'schema'],
+  args: ['schema'],
+  phase: [],
 }
 
-/** The knobs the inspector offers for a block: its type's, then any other it has set. */
-export function knobsOf(node: { type: NodeType; knobs?: Knobs }): (keyof Knobs)[] {
-  const listed = KNOBS_BY_TYPE[node.type]
+/** Whether the detail pane offers a block's notes: a phase is its title and no more, so only notes it already carries are shown. */
+export function hasNotes(node: { type: NodeType; notes?: string }): boolean {
+  return node.type !== 'phase' || (node.notes ?? '').trim() !== ''
+}
+
+/**
+ * The knobs of a block: its type's, then any other it has set.
+ * `when` belongs to no type: it is offered (after the prompt) to a block that stands
+ * directly in a `branch`, which `parentType` says.
+ */
+export function knobsOf(node: { type: NodeType; knobs?: Knobs }, parentType?: NodeType): (keyof Knobs)[] {
+  const own = KNOBS_BY_TYPE[node.type]
+  const listed: readonly (keyof Knobs)[] = parentType !== 'branch' ? own : own[0] === 'prompt' ? ['prompt', 'when', ...own.slice(1)] : ['when', ...own]
   const extra = (Object.keys(node.knobs ?? {}) as (keyof Knobs)[]).filter(key => !listed.includes(key) && node.knobs?.[key] !== undefined)
   return [...listed, ...extra]
 }
@@ -238,6 +289,7 @@ export const FIELD_LABEL = {
   prompt: 'prompt (tell the agent)',
   fanout: 'fanout (once per)',
   until: 'until (stop when)',
+  when: 'when (this arm runs if)',
   schema: 'schema (out)',
   agentType: 'agentType',
 } as const
@@ -247,25 +299,32 @@ export const FIELD_PLACEHOLDER = {
   prompt: 'the intent of its prompt; Claude writes the wording',
   fanout: 'e.g. changed files, ×4 dimensions',
   until: 'e.g. 2 dry rounds, 10 findings, budget < 50k',
+  when: 'e.g. no findings; leave the last arm empty for the else',
   schema: 'e.g. { findings: [{ file, claim }] }, or in words',
   agentType: 'the default subagent; name another to change it, e.g. Explore',
 } as const
 
-/** Picker order: primitives first, then patterns. */
+/** The add list's order: the blocks that do work, then the ones that hold blocks. `args` is not in it: every design has that block, and no second. */
 export const PALETTE: PaletteEntry[] = [
-  { type: 'agent', tier: 'primitive', keywords: ['subagent', 'prompt', 'task', 'step', 'schema', 'call'] },
-  { type: 'pipeline', tier: 'primitive', keywords: ['stages', 'stream', 'chain', 'map', 'per item', 'no barrier', 'default'] },
-  { type: 'parallel', tier: 'primitive', keywords: ['barrier', 'concurrent', 'same time', 'together', 'fan-out', 'fanout', 'wait', 'join'] },
-  { type: 'loop', tier: 'primitive', keywords: ['while', 'repeat', 'until', 'budget', 'iterate', 'count'] },
-  { type: 'branch', tier: 'primitive', keywords: ['if', 'else', 'condition', 'switch', 'early exit', 'skip'] },
-  { type: 'subworkflow', tier: 'primitive', keywords: ['workflow', 'nested', 'child', 'reuse', 'saved'] },
-  { type: 'code', tier: 'primitive', keywords: ['js', 'javascript', 'transform', 'dedup', 'filter', 'flatten', 'script'] },
-  { type: 'verify', tier: 'pattern', keywords: ['adversarial', 'disprove', 'checkers', 'refute', 'skeptic', 'votes', 'check', 'confirm'] },
-  { type: 'judge-panel', tier: 'pattern', keywords: ['judge panel', 'judges', 'score', 'attempts', 'winner', 'tournament', 'rank'] },
-  { type: 'loop-until-dry', tier: 'pattern', keywords: ['loop until dry', 'until dry', 'dry', 'exhaustive', 'discovery', 'converge', 'rounds', 'tail'] },
-  { type: 'sweep', tier: 'pattern', keywords: ['multi-modal', 'search', 'angles', 'modes', 'broad', 'coverage'] },
-  { type: 'critic', tier: 'pattern', keywords: ['completeness', 'missing', 'gaps', 'review', 'what else'] },
+  { type: 'agent', group: 'work', keywords: ['subagent', 'prompt', 'task', 'step', 'schema', 'call'] },
+  { type: 'code', group: 'work', keywords: ['js', 'javascript', 'transform', 'dedup', 'filter', 'flatten', 'script', 'group', 'reduce', 'merge', 'aggregate'] },
+  { type: 'verify', group: 'work', keywords: ['adversarial', 'disprove', 'checkers', 'refute', 'skeptic', 'votes', 'check', 'confirm'] },
+  { type: 'critic', group: 'work', keywords: ['completeness', 'missing', 'gaps', 'review', 'what else'] },
+  { type: 'judge-panel', group: 'work', keywords: ['judge panel', 'judges', 'score', 'attempts', 'winner', 'tournament', 'rank'] },
+  { type: 'subworkflow', group: 'work', keywords: ['workflow', 'nested', 'child', 'reuse', 'saved'] },
+  { type: 'pipeline', group: 'holds', keywords: ['stages', 'stream', 'chain', 'map', 'per item', 'no barrier', 'default'] },
+  { type: 'parallel', group: 'holds', keywords: ['barrier', 'concurrent', 'same time', 'together', 'fan-out', 'fanout', 'wait', 'join'] },
+  { type: 'sweep', group: 'holds', keywords: ['multi-modal', 'search', 'angles', 'modes', 'broad', 'coverage'] },
+  { type: 'branch', group: 'holds', keywords: ['if', 'else', 'condition', 'switch', 'early exit', 'skip'] },
+  { type: 'loop', group: 'holds', keywords: ['while', 'repeat', 'until', 'budget', 'iterate', 'count'] },
+  { type: 'loop-until-dry', group: 'holds', keywords: ['loop until dry', 'until dry', 'dry', 'exhaustive', 'discovery', 'converge', 'rounds', 'tail'] },
+  { type: 'phase', group: 'holds', keywords: ['group', 'wrapper', 'frame', 'section', 'stage', 'part', 'label'] },
 ]
+
+/** The group a type is listed in. */
+export function groupOf(type: NodeType): PaletteGroup {
+  return PALETTE.find(entry => entry.type === type)?.group ?? 'work'
+}
 
 // How well `query` matches `text`, 0 for no match. An exact match beats a
 // prefix, a prefix beats a word start, that beats a substring, and a plain

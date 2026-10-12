@@ -4,6 +4,11 @@ import type { Design, DesignNode, Knobs, NodeType } from './model'
 
 export type Template = { id: string; title: string; blurb: string; make: () => Design }
 
+// Every design opens with its args block: what the template is run on.
+function args(id: string, notes: string, schema: string): DesignNode {
+  return { id, type: 'args', title: 'args', notes, knobs: { schema } }
+}
+
 function node(id: string, type: NodeType, title: string, notes: string, knobs: Knobs, children?: DesignNode[]): DesignNode {
   const made: DesignNode = { id, type, title, notes }
   if (Object.keys(knobs).length > 0) made.knobs = knobs
@@ -17,6 +22,7 @@ export function review(): Design {
     name: 'review-changes',
     description: 'Review the current diff along several dimensions and keep only findings that survive a refutation pass',
     nodes: [
+      args('n6', 'What to review: a branch, a pull request or a path. With none, the current diff.', '{ target? }'),
       node('n1', 'agent', 'scout diff', 'Cheap and mechanical. Its list of dimensions is the work-list for the pipeline.', {
         prompt: 'Read the diff and split the review into dimensions (bugs, security, performance, tests), each with the files it concerns',
         schema: '{ dimensions: [{ name, focus, files[] }] }',
@@ -53,6 +59,7 @@ export function research(): Design {
     name: 'research',
     description: 'Answer a question from many sources: search several ways, read deeply, check for gaps, then write up',
     nodes: [
+      args('n9', 'The question to answer.', '{ question }'),
       node(
         'n1',
         'sweep',
@@ -103,6 +110,7 @@ export function migrate(): Design {
     name: 'migrate',
     description: 'Apply one mechanical change at every site in the codebase, each in isolation, and verify each result',
     nodes: [
+      args('n5', 'The change to make at every site, and where to look for sites.', '{ change, scope? }'),
       node('n1', 'agent', 'discover sites', 'The sites are the work-list for the pipeline. Log anything left out of scope.', {
         prompt: 'Find every site that needs the migration and group them into units that can change independently',
         schema: '{ sites: [{ id, files[], note }] }',
@@ -135,6 +143,7 @@ export function judgePanel(): Design {
     name: 'judge-panel',
     description: 'Produce several independent approaches, have judges score them, and build the answer from the winner',
     nodes: [
+      args('n5', 'The task the attempts are for.', '{ task }'),
       node(
         'n1',
         'parallel',

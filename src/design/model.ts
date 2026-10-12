@@ -16,6 +16,9 @@ export const NODE_TYPES = [
   'loop-until-dry',
   'sweep',
   'critic',
+  // frame: the workflow's input, and a group that only frames blocks
+  'args',
+  'phase',
 ] as const
 
 export type NodeType = (typeof NODE_TYPES)[number]
@@ -34,6 +37,8 @@ export type Knobs = {
   fanout?: string
   votes?: number
   until?: string
+  /** On a block that stands directly in a `branch`: the condition that picks this arm. */
+  when?: string
 }
 
 export type DesignNode = {
@@ -63,10 +68,47 @@ export type Row = { node: DesignNode; depth: number; parentId: string | undefine
 export type WalkInfo = { parent: DesignNode | undefined; depth: number; index: number }
 
 /** The only types that may hold children. */
-export const CONTAINER_TYPES: readonly NodeType[] = ['pipeline', 'parallel', 'loop', 'loop-until-dry', 'branch', 'sweep']
+export const CONTAINER_TYPES: readonly NodeType[] = ['pipeline', 'parallel', 'loop', 'loop-until-dry', 'branch', 'sweep', 'phase']
 
-const KNOB_KEYS = ['prompt', 'schema', 'model', 'effort', 'isolation', 'agentType', 'fanout', 'votes', 'until'] as const
-const TEXT_KNOBS: readonly string[] = ['prompt', 'schema', 'model', 'agentType', 'fanout', 'until']
+/** Where the `args` block stands, as a refusal says it: every design has one, and nothing stands before it. */
+export const ARGS_PLACE = 'the args block is the first block of the design: at the top level, before every other block'
+
+/** The design's `args` block: its first block. Every design that was parsed or made here has one (`withArgs`). */
+export function argsOf(design: Pick<Design, 'nodes'>): DesignNode | undefined {
+  return design.nodes[0]?.type === 'args' ? design.nodes[0] : undefined
+}
+
+/** Whether a design has no block of its own yet: nothing but the args block every design has. */
+export function isBlank(design: Pick<Design, 'nodes'>): boolean {
+  return design.nodes.every(node => node.type === 'args')
+}
+
+/**
+ * The number the next new node gets: one more than the highest number ever
+ * present. `design.nextId` remembers numbers of removed nodes; a design that
+ * lacks it (hand-written, or a template) falls back to the highest id present.
+ */
+export function nextIdNumber(design: Pick<Design, 'nodes' | 'nextId'>): number {
+  let highest = 0
+  const visit = (nodes: readonly DesignNode[]): void => {
+    for (const node of nodes) {
+      highest = Math.max(highest, idNumber(node.id))
+      if (node.children) visit(node.children)
+    }
+  }
+  visit(design.nodes)
+  return Math.max(design.nextId ?? 1, highest + 1)
+}
+
+/** The design with its args block: as it is when it has one, else with a new, empty one put first. */
+export function withArgs(design: Design): Design {
+  if (argsOf(design)) return design
+  const number = nextIdNumber(design)
+  return { ...design, nextId: number + 1, nodes: [{ id: `n${number}`, type: 'args', title: 'args' }, ...design.nodes] }
+}
+
+const KNOB_KEYS = ['prompt', 'schema', 'model', 'effort', 'isolation', 'agentType', 'fanout', 'votes', 'until', 'when'] as const
+const TEXT_KNOBS: readonly string[] = ['prompt', 'schema', 'model', 'agentType', 'fanout', 'until', 'when']
 const ID_PATTERN = /^n(\d+)$/
 
 export function isNodeType(value: unknown): value is NodeType {
@@ -75,6 +117,11 @@ export function isNodeType(value: unknown): value is NodeType {
 
 export function canHoldChildren(type: NodeType): boolean {
   return CONTAINER_TYPES.includes(type)
+}
+
+/** A type with its article, as a refusal names it: `an agent`, `a pipeline`. */
+export function aType(type: NodeType): string {
+  return `${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`
 }
 
 /** The number in an id like "n12", or 0 when the id has another form. */
@@ -93,8 +140,9 @@ export function toKebab(name: string): string {
   return kebab || 'untitled'
 }
 
+/** A design with no block of its own: the args block and nothing else. */
 export function emptyDesign(name: string): Design {
-  return { version: 1, name: toKebab(name), description: '', nodes: [] }
+  return withArgs({ version: 1, name: toKebab(name), description: '', nodes: [] })
 }
 
 /** Why one knob value is not acceptable, or undefined when it is. */
@@ -156,13 +204,16 @@ function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
   if (knobs) node.knobs = knobs
   if (children !== undefined) {
     const list = readNodes(children, `${id}.children`, seen)
-    if (list.length > 0 && !canHoldChildren(type)) fail(`${id}: a ${type} node cannot hold children`)
+    if (list.length > 0 && !canHoldChildren(type)) fail(`${id}: ${aType(type)} node cannot hold children`)
     if (canHoldChildren(type)) node.children = list
   }
   return node
 }
 
-/** Validates shape, version, unique ids and known types. Never throws. */
+/**
+ * Validates shape, version, unique ids, known types and where `args` stands. Never throws.
+ * A design read with no args block (one saved before every design had it) is given an empty one.
+ */
 export function parseDesign(json: string): ParseResult {
   try {
     const raw: unknown = JSON.parse(json)
@@ -177,7 +228,10 @@ export function parseDesign(json: string): ParseResult {
     const nodes = readNodes(raw.nodes, 'nodes', new Set())
     const design: Design = { version: 1, name, description, nodes }
     if (typeof nextId === 'number') design.nextId = nextId
-    return { ok: true, design }
+    walk(design, (node, info) => {
+      if (node.type === 'args' && (info.parent !== undefined || info.index !== 0)) fail(`${node.id}: ${ARGS_PLACE}`)
+    })
+    return { ok: true, design: withArgs(design) }
   } catch (error) {
     if (error instanceof Invalid) return { ok: false, error: error.message }
     return { ok: false, error: error instanceof SyntaxError ? `not valid JSON: ${error.message}` : 'design could not be read' }
@@ -225,7 +279,12 @@ export function findNode(design: Design, id: string): DesignNode | undefined {
   return found
 }
 
-/** Every node as a row, in the order the canvas draws them. */
+/** How many blocks a design has, as a count says it: the args block, which every design has, is not one of them. */
+export function blockCount(design: Design): number {
+  return flatten(design).filter(row => row.node.type !== 'args').length
+}
+
+/** Every node as a row, in the order the design lists them: parents before what they hold. */
 export function flatten(design: Design): Row[] {
   const rows: Row[] = []
   walk(design, (node, info) => {

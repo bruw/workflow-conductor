@@ -13,8 +13,8 @@ export type History = { undo: HistoryEntry[]; redo: HistoryEntry[] }
 export const HISTORY_MAX = 50
 
 /** What every message announcing a change ends with. */
-export const UNDO_HINT = 'u: undo'
-export const REDO_HINT = 'y: redo'
+export const UNDO_HINT = '[u] Undo'
+export const REDO_HINT = '[y] Redo'
 
 export function emptyHistory(): History {
   return { undo: [], redo: [] }

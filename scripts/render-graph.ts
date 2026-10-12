@@ -1,0 +1,218 @@
+#!/usr/bin/env bun
+// Prints the graph of a design as the pane would paint it, so its look can be
+// reviewed with no live session.
+//
+//   bun scripts/render-graph.ts <template | design.json | stress case> [options]
+//
+//   --cols N        columns of the graph (default 120)
+//   --rows N        rows of the window (default 45)
+//   --select id     the selected block
+//   --view id       the container opened as the view
+//   --scroll id=n   a carousel's first arm (may be given more than once)
+//   --open p:i      the place whose add list is open: `n4:1`, or `top:0`
+//   --hover p:i     the place whose `[+]` the pointer is on
+//   --quiet         the pane does not hold the keyboard
+//   --pan N         the first row shown (default: the one that shows the selection)
+//   --full          the whole graph, whatever its height
+//   --run           a made-up finished run laid over it
+//   --no-lints      no problem marks (default: the design's real lints, by block)
+//   --ansi          colours, mapped from the theme keys
+//   --list          the names that can be rendered
+//
+// Templates: review, research, migrate, judge-panel. Stress cases: see STRESS below.
+
+import { readFileSync } from 'node:fs'
+import { lint } from '../src/design/lints'
+import { flatten, parseDesign, withArgs } from '../src/design/model'
+import type { Design, DesignNode, Knobs, NodeType } from '../src/design/model'
+import type { Place } from '../src/design/ops'
+import { TEMPLATES } from '../src/design/templates'
+import type { NodeRun } from '../src/run/events'
+import { layoutGraph, panTo } from '../src/ui/graph-layout'
+import { paintGraph } from '../src/ui/graph-paint'
+import type { RunOverlay, Span } from '../src/ui/graph-paint'
+
+function node(id: string, type: NodeType, title: string, notes: string, knobs: Knobs = {}, children?: DesignNode[]): DesignNode {
+  const made: DesignNode = { id, type, title }
+  if (notes !== '') made.notes = notes
+  if (Object.keys(knobs).length > 0) made.knobs = knobs
+  if (children) made.children = children
+  return made
+}
+
+function design(name: string, description: string, nodes: DesignNode[]): Design {
+  return { version: 1, name, description, nodes }
+}
+
+const LONG = 'Reads every source in full, however long, and writes down each claim that bears on the question together with the exact quote that supports it, the page or line it was found at, how confident the reader is in it and why, and which other claims it agrees or disagrees with, so that the checker after it has all it needs and never has to open the source again.'
+
+export const STRESS: Record<string, () => Design> = {
+  /** A stack with more arms than any width holds: the carousel. */
+  'parallel-9': () =>
+    design('nine-arms', 'One question, nine lenses at once, then one answer', [
+      node('n1', 'agent', 'scope', 'Split the question into what each lens should look at.', { effort: 'low', schema: '{ lenses: [{ name, focus }] }' }),
+      node(
+        'n2',
+        'parallel',
+        'lenses',
+        'Every lens runs at once; the writer needs all nine.',
+        {},
+        ['correctness', 'security', 'performance', 'tests', 'docs', 'api shape', 'migrations', 'observability', 'cost'].map((lens, i) =>
+          node(`n${i + 3}`, i === 4 ? 'verify' : 'agent', lens, `Review the change for ${lens} only.`, { ...(i % 3 === 0 ? { model: 'sonnet' } : {}), ...(i === 4 ? { votes: 3 } : {}), schema: '{ findings: [{ file, claim }] }' }),
+        ),
+      ),
+      node('n12', 'agent', 'write up', 'One review from all nine lenses.', { model: 'opus', effort: 'high' }),
+    ]),
+  /** Containers nested six deep: the innermost ones are drawn collapsed until opened as the view. */
+  'deep-6': () =>
+    design('six-deep', 'A nest of containers, each inside the one before', [
+      node('n1', 'pipeline', 'outer', '', { fanout: '×4 areas' }, [
+        node('n2', 'agent', 'plan area', 'Say what to look at in this area.', {}),
+        node('n3', 'loop', 'rounds', '', { until: '2 dry rounds' }, [
+          node('n4', 'parallel', 'finders', '', {}, [
+            node('n5', 'pipeline', 'find and check', '', { fanout: 'candidate files' }, [
+              node('n6', 'agent', 'find', 'Look for the defect in this file.', { effort: 'low' }),
+              node('n7', 'loop-until-dry', 'dig', '', { until: '1 dry round' }, [
+                node('n8', 'sweep', 'angles', '', { fanout: '3 angles' }, [node('n9', 'agent', 'probe', 'Try one way to trigger it.', {}), node('n10', 'verify', 'confirm', 'Refute the trigger.', { votes: 2 })]),
+                node('n11', 'code', 'dedupe', 'Drop repeats.', {}),
+              ]),
+            ]),
+            node('n12', 'agent', 'grep sweep', 'A cheap textual pass over everything.', { model: 'haiku' }),
+          ]),
+          node('n13', 'critic', 'what is missing', 'Name the places nobody looked.', { schema: '{ gaps[] }' }),
+        ]),
+      ]),
+      node('n14', 'agent', 'report', 'Write up what was found, per area.', {}),
+    ]),
+  /** The mock-up's case: a branch of three arms with `when`, one not set, one arm a loop holding an agent. */
+  'branch-when': () =>
+    design('research-answer', 'Answer a question from many sources: search, read, check gaps, write up.', [
+      node('n1', 'pipeline', 'Deep read', '', { fanout: 'deduped sources' }, [
+        node('n2', 'agent', 'Search', 'Find relevant sources.', { model: 'haiku', effort: 'low', schema: 'sources' }),
+        node('n3', 'verify', 'Check claims', 'Try to refute the claims.', { model: 'sonnet', effort: 'high', votes: 2, schema: 'verdict + reason' }),
+        node('n4', 'agent', 'Read source', 'Extract claims with evidence.', { model: 'sonnet', effort: 'high', schema: 'claims + quotes + confidence' }),
+        node('n5', 'sweep', 'Multi-modal sweep', '', { fanout: '4 search directions' }, []),
+      ]),
+      node('n6', 'branch', 'Choose response', '', {}, [
+        node('n7', 'agent', 'Write answer', '', { model: 'opus', effort: 'high', when: 'the claims cover the question' }),
+        node('n8', 'agent', 'Ask the user', 'Say what is unclear and ask one question.', {}),
+        node('n9', 'loop', 'Close gaps', '', {}, [node('n10', 'agent', 'Investigate gaps', '', { model: 'sonnet', effort: 'high' })]),
+      ]),
+    ]),
+  empty: () => design('nothing-yet', '', []),
+  'empty-container': () =>
+    design('one-empty-box', 'A container with nothing in it yet', [
+      node('n1', 'agent', 'before', 'Something to do first.', {}),
+      node('n2', 'pipeline', 'Per file', '', { fanout: 'changed files' }, []),
+      node('n3', 'branch', 'Pick', '', {}, []),
+    ]),
+  /** Titles, notes, knobs and conditions far longer than any card. */
+  long: () =>
+    design('a-design-whose-name-is-much-longer-than-a-design-name-has-any-business-being', LONG, [
+      node('n1', 'agent', 'Read every single source from the first page to the last and extract all of the claims', LONG, { model: 'claude-opus-with-a-very-long-custom-model-name', effort: 'xhigh', schema: '{ claims: [{ claim, quote, page, line, confidence, why, agrees_with[], disagrees_with[] }] }', fanout: 'each of the deduped sources that survived the first two filters' }),
+      node('n2', 'pipeline', 'A pipeline with a title that goes on and on well past the width of its own border', LONG, { fanout: '×12 of the sources that the reader before it marked as worth a second and slower look', schema: '{ verdicts[] }' }, [
+        node('n3', 'verify', 'Refute each and every claim against the quoted source text, defaulting to refuted', `${LONG}\n\nSecond paragraph: ${LONG}`, { votes: 5, model: 'sonnet', schema: '{ refuted: boolean, reason: string, quote: string }' }),
+        node('n4', 'branch', 'Decide what happens to the claim next, by its verdict', '', {}, [
+          node('n5', 'agent', 'Keep', 'Supercalifragilisticexpialidocious-and-then-some-unbroken-word-that-cannot-wrap-anywhere-at-all', { when: 'at least two of the three checkers failed to refute it and the quote is verbatim in the source' }),
+          node('n6', 'code', 'Drop it and log why it was dropped', '', {}),
+        ]),
+      ]),
+    ]),
+}
+
+/** Theme keys as terminal colours, near enough to the dark theme to judge the look. */
+const ANSI: Record<string, string> = {
+  text: '39',
+  subtle: '38;5;239',
+  inactive: '38;5;246',
+  claude: '38;5;209',
+  error: '38;5;203',
+  success: '38;5;78',
+  warning: '38;5;220',
+  suggestion: '38;5;111',
+  autoAccept: '38;5;141',
+  planMode: '38;5;37',
+  bashBorder: '38;5;205',
+  merged: '38;5;135',
+  ide: '38;5;74',
+  permission: '38;5;105',
+}
+
+/** A phase's ground, as it looks in the dock of the dark theme: a step darker than what is around it. */
+const GROUND = '48;5;233'
+
+function ansi(spans: readonly Span[]): string {
+  return spans
+    .map(span => {
+      const codes = [span.color ? (ANSI[span.color] ?? '39') : '', span.ground ? GROUND : '', span.bold ? '1' : '', span.inverse ? '7' : ''].filter(code => code !== '')
+      return codes.length > 0 ? `\u001b[${codes.join(';')}m${span.text}\u001b[0m` : span.text
+    })
+    .join('')
+}
+
+function load(name: string): Design {
+  const template = TEMPLATES.find(one => one.id === name)
+  if (template) return template.make()
+  const stress = STRESS[name]
+  // As the pane has them: every design opens with its args block.
+  if (stress) return withArgs(stress())
+  const parsed = parseDesign(readFileSync(name, 'utf8'))
+  if (!parsed.ok) throw new Error(`${name}: ${parsed.error}`)
+  return parsed.design
+}
+
+/** A finished run in which every leaf but the last got agents, and one of them failed. */
+function fakeRun(made: Design): RunOverlay {
+  const byNode: Record<string, NodeRun> = {}
+  const leaves = flatten(made).filter(row => row.node.children === undefined)
+  for (const [i, row] of leaves.slice(0, -1).entries()) byNode[row.node.id] = { total: 4, running: 0, done: i === 1 ? 3 : 4, failed: i === 1 ? 1 : 0, tokens: 10200 * (i + 1) }
+  return { status: 'done', byNode, unmapped: null }
+}
+
+function main(): void {
+  const args = process.argv.slice(2)
+  const names: string[] = []
+  const flags = new Set<string>()
+  const values: Record<string, string[]> = {}
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? ''
+    if (!arg.startsWith('--')) names.push(arg)
+    else if (['--ansi', '--full', '--run', '--no-lints', '--list', '--quiet'].includes(arg)) flags.add(arg)
+    else (values[arg] ??= []).push(args[++i] ?? '')
+  }
+  const all = [...TEMPLATES.map(one => one.id), ...Object.keys(STRESS)]
+  const name = names[0]
+  if (flags.has('--list') || name === undefined) {
+    console.log(`usage: bun scripts/render-graph.ts <${all.join(' | ')} | design.json> [--cols N] [--rows N] [--select id] [--view id] [--scroll id=n] [--open p:i] [--hover p:i] [--quiet] [--pan N] [--full] [--run] [--no-lints] [--ansi]`)
+    process.exit(name === undefined && !flags.has('--list') ? 1 : 0)
+  }
+  const made = load(name)
+  const one = (flag: string): string | undefined => values[flag]?.at(-1)
+  const columns = Number(one('--cols') ?? 120)
+  const rows = Number(one('--rows') ?? 45)
+  const scroll: Record<string, number> = {}
+  for (const pair of values['--scroll'] ?? []) {
+    const [id, first] = pair.split('=')
+    if (id) scroll[id] = Number(first ?? 0)
+  }
+  const place = (flag: string): Place | null => {
+    const [parent, index] = one(flag)?.split(':') ?? []
+    if (parent === undefined) return null
+    return parent === 'top' || parent === '' ? { index: Number(index ?? 0) } : { parentId: parent, index: Number(index ?? 0) }
+  }
+  const openAt = place('--open')
+  const problems: Record<string, number> = {}
+  if (!flags.has('--no-lints')) for (const found of lint(made)) problems[found.nodeId] = (problems[found.nodeId] ?? 0) + 1
+
+  const selectedId = one('--select') ?? null
+  const layout = layoutGraph(made, { columns, rows, selectedId, viewRootId: one('--view') ?? null, scroll, problems, openAt })
+  const window = flags.has('--full') ? layout.height + layout.top : rows
+  const panY = flags.has('--full') ? 0 : one('--pan') !== undefined ? Number(one('--pan')) : panTo(layout, window, 0, selectedId)
+  const painted = paintGraph(layout, { columns, rows: window, panY, hoverAt: place('--hover'), quiet: flags.has('--quiet'), ...(flags.has('--run') ? { run: fakeRun(made), locked: true } : {}) })
+  const wide = painted.findIndex(line => line.reduce((sum, span) => sum + span.text.length, 0) > columns)
+  for (const line of painted) console.log(flags.has('--ansi') ? ansi(line) : line.map(span => span.text).join('').replace(/\s+$/, ''))
+  const kept = Object.entries(layout.scroll).map(([id, first]) => `${id}=${first}`).join(' ')
+  console.error(`${made.name} · ${columns}×${rows} · graph ${layout.width}×${layout.height} · pan ${panY}${layout.viewRootId ? ` · view ${layout.viewRootId}` : ''}${kept ? ` · scroll ${kept}` : ''}${wide >= 0 ? ` · ROW ${wide} IS WIDER THAN ${columns}` : ''}`)
+}
+
+if (import.meta.main) main()

@@ -65,13 +65,13 @@ function replayAgents(knobs: { fanout?: string; votes?: number } | undefined, id
  * A made-up run of a design, for the overlay: several agents per leaf node, labelled
  * `<nodeId>: <title> <k>` as a handed-off script would, node after node; one agent
  * fails; two more carry labels no node claims (one plain, one with an id the design
- * does not hold). Token counts are made up. `code` nodes spawn nothing.
+ * does not hold). Token counts are made up. `code`, `args` and empty `phase` nodes spawn nothing.
  */
 export function replayDesignEvents(design: Design, name: string = design.name): RunEvent[] {
   const runId = `replay:design:${name}`
   const events: RunEvent[] = [{ kind: 'run-start', runId, name }]
   const rows = flatten(design)
-  const leaves = rows.filter(row => (row.node.children?.length ?? 0) === 0 && row.node.type !== 'code')
+  const leaves = rows.filter(row => (row.node.children?.length ?? 0) === 0 && row.node.type !== 'code' && row.node.type !== 'args' && row.node.type !== 'phase')
   const phaseOf = new Map<string, string>()
   let phase = ''
   for (const row of rows) {

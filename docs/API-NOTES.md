@@ -6,7 +6,10 @@ Method: the probe mod `spikes/probe/` loaded beside Conductor, logging one JSON 
 Log lines below are trimmed. `t` is ms since the probe loaded.
 
 Rerun: `CONDUCTOR_EXTRA_PLUGIN_DIRS=spikes/probe scripts/dev-session.sh`, then `/probe-handoff`,
-`/probe-pane`, `/probe-fs` in the nested session.
+`/probe-pane`, `/probe-fs`, `/probe-keys` in the nested session.
+
+S7 and the findings marked "redesign v1" were added on 2026-10-11, same version and surface.
+S8 and the last two findings under S7 came with the UI pass that followed, same version and surface.
 
 ## S1. Is `agent.spawn`'s `description` the script's `label`? Yes. Phase on the event? No.
 
@@ -137,6 +140,92 @@ tmux send-keys -t conductor-dev -l $'\e[<35;96;5M'    → enter, then {"type":"m
   Use `every(16)` only while a tween runs, `every(96)` for spinners, and stop the timer when idle.
 - Measured on an idle session with a 40x8 region. Not measured: a full-size canvas or a session busy streaming.
 
+## S7. Can a focused `Input` serve as a key catcher: every key with its case, and kept empty? Yes, by re-keying it.
+
+The question came from a Button `hotkey`: `Shift+j` pressed `j`'s Button, and `ui.press` carries no key, so a
+hotkey cannot tell `w` from `W`, and `+` and `?` cannot be hotkeys at all.
+
+Probe: `/probe-keys` in `spikes/probe/hooks/register.tsx` opens a pane with `focus: true` holding an `Input`
+with `autoFocus` (`value=""`), a second `Input` and a Button with hotkey `z`. A `ui.input` hook logs each event.
+
+First run: the hook answers `{ element, value: '' }` and the Input keeps one key (`catch`).
+
+```
+{"kind":"ui.focus","element":"catch","origin":{"kind":"plugin","name":"conductor-probe"}}
+{"kind":"change","element":"catch","value":"w"}
+{"kind":"change","element":"catch","value":"wW"}
+{"kind":"change","element":"catch","value":"wWs"}
+{"kind":"change","element":"catch","value":"wWsD"}
+{"kind":"change","element":"catch","value":"wWsD+"}
+{"kind":"change","element":"catch","value":"wWsD+?"}
+{"kind":"change","element":"catch","value":"wWsD+?1"}
+{"kind":"change","element":"catch","value":"wWsD+?1z"}
+{"kind":"change","element":"catch","value":"wWsD+?1zwwssdd"}
+{"kind":"ui.focus","origin":{"kind":"person"}}
+{"kind":"ui.focus","element":"catch","origin":{"kind":"person"}}
+```
+
+Second run: the Input is drawn under a new key after every event (`catch:<n+1>`, `value=""`).
+
+```
+{"kind":"ui.input","element":"catch:0","inputKind":"change","value":"w"}
+{"kind":"ui.input","element":"catch:1","inputKind":"change","value":"W"}
+{"kind":"ui.input","element":"catch:2","inputKind":"change","value":"s"}
+{"kind":"ui.input","element":"catch:3","inputKind":"change","value":"D"}
+{"kind":"ui.input","element":"catch:4","inputKind":"change","value":"+"}
+{"kind":"ui.input","element":"catch:5","inputKind":"change","value":"?"}
+{"kind":"ui.input","element":"catch:6","inputKind":"change","value":"1"}
+{"kind":"ui.input","element":"catch:7","inputKind":"change","value":"z"}
+{"kind":"ui.input","element":"catch:8","inputKind":"submit","value":""}
+{"kind":"ui.input","element":"catch:9","inputKind":"change","value":"wasdWASD"}
+```
+
+- A focused `Input` receives every printable key with its case, one `ui.input` `change` each; Enter is a
+  `submit`. `z`, the Button's hotkey, arrived as text: a hotkey does not fire while the ring is on an Input.
+- A burst sent at once is one `change` holding all the characters (`wwssdd` in the first run, `wasdWASD` in
+  the second).
+- **Answering `{ element, value: '' }` does not empty the field** (first run: the value keeps growing).
+  **Drawing the Input under a new key does**, and the ring stays on it: the ring is kept by its place among
+  the stops, not by key.
+- Up / Down on the Input walk the ring (a `ui.focus`, origin `person`, no key told; the first of the two
+  above names no element). Left / Right / Backspace stay in the field. Tab goes to the next stop.
+- Found while building on it (seen in the designer, not in this probe):
+  - A key typed in the frame an Input is drawn under a new key is dropped. So the catcher is not re-keyed
+    per key: its whole text is read each time (the new characters are those after the ones already taken)
+    and it is re-keyed only once the typing has paused.
+  - A reused key brings back its old text, also from before a reload of the module (whose counters start
+    from 0 again). Keys carry a per-load stamp: `keys:<load>.<n>`.
+  - Changing `value` under a focused Input replaces its text and leaves the cursor where it was, so the next
+    letter lands in the middle. A field being typed in is drawn with the text it opened with until the
+    typing pauses.
+  - An `Input` under a `Box` with `display="none"` stays a focus stop and takes keys, while the terminal's
+    cursor is hidden (tmux `#{cursor_flag}` = 0).
+  - A focused Input pushed off-screen or clipped still has its cursor shown, clamped to the screen edge.
+    So drawing an Input out of sight does not hide its cursor.
+- Consequence: the designer's ring rests on one small `Input`, the first child of the pane's tree and so the
+  mod's first stop, under a `Box` with `display="none"`: it is not drawn, takes no cell, and no cursor
+  blinks while the ring rests on it. Every character typed there is looked up in one key table
+  (`src/ui/keys.ts`). `Shift+WASD`, `+` and `?` work without a click. It replaces the hotkey Buttons, the
+  rewrite of the ring onto a home key, and the `prompt.edit` swallow of unbound letters (an unbound
+  character is now typed into the catcher, which says so). The Client still handles the pointer only.
+
+## S8. Can a mod remove the docked pane's background colour? No.
+
+The docked pane has a background colour of its own. It is the engine's: Claude Code 2.1.296 wraps the dock
+in a `Box` with `backgroundColor: composerSidebarBackground`, and every descendant inherits it.
+
+- `composerSidebarBackground` is a theme token: `rgb(38,38,38)` in the dark theme, `rgb(245,245,245)` in the
+  light one; the ANSI themes use `blackBright` and `white`.
+- Nothing the mod draws takes it away: `backgroundColor="default"` or `"transparent"` on a `Box` or a
+  `Text`, a `Raster`'s default cell and a `Client` region all keep it.
+- `$.ui.open` has no option for it.
+- The inline placement has no such background.
+- The only control is the person's: a custom theme that overrides `composerSidebarBackground` with a
+  concrete colour (`"default"` is dropped).
+- Consequence: the mod draws on what the dock gives it. The one background it sets is a phase's ground on the
+  graph: `backgroundColor="inverseText"` on the `Text` of its cells. A theme key is accepted there and follows
+  the theme (seen in tmux at 256 colours: the dock `48;5;235`, the phase `48;5;16`).
+
 ## Other findings
 
 - Hot reload of a `--plugin-dir` mod is not immediate when the session is idle (the watch drops to a 30 s
@@ -144,3 +233,29 @@ tmux send-keys -t conductor-dev -l $'\e[<35;96;5M'    → enter, then {"type":"m
 - `spikes/` is outside the root `tsconfig.json` `include`, so root `tsc` does not see it. The probe has its
   own `tsconfig.json`: `bunx tsc -p spikes/probe`.
 - `scripts/dev-session.sh` takes `CONDUCTOR_EXTRA_PLUGIN_DIRS` (colon-separated, relative to the repo or absolute).
+- Redesign v1, Input:
+  - A focused `Input` wraps only when it has the pane's full body width; inside any narrower column it is one
+    line cut with `…`. So a field being edited keeps one line and the mod draws the whole text wrapped under
+    it, redrawn per keystroke.
+  - An Input opened again under the key it last submitted from, with the same `value`, was drawn empty
+    (Enter then saved an empty text). It is drawn under a new key each time it opens.
+- Redesign v1, the ring:
+  - Stop order is tree order, and an engine stop (the pane's ✕) sits before the mod's first. A `column-reverse`
+    Box puts the tree's first stop on the pane's last row: how the catcher was first placed. It is not used
+    any more: the catcher is the tree's first child, under `display="none"` (S7).
+  - Up / Down walk the ring like Shift+Tab / Tab, and a hook cannot tell them apart.
+  - A `ui.focus` raised by the person for a stop that names no element cannot be given one with
+    `next({ ...e, element })`: the engine refuses it. The mod lets the move land and then moves the ring itself.
+  - A `Select` the ring opens lists its options under itself, so its row must not have a fixed height.
+- Redesign v1, the wheel: `ui.scroll` is raised for the wheel even when the tree is exactly as tall as the
+  body, with the pointer's cell (`e.pointer.row`, `.column`). Answering `{}` without `next` keeps the pane
+  still. One tmux wheel tick is `by: ±3`. A Client still gets no wheel: the hooks module sums the rows and
+  hands the sum to the Client in its props.
+- Redesign v1, the Client:
+  - On `/reload-plugins` the Client module can get one frame of props in the old shape: read props defensively.
+  - A clicked Client gets `{ key: 'W', shift: true }`, arrows, `tab`, `return`. Nothing can focus a Client
+    without a click or tell when it loses the keys, so the Client still never keeps the keyboard: after a
+    click the hooks take it back for the pane.
+- Redesign v1, tools: a tool description is cut at 4096 characters (Conductor's is 4,050: what each knob means moved to the schema's `knobs` field when `args` and `phase` took the room).
+- The dock's width is the person's once they dragged it (kept in `~/.claude.json`); the mod's `columns` is
+  only a request.

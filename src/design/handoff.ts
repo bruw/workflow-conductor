@@ -2,7 +2,7 @@
 // the conventions that tie a run back to it (label, phase, meta.name) are
 // stated here and nowhere else, never in the design JSON. Pure TypeScript.
 
-import { flatten } from './model'
+import { canHoldChildren, flatten } from './model'
 import type { Design } from './model'
 
 export type Handoff = { text: string; context: string[] }
@@ -10,19 +10,32 @@ export type Handoff = { text: string; context: string[] }
 /** Outline rows shown before the rest is left to the file. */
 export const OUTLINE_MAX = 34
 /** The most lines the instructions may take, outline included. */
-export const HANDOFF_MAX_LINES = 60
+export const HANDOFF_MAX_LINES = 65
 
+/** The knobs an outline row names in brackets. `when` is not among them: an arm's condition is said before its row. */
 const KNOB_KEYS = ['model', 'effort', 'isolation', 'agentType', 'schema', 'fanout', 'votes', 'until'] as const
+/** The most of a condition an outline row says; the file has the rest. */
+const WHEN_MAX = 72
 
-const clip = (value: string): string => (value.length > 24 ? `${value.slice(0, 23)}…` : value).replace(/\s+/g, ' ')
+const clip = (value: string, max: number = 24): string => (value.length > max ? `${value.slice(0, max - 1)}…` : value).replace(/\s+/g, ' ')
 
-/** One row per block, indented by nesting: `n3 verify "title" [votes=3] (has notes)`. */
+/** How an arm of a branch is picked, as its outline row opens: `IF no findings: `, `ELSE: `, `IF (no condition set): `; '' for any other block. */
+function armWords(design: Design, row: { node: { knobs?: { when?: string } }; parentId: string | undefined; index: number }): string {
+  const parent = row.parentId === undefined ? undefined : flatten(design).find(one => one.node.id === row.parentId)?.node
+  if (parent?.type !== 'branch') return ''
+  const when = (row.node.knobs?.when ?? '').replace(/\s+/g, ' ').trim()
+  if (when !== '') return `IF ${clip(when, WHEN_MAX)}: `
+  const arms = parent.children?.length ?? 0
+  return arms > 1 && row.index === arms - 1 ? 'ELSE: ' : 'IF (no condition set): '
+}
+
+/** One row per block, indented by nesting: `n3 verify "title" [votes=3] (has notes)`; an arm of a branch opens with its condition, `IF no findings: n8 agent "…"`. */
 export function outline(design: Design): string[] {
   const rows = flatten(design)
   const lines = rows.slice(0, OUTLINE_MAX).map(row => {
     const knobs = KNOB_KEYS.filter(key => row.node.knobs?.[key] !== undefined).map(key => `${key}=${clip(String(row.node.knobs?.[key]))}`)
     const tail = [knobs.length > 0 ? `[${knobs.join(' ')}]` : '', row.node.notes ? '(has notes)' : ''].filter(Boolean).join(' ')
-    return `${'  '.repeat(row.depth + 1)}${row.node.id} ${row.node.type} "${row.node.title}"${tail ? ` ${tail}` : ''}`
+    return `${'  '.repeat(row.depth + 1)}${armWords(design, row)}${row.node.id} ${row.node.type} "${row.node.title}"${tail ? ` ${tail}` : ''}`
   })
   if (rows.length > OUTLINE_MAX) lines.push(`  … ${rows.length - OUTLINE_MAX} more blocks: see the file`)
   return lines.length > 0 ? lines : ['  (no blocks)']
@@ -46,8 +59,11 @@ export function reviewPrompt(name: string): string {
 /** The visible line and the hidden instructions for one design saved at `designPath`. */
 export function buildHandoff(design: Design, designPath: string): Handoff {
   const count = flatten(design).length
-  const phases = design.nodes.map(node => `"${node.id} ${node.title}"`)
-  const first = design.nodes[0]
+  // The args block is the input, not a stage: it gets no phase and no agent is labelled with it.
+  const stages = design.nodes.filter(node => node.type !== 'args')
+  const phases = stages.map(node => `"${node.id} ${node.title}"`)
+  // The label's example names a block that spawns agents itself, where the design has one.
+  const first = flatten(design).find(row => !canHoldChildren(row.node.type) && row.node.type !== 'args' && row.node.type !== 'code')?.node ?? stages[0]
   const goal = design.description.replace(/\s+/g, ' ').trim()
   const example = first ? `${first.id}: ${first.title}` : 'n1: scout diff'
 
@@ -64,19 +80,24 @@ export function buildHandoff(design: Design, designPath: string): Handoff {
     '2. Mapping rules. The run view reads them back, so follow them exactly:',
     '   - Label: every agent() call sets label: "<nodeId>: <short text>", where nodeId is the id of the design',
     `     node the agent belongs to, e.g. "${example}". For an agent inside a container (pipeline, parallel,`,
-    "     loop, branch, sweep), use the INNERMOST design node's id, not the container's.",
-    '   - Phase: each TOP-LEVEL design node gets one phase titled "<nodeId> <title>". List them in meta.phases',
-    '     in design order, and pass that title as `phase` on every agent() under that top-level node.',
+    "     loop, branch, sweep, phase), use the INNERMOST design node's id, not the container's.",
+    '   - Phase: each TOP-LEVEL design node (the `args` block left out) gets one phase titled "<nodeId> <title>". List',
+    '     them in meta.phases in design order, and pass that title as `phase` on every agent() under that node.',
     phases.length > 0 ? `     Here: meta.phases = [${phases.join(', ')}]` : '     Here: the design has no nodes yet; say so instead of inventing a workflow.',
     `   - Name: meta.name = "${design.name}".`,
     '',
     '3. Knobs: honour model, effort, isolation, agentType and schema where a node sets them; where it does not,',
     '   omit the option (do not invent a value). fanout, votes and until describe shape: follow them.',
+    '   A block directly in a branch is one arm of it: its `when` is the condition that picks it (write the test from it,',
+    '   against the result before the branch); the last arm with no `when` is the else. Exactly one arm runs.',
+    '   The `args` block (always the first) is the input: read the script\'s `args` as its notes and `schema` say, check it',
+    '   first thing, and take the values from the user\'s request. With neither set, the workflow takes no input.',
+    '   A `phase` block only frames its blocks: they run in order where it stands, as if it were not there.',
     '',
     '4. After launching, say in one or two lines how the nodes mapped to stages, and name anything in the',
     '   design that could not be honoured.',
     '',
-    `Outline (id type "title", indented by nesting; ${count} ${count === 1 ? 'node' : 'nodes'}):`,
+    `Outline (id type "title", indented by nesting, an arm of a branch after its IF … / ELSE; ${count} ${count === 1 ? 'node' : 'nodes'}):`,
     ...outline(design),
   ]
 

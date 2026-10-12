@@ -1,8 +1,9 @@
 // Immutable edits on a Design. Every operation returns a new Design, or the
 // same Design plus a reason when the edit is refused. Pure TypeScript.
 
-import { canHoldChildren, findNode, idNumber, isNodeType, knobError, walk } from './model'
+import { ARGS_PLACE, EFFORTS, aType, argsOf, canHoldChildren, findNode, isNodeType, knobError, nextIdNumber, walk } from './model'
 import type { Design, DesignNode, Knobs, NodeType } from './model'
+import { KNOBS_BY_TYPE } from './teach'
 
 export type OpResult = { design: Design; error?: string }
 
@@ -12,11 +13,6 @@ export type AddResult = OpResult & { id?: string }
 export type Place = { parentId?: string; index: number }
 
 export type NodePatch = { title?: string; notes?: string; knobs?: Partial<Knobs> }
-
-export type MoveByOptions = {
-  /** Containers drawn collapsed: a moving node steps over them, not into them. */
-  collapsed?: Iterable<string>
-}
 
 type Spot = { node: DesignNode; parent: DesignNode | undefined; index: number; siblings: readonly DesignNode[] }
 
@@ -67,25 +63,47 @@ function parentError(design: Design, parentId: string | undefined): string | und
   if (parentId === undefined) return undefined
   const parent = findNode(design, parentId)
   if (!parent) return `no block ${parentId}`
-  return canHoldChildren(parent.type) ? undefined : `a ${parent.type} block cannot hold children`
+  return canHoldChildren(parent.type) ? undefined : `${aType(parent.type)} block cannot hold children`
 }
+
+export { nextIdNumber } from './model'
 
 /**
- * The number the next new node gets: one more than the highest number ever
- * present. `design.nextId` remembers numbers of removed nodes; a design that
- * lacks it (hand-written, or a template) falls back to the highest id present.
+ * Where `n` adds a block: after the selected one; inside it, as its last, when it is a container that holds
+ * nothing yet or the one the view shows (beside that one is out of sight); at the end of the design with none selected.
  */
-export function nextIdNumber(design: Design): number {
-  let highest = 0
-  walk(design, node => {
-    highest = Math.max(highest, idNumber(node.id))
-  })
-  return Math.max(design.nextId ?? 1, highest + 1)
+export function addPlace(design: Design, selectedId: string | null, viewRootId: string | null): Place {
+  const spot = selectedId === null ? undefined : locate(design, selectedId)
+  if (!spot) return { index: design.nodes.length }
+  const { node, parent, index } = spot
+  const held = node.children?.length ?? 0
+  if (canHoldChildren(node.type) && (node.id === viewRootId || held === 0)) return { parentId: node.id, index: held }
+  return parent ? { parentId: parent.id, index: index + 1 } : { index: index + 1 }
 }
 
-/** Inserts a new node. `at.index` is clamped to the destination list. */
-export function addNode(design: Design, spec: { type: NodeType; title?: string }, at: Place): AddResult {
+/** What a second `args` block is refused with. */
+function argsTaken(id: string): string {
+  return `the design already has its args block (${id}): every design has one, first, and no other`
+}
+
+/** What deleting the `args` block, or making it another block, is refused with. */
+export const ARGS_KEPT = 'the args block stays: every design has it, first. Clear its notes and schema for a workflow that takes no input'
+
+/**
+ * The place a block of `type` really gets when `at` is asked for: `args` goes first whatever was asked,
+ * and nothing else goes before it.
+ */
+export function placeFor(design: Pick<Design, 'nodes'>, type: NodeType, at: Place): Place {
+  if (type === 'args') return { index: 0 }
+  return at.parentId === undefined && argsOf(design) ? { index: Math.max(1, Number.isFinite(at.index) ? Math.trunc(at.index) : design.nodes.length) } : at
+}
+
+/** Inserts a new node. `at.index` is clamped to the destination list; `args` goes first, and nothing goes before it. */
+export function addNode(design: Design, spec: { type: NodeType; title?: string }, asked: Place): AddResult {
   if (!isNodeType(spec.type)) return refuse(design, `unknown type ${String(spec.type)}`)
+  const taken = spec.type === 'args' ? argsOf(design) : undefined
+  if (taken) return refuse(design, argsTaken(taken.id))
+  const at = placeFor(design, spec.type, asked)
   const error = parentError(design, at.parentId)
   if (error) return refuse(design, error)
 
@@ -97,19 +115,26 @@ export function addNode(design: Design, spec: { type: NodeType; title?: string }
   return { design: { ...design, nextId: number + 1, nodes }, id }
 }
 
-/** Removes a node and everything nested in it. */
+/** Removes a node and everything nested in it. The `args` block is never removed. */
 export function removeNode(design: Design, id: string): OpResult {
-  if (!findNode(design, id)) return refuse(design, `no block ${id}`)
+  const node = findNode(design, id)
+  if (!node) return refuse(design, `no block ${id}`)
+  if (node.type === 'args') return refuse(design, ARGS_KEPT)
   return { design: { ...design, nextId: nextIdNumber(design), nodes: without(design.nodes, id) } }
 }
+
+/** What a move of the `args` block, or of a block to before it, is refused with. */
+export const ARGS_STAY = 'args stay first: the workflow\'s input is the first block of the design'
 
 /**
  * Reorders or re-nests a node. `to.index` is the position in the destination
  * list as it stands once the node has been lifted out, clamped to that list.
+ * The `args` block does not move, and a block sent before it lands after it.
  */
 export function moveNode(design: Design, id: string, to: Place): OpResult {
   const spot = locate(design, id)
   if (!spot) return refuse(design, `no block ${id}`)
+  if (spot.node.type === 'args') return refuse(design, ARGS_STAY)
   if (to.parentId !== undefined && subtreeHas(spot.node, to.parentId)) {
     return refuse(design, to.parentId === id ? 'a block cannot be moved into itself' : 'a block cannot be moved into a block it holds')
   }
@@ -117,7 +142,8 @@ export function moveNode(design: Design, id: string, to: Place): OpResult {
   if (error) return refuse(design, error)
 
   const lifted = without(design.nodes, id)
-  return { design: { ...design, nodes: editList(lifted, to.parentId, list => insertAt(list, to.index, spot.node)) } }
+  const at = placeFor({ nodes: lifted }, spot.node.type, to)
+  return { design: { ...design, nodes: editList(lifted, at.parentId, list => insertAt(list, at.index, spot.node)) } }
 }
 
 /**
@@ -158,15 +184,20 @@ export function updateNode(design: Design, id: string, patch: NodePatch): OpResu
 
 /**
  * Changes a node's type and nothing else. A block that holds others can only
- * become another container.
+ * become another container; the `args` block stays what it is, and no block becomes one.
  */
 export function retypeNode(design: Design, id: string, type: NodeType): OpResult {
   const node = findNode(design, id)
   if (!node) return refuse(design, `no block ${id}`)
   if (!isNodeType(type)) return refuse(design, `unknown type ${String(type)}`)
   if (node.type === type) return { design }
+  if (node.type === 'args') return refuse(design, ARGS_KEPT)
+  if (type === 'args') {
+    const taken = argsOf(design)
+    return refuse(design, taken ? argsTaken(taken.id) : `${id} cannot become args: ${ARGS_PLACE}`)
+  }
   if ((node.children?.length ?? 0) > 0 && !canHoldChildren(type)) {
-    return refuse(design, `${id} holds blocks and a ${type} block cannot hold children: move or remove them first`)
+    return refuse(design, `${id} holds blocks and ${aType(type)} block cannot hold children: move or remove them first`)
   }
   const next: DesignNode = { ...node, type }
   if (canHoldChildren(type)) next.children = node.children ?? []
@@ -174,42 +205,47 @@ export function retypeNode(design: Design, id: string, type: NodeType): OpResult
   return { design: { ...design, nodes: replace(design.nodes, id, next) } }
 }
 
-// One keyboard step. Down: swap with the next sibling, or step into it as its
-// first child when it is an open container; from the last slot of a container,
-// step out to just after it. Up mirrors this, so a step down then a step up
-// always lands where it started.
-function step(design: Design, id: string, down: boolean, collapsed: ReadonlySet<string>): OpResult {
-  const spot = locate(design, id)
-  if (!spot) return refuse(design, `no block ${id}`)
-  const { parent, index, siblings } = spot
-  const neighbour = siblings[down ? index + 1 : index - 1]
+/** The knobs a digit steps on the selected block, and the models the first one goes through. */
+export type QuickKnob = 'model' | 'effort' | 'votes'
+export const MODEL_STEPS: readonly string[] = ['haiku', 'sonnet', 'opus']
+/** Votes go round from 1 to this. */
+export const VOTES_STEP_MAX = 5
+/** What an unset model or effort reads as. */
+export const INHERIT = 'inherit'
 
-  if (neighbour) {
-    if (canHoldChildren(neighbour.type) && !collapsed.has(neighbour.id)) {
-      return moveNode(design, id, { parentId: neighbour.id, index: down ? 0 : (neighbour.children ?? []).length })
-    }
-    return moveNode(design, id, { parentId: parent?.id, index: down ? index + 1 : index - 1 })
-  }
-  if (!parent) return refuse(design, down ? 'already at the bottom' : 'already at the top')
-  const outer = locate(design, parent.id)
-  if (!outer) return refuse(design, `no block ${parent.id}`)
-  return moveNode(design, id, { parentId: outer.parent?.id, index: down ? outer.index + 1 : outer.index })
+/** Which knob a digit steps on a block: 1 its model, 2 its effort, 3 its votes. Undefined where its type has none. */
+export function quickKnob(node: Pick<DesignNode, 'type'>, slot: number): QuickKnob | undefined {
+  const has = (knob: keyof Knobs): boolean => KNOBS_BY_TYPE[node.type].includes(knob)
+  if (slot === 1) return has('model') ? 'model' : undefined
+  if (slot === 2) return has('effort') ? 'effort' : undefined
+  if (slot === 3) return has('votes') ? 'votes' : undefined
+  return undefined
+}
+
+/** A quick knob's value in a word: `inherit` for an unset model or effort, `none` for no votes. */
+export function quickValue(node: Pick<DesignNode, 'knobs'>, knob: QuickKnob): string {
+  if (knob === 'votes') return node.knobs?.votes === undefined ? 'none' : String(node.knobs.votes)
+  return node.knobs?.[knob] ?? INHERIT
 }
 
 /**
- * Moves a node `delta` keyboard steps (negative is up). Stops at the end of
- * the design; the error is set only when the node could not move at all.
+ * Steps a quick knob of a block to its next value: model inherit → haiku → sonnet → opus → inherit (a model
+ * of another name goes to inherit), effort inherit → low → … → max → inherit, votes 1 … 5 and round again.
+ * `knob` and `value` say what it is now; refused where the block's type has no such knob.
  */
-export function moveBy(design: Design, id: string, delta: number, options: MoveByOptions = {}): OpResult {
-  const collapsed = new Set(options.collapsed ?? [])
-  const steps = Number.isFinite(delta) ? Math.trunc(Math.abs(delta)) : 0
-  if (steps === 0) return findNode(design, id) ? { design } : refuse(design, `no block ${id}`)
-
-  let current = design
-  for (let done = 0; done < steps; done++) {
-    const result = step(current, id, delta > 0, collapsed)
-    if (result.error) return done === 0 ? result : { design: current }
-    current = result.design
-  }
-  return { design: current }
+export function stepKnob(design: Design, id: string, slot: number): OpResult & { knob?: QuickKnob; value?: string } {
+  const node = findNode(design, id)
+  if (!node) return refuse(design, `no block ${id}`)
+  const knob = quickKnob(node, slot)
+  if (knob === undefined) return refuse(design, `${id} is ${/^[aeiou]/.test(node.type) ? 'an' : 'a'} ${node.type}: it has no ${slot === 1 ? 'model' : slot === 2 ? 'effort' : 'votes'}`)
+  const after = <T>(steps: readonly T[], now: T | undefined): T | undefined => (now === undefined ? steps[0] : steps[steps.indexOf(now) + 1 || steps.length])
+  const patch: Partial<Knobs> =
+    knob === 'model'
+      ? { model: after(MODEL_STEPS, node.knobs?.model) ?? '' }
+      : knob === 'effort'
+        ? { effort: after(EFFORTS, node.knobs?.effort) }
+        : { votes: ((node.knobs?.votes ?? 0) % VOTES_STEP_MAX) + 1 }
+  const result = updateNode(design, id, { knobs: patch })
+  const changed = findNode(result.design, id)
+  return result.error || !changed ? result : { ...result, knob, value: quickValue(changed, knob) }
 }

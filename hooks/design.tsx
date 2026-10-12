@@ -1,96 +1,124 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, On } from 'claude-code'
+import type { EngineInterface, On, RenderChildren } from 'claude-code'
 
 import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, changeWords, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, guideText, readReport, replaceDesign, showEdit, staleNote, toolDescription } from '../src/design/chat'
-import { remember, travel } from '../src/design/history'
+import { UNDO_HINT, remember, travel } from '../src/design/history'
 import type { History } from '../src/design/history'
-import { lint, preflightLine } from '../src/design/lints'
+import { lint, preflightLine, problemFields, problemParts } from '../src/design/lints'
 import { buildHandoff, handoffPrompt, handoffTarget, reviewPrompt } from '../src/design/handoff'
-import { EFFORTS, emptyDesign, findNode, flatten, parseDesign, serializeDesign } from '../src/design/model'
-import { UNDO_HINT } from '../src/design/history'
-import type { Design, NodeType } from '../src/design/model'
-import { nextIdNumber } from '../src/design/ops'
+import { emptyDesign, findNode, flatten, isBlank, parseDesign, serializeDesign } from '../src/design/model'
+import type { Design, DesignNode, NodeType } from '../src/design/model'
+import { nextIdNumber, quickKnob } from '../src/design/ops'
 import type { NodePatch } from '../src/design/ops'
 import {
-  BLANK_TEMPLATE_ID,
+  AGENT_ROWS_MAX,
   DEFAULT_DESIGN_NAME,
+  DESIGN_DIR,
+  DESIGN_PANE_ID,
+  DESIGN_PANE_TITLE,
   HANDED_NOTICE,
   HELP_PAGES,
   KEYS_CUE,
   LOCK_NOTICE,
+  SCRATCH_PREFIX,
   TEXT_KNOBS,
-  VOTE_CHOICES,
+  WIDE_MIN_COLUMNS,
+  addHeading,
   agentsOf,
-  bareTarget,
-  carryUi,
-  compactOf,
-  dockColumns,
-  elapsedOf,
-  helpPage,
-  initialTimes,
-  overlaysDesign,
-  runOverlay,
-  runSummary,
-  DESIGN_DIR,
-  DESIGN_PANE_ID,
-  DESIGN_PANE_TITLE,
-  INHERIT,
-  MODEL_CHOICES,
   applyMessage,
   applyOp,
+  bareTarget,
+  blocksWord,
+  carryUi,
   describeDesign,
-  freeName,
-  handoffOf,
-  isSaved,
-  nothingToRestore,
-  noticeInforms,
-  openRetype,
-  placeLabel,
-  restoreDesign,
-  retypeChoices,
-  savedDesign,
-  savedLine,
-  boardProps,
-  boardView,
-  inspectorCollapsed,
-  inspectorSummary,
-  isDefaultName,
-  withoutKeys,
-  SCRATCH_PREFIX,
   designFile,
   designName,
+  detailWidth,
+  dockColumns,
+  elapsedOf,
+  factsLine,
+  fitHelp,
+  freeName,
+  graphProps,
+  handoffOf,
+  helpColumn,
+  helpPage,
+  initialTimes,
   initialUi,
+  isDefaultName,
+  isSaved,
+  listWindow,
+  moveStartMark,
+  nothingToRestore,
+  noticeInforms,
   openDesign,
+  openRetype,
+  overlaysDesign,
   patchNode,
   pickBlock,
+  pickerMatches,
+  previewProps,
+  restoreDesign,
+  runOverlay,
+  runSummary,
+  savedDesign,
+  savedLine,
   startDesign,
+  startEntries,
   typePicker,
+  viewRootOf,
+  withoutKeys,
 } from '../src/design/session'
-import type { DesignUi, RunContext, SavedDesign, Step, TextKnob, ToolbarOp } from '../src/design/session'
-import { FIELD_LABEL, FIELD_PLACEHOLDER, TEACH, fuzzy, knobsOf, useWhen } from '../src/design/teach'
+import type { DesignUi, GraphBox, RunContext, SavedDesign, Step, TextKnob } from '../src/design/session'
+import { FIELD_LABEL, FIELD_PLACEHOLDER, PALETTE_GROUPS, TEACH, groupOf, hasNotes, knobsOf, useWhen } from '../src/design/teach'
 import { TEMPLATES } from '../src/design/templates'
 import { emptyRunState } from '../src/run/events'
 import { replayDesignEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
-import { UNMAPPED_ID, clip, firstLines, wrapText } from '../src/ui/board-layout'
-import { parseBoardMessage } from '../src/ui/board-model'
+import { NOT_SET, UNMAPPED_ID, canOpen } from '../src/ui/graph-layout'
+import { parseGraphMessage } from '../src/ui/graph-model'
+import { ENTER, KEY_OPS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_CORE_W, LEGEND_GAP } from '../src/ui/keys'
+import type { KeyOp, LegendItem } from '../src/ui/keys'
 import { FAILED, fmtTokens } from '../src/ui/rail'
-import { GLYPH } from '../src/ui/theme'
+import { GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_W, SOLO_ROWS, SPLASH_MS, gestureOf, runPose, smallPersona, splashScene } from '../src/ui/persona'
+import type { PersonaSpan, Pose } from '../src/ui/persona'
+import { clip, firstLines, wrapText } from '../src/ui/text'
+import { ACCENT, FADED, GLYPH, PANE_TITLE, RULE } from '../src/ui/theme'
 
 // The designer: the hooks module owns the Design and everything chosen on it
-// (selection, grab, picker), applies ops, saves the file and draws the toolbar
-// and inspector. The flow board (./canvas.tsx) is a Client that draws the
-// design from props, owns only its pan and a drag in flight, and posts here.
+// (selection, view, add list), applies ops, saves the file and draws the screen:
+// header, the graph's region, the detail pane with the keys that act on it, the
+// footer with the graph's keys. The graph (./canvas.tsx) is a Client that draws
+// the design from props, owns only its pan and a drag in flight, and posts
+// here. Keys are typed into the key catcher: one Input, not drawn, that the ring
+// rests on while no field is open; the ones that walk the graph do so over the
+// layout the Client draws (`graphBox`).
 
 const COMMAND = 'conductor'
 const CANVAS_KEY = 'canvas'
+/** The goal's rows under the header (./goal.tsx): a click on them is posted from here. */
+const GOAL_KEY = 'goal'
+/** The splash's scene (./splash.tsx): it counts its own beats. */
+const SPLASH_KEY = 'splash'
+/** Under the splash's scene. */
+const SPLASH_NOTE = 'designed for full screen'
 const TITLE_KEY = 'design-title'
 const NOTES_KEY = 'design-notes'
+/** The add list's filter: `design-add:<n>`, drawn under a new `n` to empty it of the keys it took. */
 const PICKER_KEY = 'design-add'
-/** The field of the design's description (its goal), under the header while `d` has it open. */
+/**
+ * The field of the design's description (its goal), in the detail pane while `g` has it open: `design-description:<n>`,
+ * under a new `n` every time it opens. (Opened again under the key it was last sent from, with the same text, the
+ * engine drew it empty, and Enter then saved an empty goal.)
+ */
 const DESC_KEY = 'design-description'
-const GOAL_PLACEHOLDER = 'what this workflow is for, in a sentence: Claude reads it as the goal'
-/** Saved designs the picker lists; the rest are a count. */
+const TYPE_KEY = 'design-type'
+/** A field at rest, read and not typed in: `design-rest:design-notes@n5`. A press on it opens the fields on that one. */
+const REST_KEY = 'design-rest:'
+/** A row of the start screen: `start:saved:demo`, `start:template:review`. */
+const START_KEY = 'start:'
+const GOAL_PLACEHOLDER = 'what this workflow is for, in a sentence'
+/** Saved designs the start screen lists at once where it is short of rows: a window around the marked one. */
 const SAVED_ROWS = 8
 /** Design files read for a listing, at most. */
 const SAVED_MAX = 60
@@ -100,8 +128,15 @@ const KNOB_KEY = 'design-knob:'
  * A block's field is addressed by the field and the block (`design-notes@n5`): the engine keeps what was typed in an
  * Input under its address, so text typed for one block can never be shown, or sent, under another.
  */
-const fieldKey = (base: string, id: string): string => `${base}@${id}`
+const fieldKey = (base: string, id: string): string => `${base}@${id}#${editGen}`
 const baseOf = (element: string): string => element.split('@')[0] ?? element
+/**
+ * How many times the fields have been closed in this load, in their address: the engine keeps what was typed in an
+ * Input under its address, so fields opened again are new ones and show the block as it is now (after an undo, say).
+ */
+let editGen = 0
+/** Whether the last drawing drew the fields to type in: the drawing after they close counts `editGen` on. */
+let fieldsDrawn = false
 /** Whether the ring on this element means a field is being typed in. */
 const isField = (element: string | undefined): boolean => {
   const base = baseOf(element ?? '')
@@ -110,91 +145,108 @@ const isField = (element: string | undefined): boolean => {
 /** A field as a message names it: `notes`, `fanout`. */
 const fieldWord = (base: string): string => (base === TITLE_KEY ? 'title' : base === NOTES_KEY ? 'notes' : base === DESC_KEY ? 'goal' : base.slice(KNOB_KEY.length))
 /**
- * Where the ring rests: on a Button, so letters are hotkeys (on an Input they would be typed). On `help`: Enter under
- * the ring presses what it rests on, and a help page is the one key that changes nothing.
+ * The key catcher: where the ring rests while no field is open. An Input, so it is given every printable key with its
+ * case (a Button's hotkey cannot see Shift). It is the pane's first focus stop, always: the engine keeps the ring by
+ * its place among the stops, and the first place never moves when the fields after it come and go. What it holds is
+ * keys, not text to read: it is in the tree and not drawn (`display: none`), so it takes no cell and the terminal's
+ * cursor does not stand on it. It is emptied by drawing it under a new key (`keys:<load>.<n>`) with no text: only
+ * once the typing has paused, since a key typed in the frame it is drawn anew is dropped.
  */
-const HOME_KEY = 'key:card'
-/** Where it rests while a run locks editing: moving the selection changes nothing either. */
-const HOME_LOCKED_KEY = 'key:down'
-/** Whether an element is one of the key rows' Buttons. */
-const isKey = (element: string | undefined): boolean => (element ?? '').startsWith('key:') || element === 'design-run'
-/** The keys that still do something while a run locks editing. */
-const LOCKED_OPS: readonly ToolbarOp[] = ['left', 'down', 'up', 'right', 'compact', 'card']
-/** Block types the add picker lists with their hint at once; the rest are a count, and typing narrows. Docked that is all of them: the list never scrolls. */
-const PICK_ROWS = { dock: 12, inline: 4 } as const
+const CATCH_KEY = 'keys'
+/**
+ * This load of the module, in the catcher's key: the engine keeps what was typed in an Input under its key, and a
+ * module loaded again counts from 0 again, so a key of the load before would come back with its old text.
+ */
+const LOAD = Date.now().toString(36)
+let catchGen = 0
+const catcherKey = (): string => `${CATCH_KEY}:${LOAD}.${catchGen}`
+const isCatcher = (element: string | undefined): boolean => (element ?? '').startsWith(`${CATCH_KEY}:`)
+/** The catcher's key as the last drawing drew it ('' where it drew none): what the ring is moved to. */
+let drawnCatcher = ''
+let descGen = 0
+const descKey = (): string => `${DESC_KEY}:${LOAD}.${descGen}`
+const isDescField = (element: string | undefined): boolean => (element ?? '').startsWith(`${DESC_KEY}:`)
+let pickGen = 0
+const pickerKey = (): string => `${PICKER_KEY}:${LOAD}.${pickGen}`
+const isPickerField = (element: string | undefined): boolean => (element ?? '').startsWith(`${PICKER_KEY}:`)
+/**
+ * The type picker's label: `design-label:design-type`. A Button, so that a click on the word opens the list of types
+ * as a click on its value does; it is drawn after the picker, so Tab from the picker comes to it and is passed on (`offLabel`).
+ */
+const LABEL_KEY = 'design-label:'
+/**
+ * Where a move of the person's that lands on the picker's label goes instead: to the picker; or, coming from the
+ * picker (Tab stepping on, and it is the last stop), to the catcher. Any other element stays.
+ */
+const offLabel = (element: string | undefined): string | undefined => {
+  if (element === undefined || !element.startsWith(LABEL_KEY)) return element
+  const picker = element.slice(LABEL_KEY.length)
+  if (ringOn !== picker) return picker
+  return drawnCatcher !== '' ? drawnCatcher : picker
+}
+/** The field a resting field's address stands for (`design-notes`); null for any other element. */
+const restBase = (element: string | undefined): string | null => (element !== undefined && element.startsWith(REST_KEY) ? baseOf(element.slice(REST_KEY.length)) : null)
+/**
+ * The door: a second small Input, the stop right after the catcher while a block's fields are shown. The person's Tab
+ * from the catcher lands on it, and that opens the fields (at rest they are text, with nothing to land on); being an
+ * Input, it takes what is typed until the ring is on the title, and none of it is lost. With the fields open,
+ * Shift+Tab from the title lands on it again: the way back to the graph. Emptied as the catcher is.
+ */
+const DOOR_KEY = 'door'
+let doorGen = 0
+const doorKey = (): string => `${DOOR_KEY}:${LOAD}.${doorGen}`
+const isDoor = (element: string | undefined): boolean => (element ?? '').startsWith(`${DOOR_KEY}:`)
+/** Whether an element is a field or the type picker of the detail pane: where the ring may rest besides the catcher. */
+const isDetailStop = (element: string | undefined): boolean =>
+  element !== undefined && (isField(element) || isDescField(element) || isPickerField(element) || element.startsWith('pick:') || restBase(element) !== null || element === TYPE_KEY)
 /** How long after the command's answer the handoff prompt is submitted. */
 export const SUBMIT_DELAY_MS = 64
+/** How many times the ring is sent to an element before the field is given up. */
+const LAND_TRIES = 5
 /** A redraw's worth of wait before the ring moves to an element just drawn. */
 export const FOCUS_DELAY_MS = 48
 /** How often the prompt box is read while a request waits in it. */
 export const BOX_POLL_MS = 600
 /** What /conductor this module answers: its verbs, `replay design`, and no argument at all (a run shown on its design); run.tsx answers the rest. */
 export const DESIGN_VERBS = /^\s*((design|run|list|draft|delete|rename)(\s|$)|replay\s+design(\s|$)|$)/
-/**
- * The keys. One digit or one lowercase letter each: all a Button's `hotkey` takes (no space, no `?`, so help stays `c`).
- * Docked they are two rows with a meaning each, every key in a cell of its own width (`cells`: its longest label),
- * so a key that comes or goes moves no other: the first row acts on the selected block, the second on the design.
- * Inline they are one row under shorter labels (`short`), and the ones that do not fit are left out, last of `drop` first.
- */
-type KeyDef = { op: ToolbarOp; hotkey: string; label: string; cells: number; short?: string }
-const BLOCK_KEYS: readonly KeyDef[] = [
-  { op: 'left', hotkey: 'h', label: '←', cells: 1 },
-  { op: 'down', hotkey: 'j', label: '↓', cells: 1 },
-  { op: 'up', hotkey: 'k', label: '↑', cells: 1 },
-  { op: 'right', hotkey: 'l', label: '→', cells: 1 },
-  { op: 'addAfter', hotkey: 'a', label: 'add', cells: 3, short: '+' },
-  { op: 'addInside', hotkey: 'i', label: 'in', cells: 2 },
-  { op: 'remove', hotkey: 'x', label: 'del', cells: 4 },
-  { op: 'grab', hotkey: 'g', label: 'grab', cells: 4 },
-  { op: 'edit', hotkey: 'e', label: 'edit', cells: 4 },
-  { op: 'undo', hotkey: 'u', label: 'undo', cells: 4 },
-  { op: 'redo', hotkey: 'y', label: 'redo', cells: 4 },
-]
-const DESIGN_KEYS: readonly KeyDef[] = [
-  { op: 'describe', hotkey: 'd', label: 'goal', cells: 4 },
-  { op: 'compact', hotkey: 'z', label: 'compact', cells: 7, short: 'fold' },
-  { op: 'nextLint', hotkey: 'n', label: 'next lint', cells: 9, short: 'lint' },
-  // Help stands between keys that are always drawn: the ring rests on it, and a neighbour the ring is sent to is a key (see `ui.focus`).
-  { op: 'card', hotkey: 'c', label: 'help', cells: 5, short: '?' },
-  { op: 'review', hotkey: 'v', label: 'ask', cells: 3 },
-  { op: 'run', hotkey: 'r', label: 'run', cells: 3 },
-  { op: 'clearRun', hotkey: 'q', label: 'clear run', cells: 9, short: 'clear' },
-]
-/** The goal is said in at most this many rows under the header (docked). */
-const GOAL_ROWS = 3
-/** Rows the inspector's wrapped texts (headline, a long notes or prompt) may take beyond one, each, while the board leaves rows free. */
-const WRAP_EXTRA = 3
-/** A key's address in the pane. `run` keeps the one it had as a Button of its own. */
-const keyOf = (op: ToolbarOp): string => (op === 'run' ? 'design-run' : `key:${op}`)
-const EDIT_HINT = 'click the title field, or press tab to reach it'
-/** The board gets at least this many rows (a card inside a container): the pane scrolls before the board shrinks further. */
-const BOARD_ROOM_MIN = 8
-/** Inline the board takes what the rest of the pane leaves, down to this: the header row is never scrolled away for it. */
-const BOARD_LEAST_ROWS = 3
-/** Docked, the board keeps at least this share of the pane's rows whatever the inspector holds. */
-const BOARD_SHARE = 0.55
-/** Rows asked for when the pane sits inline above the prompt: a nested container and the inspector under it. */
+/** The goal is said in at most this many rows under the header (inline: one). */
+const GOAL_ROWS = 2
+const GOAL_LABEL = 'Goal: '
+const EDIT_HINT = 'click a field of the block, or press Tab to reach the title'
+/** The graph's region is never asked to be shorter than this while the detail pane, under it, has rows to give. */
+const GRAPH_LEAST_ROWS = 3
+/** Stacked, the detail pane at rest takes this share of the rows between header and footer. */
+const DETAIL_REST_SHARE = 0.45
+/** The detail pane's last rows name the keys that act on it: at most this many docked, one inline or where the pane is short. */
+const HINT_ROWS = 2
+/** The footer's legend, docked: one row where the pane is wide enough for its keys (`LEGEND_CORE_W`), else wrapped onto this many. */
+const LEGEND_WRAP_ROWS = 2
+/** What is said stands in the rule over the footer, docked: this many cells of rule are kept at each side of it. */
+const SAID_RULE_W = 3
+/** Rows asked for when the pane sits inline above the prompt. */
 export const PANE_ROWS = 28
-/** Columns asked for when the pane is docked beside the transcript: the toolbar on one row, and room for a card's notes. */
-export const PANE_COLUMNS = 86
 /**
  * The terminal's width as the last command saw it (`e.presentation.columns`): the
  * only place a hook is told it. Undefined until a command has run in this load.
  */
 let terminalColumns: number | undefined
+/** The timer that puts the header's persona at rest after a gesture. */
+let restPersona: { cancel: () => void } | null = null
+/** Whether the splash's time is running in this load. */
+let splashing = false
+/** The splash stays on its last beat this long before the designer is drawn. */
+const SPLASH_REST_MS = 150
 /**
  * What `$.ui.open` is asked: with the keyboard (`focus`), or shown without it (an
  * edit from chat opens the pane and the person goes on typing in the prompt).
- * The dock's width is asked so that the transcript keeps about half the terminal.
+ * The dock is asked for all of the terminal but a sliver for the transcript.
  */
-const paneArgs = (focus: boolean): { id: string; title: string; rows: number; columns: number; focus?: true } => ({
-  id: DESIGN_PANE_ID,
-  title: DESIGN_PANE_TITLE,
-  rows: PANE_ROWS,
-  columns: dockColumns(PANE_COLUMNS, terminalColumns),
-  ...(focus ? { focus: true as const } : {}),
-})
-/** What `r` leaves under the board: what the design implies, then what to do with the request now in the prompt box. */
+const paneArgs = (focus: boolean): { id: string; title: string; rows: number; columns?: number; focus?: true } => {
+  const columns = dockColumns(terminalColumns)
+
+  return { id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, rows: PANE_ROWS, ...(columns === undefined ? {} : { columns }), ...(focus ? { focus: true as const } : {}) }
+}
+/** What `r` leaves on the message row: what the design implies, then what to do with the request now in the prompt box. */
 const runNotice = (design: Design | null, line: string, isFilled: boolean): string =>
   `run: ${design ? `${preflightLine(design)} · ` : ''}${isFilled ? 'finish the prompt, then Enter' : `type in the prompt: ${line.trim()} …`}`
 const askNotice = (line: string, isFilled: boolean): string => (isFilled ? 'ask: the question is in the prompt · change it as you like, then Enter' : `ask: type in the prompt: ${line.trim()}`)
@@ -228,8 +280,8 @@ const timeTravel = (design: Design | null, ui: DesignUi, way: 'undo' | 'redo', c
   const target: Design = { ...moved.entry.design, nextId: Math.max(nextIdNumber(moved.entry.design), nextIdNumber(design)) }
   return restoreDesign(design, ui, target, way, moved.entry.what, context)
 }
-/** One key, from the toolbar or the board: the two that travel the history, or any other. */
-const keyStep = (design: Design | null, ui: DesignUi, op: ToolbarOp, context: RunContext): Step =>
+/** One key: the two that travel the history, or any other. */
+const keyStep = (design: Design | null, ui: DesignUi, op: KeyOp, context: RunContext): Step =>
   op === 'undo' || op === 'redo' ? timeTravel(design, ui, op, context) : applyOp(design, ui, op, context)
 /**
  * What is being typed and not saved yet: into the fields of one block of one design (by field, `design-notes`),
@@ -243,14 +295,93 @@ const hasDrafts = (): boolean => drafts.goal !== null || (drafts.id !== null && 
 /** What one field's text changes of its block. */
 const fieldPatch = (node: { title: string }, base: string, value: string): NodePatch =>
   base === TITLE_KEY ? { title: value.trim() || node.title } : base === NOTES_KEY ? { notes: value.trim() } : ({ knobs: { [base.slice(KNOB_KEY.length)]: value.trim() } } as NodePatch)
-/** Whether the pane's last drawing held the keyboard, and where it sat: a drawing sets them, the hooks read them. */
-let paneHeld = false
+/** Where the pane's last drawing sat: a drawing sets it. */
 let paneShape = ''
-/** The focus stops of the last drawing, in words: when they change under a ring at rest, the ring is put back on the home key. */
+/** The focus stops of the last drawing, in words: when they change under a ring at rest, the ring is put back on the catcher. */
 let ringStops = ''
+/**
+ * The element the ring is on, as far as a hook was told: the person's moves (`ui.focus`) and the mod's own. Undefined
+ * when nothing is known (a fresh load). A field that is typed in while the ring is known to be elsewhere got the ring
+ * by its place among the stops, unasked: what is typed there is not its text.
+ */
+let ringOn: string | undefined
+/** The element the mod is moving the ring to and has not heard back of ('' with none): what is typed there meanwhile is its text. */
+let ringTo = ''
+/**
+ * What each open field's Input was drawn with, by its address (`value`), and what was typed for the field since: the
+ * letters that came by the catcher or the door while the ring was on its way (`head`: they stand right after that
+ * text), and the ones typed at its end in the field itself (`tail`).
+ *
+ * Three engine facts shape this. An Input keeps what is typed in it for as long as the `value` drawn does not change.
+ * When that does change the text is replaced, but the cursor stays where it was, so the next letter lands in the
+ * middle. And a letter typed into an Input in the very frame it is drawn under another address is dropped. So a
+ * field is drawn with the one text it opened with for as long as it is typed in, whatever is typed (the pane is drawn
+ * again on every keystroke, to show the whole text under the field); letters that reached the mod by another way are
+ * kept beside it, and the field is drawn anew, with all of it, only once the typing has paused (`tidySoon`).
+ */
+let pins: Record<string, { value: string; head: string; tail: string }> = {}
+/** The text an open field is drawn with: the one it opened with. */
+const pinned = (element: string, value: string): string => (pins[element] ??= { value, head: '', tail: '' }).value
+/**
+ * The whole text of a field, from what its Input says it holds. `loose` when the letters kept beside it can no longer
+ * be placed (the text it opened with was cut into): the field is then drawn anew at once.
+ */
+const fieldText = (element: string, typed: string): { text: string; loose: boolean } => {
+  const pin = pins[element]
+  if (!pin) return { text: typed, loose: false }
+  if (typed.startsWith(pin.value)) {
+    pin.tail = typed.slice(pin.value.length)
+
+    return { text: `${pin.value}${pin.head}${pin.tail}`, loose: false }
+  }
+  if (pin.head === '') return { text: typed, loose: false }
+  // A cut at its end is made at the end of the whole; anything else keeps the letters after it.
+  const whole = `${pin.value}${pin.head}`
+  return { text: pin.value.startsWith(typed) ? whole.slice(0, Math.max(0, whole.length - (pin.value.length - typed.length))) : `${typed}${pin.head}`, loose: true }
+}
+/** The open fields are drawn anew, under new addresses, each with all of its text: the ring, kept by its place, is on the same field after as before. */
+const redrawFields = (): void => {
+  editGen++
+  for (const pin of Object.values(pins)) pin.head = ''
+  const swap = (key: string): string => key.replace(/#\d+$/, `#${editGen}`)
+  if (ringOn !== undefined && isField(ringOn)) ringOn = swap(ringOn)
+  if (isField(ringTo)) ringTo = swap(ringTo)
+}
+/** Counts every key typed in the pane: what waits for the typing to pause looks at it. */
+let typingSeq = 0
+/** How long after the last key the Inputs are tidied. */
+const TIDY_MS = 600
+/** The catcher is emptied once it holds more keys than this. */
+const CATCH_FULL = 40
+/** What the door's text held when it was last read, as `caught`. */
+let doored = { element: '', taken: 0 }
+/** The saved designs as last read, by name, for the start screen's preview: null for a file that is no design. */
+const previews: Record<string, Design | null> = {}
+/**
+ * What the catcher's text held when it was last read, by the key it was drawn under: the characters after that are the
+ * new ones. `sent` is the text Enter was last pressed on, until the next key: Enter empties the catcher (seen live,
+ * 2.1.296), so what it holds next is counted from the start again.
+ */
+let caught: { element: string; taken: number; sent: string | null } = { element: '', taken: 0, sent: null }
+/** The same for the add list's filter: how many of its characters were keys (`w s n`), not text. */
+let picked = { element: '', taken: 0 }
+/** The filter Enter was last pressed in, as `savedField`: what is typed there once the list has closed is for whatever opened next. */
+let pickedField = { element: '', value: '', taken: 0 }
+/** The field Enter was last pressed in, its text, and how many characters typed after it were taken as keys: what is typed there before the ring has left is keys. */
+let savedField = { element: '', value: '', taken: 0 }
+/** Where in a field's text the characters not yet taken start, once Enter was pressed in it: after the text Enter sent, where the field still holds it (Enter empties some fields). */
+const afterEnter = (sent: { value: string; taken: number }, value: string): number => (value.startsWith(sent.value) ? sent.value.length : 0) + sent.taken
+/** The graph's region as the last drawing gave it to the Client: the keys walk the layout made for the same room. */
+let graphBox: GraphBox | undefined
+/** Where that region stands in the pane's body, in cells: the wheel over it scrolls the graph. Null while no graph is drawn. */
+let graphArea: { top: number; left: number; columns: number; rows: number } | null = null
+/** Every row the wheel has asked for over the graph in this load, summed: the Client moves its pan by what was added since it last drew. */
+let wheelRows = 0
+/** The keys typed, applied one at a time in the order they came. */
+let keyChain: Promise<void> = Promise.resolve()
 /** A save of drafts was asked from a drawing and has not run yet. */
 let flushAsked = false
-/** A poll of the prompt box is running, for a request (`r`, `v`) that waits there. */
+/** A poll of the prompt box is running, for a request (`r`, `q`) that waits there. */
 let boxWatched = false
 /** The design whose hand-off context a `/conductor run` already recorded: the prompt hook must not attach it a second time. */
 let delivered: string | null = null
@@ -264,6 +395,10 @@ const runDesignAtom = atom({ plugin: 'conductor', key: 'runDesign' } as const, n
 const designAtom = atom({ plugin: 'conductor', key: 'design' } as const, null)
 const uiAtom = atom({ plugin: 'conductor', key: 'designUi' } as const, initialUi())
 /** When the run began and ended: run.tsx stamps it. */
+/** Whether this session has seen the splash: the pane's first drawing shows it, once. */
+const splashedAtom = atom({ plugin: 'conductor', key: 'splashed' } as const, false)
+/** The gesture the header's persona holds; at rest it is `idle`. */
+const personaAtom = atom({ plugin: 'conductor', key: 'persona' } as const, 'idle')
 const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initialTimes())
 
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 160)
@@ -275,13 +410,13 @@ const lockedNow = async ($: EngineInterface): Promise<boolean> => {
 }
 
 let flushing: Promise<string | null> = Promise.resolve(null)
-/** What the last save of drafts said, for a moment: a drawing may have asked for it just before the action that would have (a click on the board redraws the pane first). */
+/** What the last save of drafts said, for a moment: a drawing may have asked for it just before the action that would have (a click on the graph redraws the pane first). */
 let justSaid: string | null = null
 const SAID_MS = 400
 /**
  * Saves what was typed into fields and not sent with Enter: one edit like any other (announced, undone with `u`, written
  * to the file). Called before anything else acts on the design, on every way out of a field: the ring moving, a click on
- * the board, a key, a picker's choice, a command, a prompt sent, an edit from chat, the pane closing, the keyboard gone.
+ * the graph, a key, a type picked, a command, a prompt sent, an edit from chat, the pane closing, the keyboard gone.
  * Resolves to what was said of it, or null when there was nothing to save. One at a time, in the order asked.
  */
 const flushDrafts = ($: EngineInterface): Promise<string | null> => {
@@ -337,7 +472,7 @@ const flushDrafts = ($: EngineInterface): Promise<string | null> => {
     }
     const saved = design
     await update($, designAtom, () => saved)
-    await update($, uiAtom, held => ({ ...held, notice, runCleared: true, freshId: titled ? null : held.freshId }))
+    await update($, uiAtom, held => ({ ...held, notice, runCleared: true, unsaved: false, freshId: titled ? null : held.freshId }))
     justSaid = notice
     $.clock.after(SAID_MS, () => {
       if (justSaid === notice) justSaid = null
@@ -349,7 +484,7 @@ const flushDrafts = ($: EngineInterface): Promise<string | null> => {
 
   return run
 }
-/** After a flush, an action that left nothing said keeps what the flush said (`n1 changed: notes · u: undo`). */
+/** After a flush, an action that left nothing said keeps what the flush said (`n1 changed: notes · [u] Undo`). */
 const keepSaid = async ($: EngineInterface, flushed: string | null): Promise<void> => {
   const said = flushed ?? justSaid
   justSaid = null
@@ -357,23 +492,239 @@ const keepSaid = async ($: EngineInterface, flushed: string | null): Promise<voi
 }
 
 /**
- * Puts the ring where it belongs while no field is asked for: on the picker's field while one is open, else on the home
- * key. The engine keeps the ring by its place among the stops: when the stops change (a run ends and the fields are
- * drawn again, another block is selected) it would otherwise rest on whatever now stands there, a text field included.
+ * Puts the ring where it belongs while no field is asked for: on the add list's filter while it is open, else on the
+ * catcher. The catcher is the first stop, so the ring is there by its place already but for the ways out of the detail
+ * pane (a field's Enter, a type picked, a run ending under a ring that stood in a field).
  */
 const settleRing = ($: EngineInterface, tries = 1): void => {
   $.clock.after(FOCUS_DELAY_MS, () => {
     void (async (): Promise<void> => {
       const ui = await read($, uiAtom)
-      if (ui.status !== 'ready' || ui.editing || ui.describing) return
-      const key = ui.picker !== null ? PICKER_KEY : (await lockedNow($)) ? HOME_LOCKED_KEY : HOME_KEY
+      if ((ui.status !== 'ready' && ui.status !== 'pick') || ui.editing || ui.describing) return
+      const key = ui.status === 'ready' && ui.picker !== null && !(await lockedNow($)) ? pickerKey() : drawnCatcher
       const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch(() => ({ deny: 'no' }))
-      if (moved.deny !== undefined && tries > 0) settleRing($, tries - 1)
+      if (moved.deny === undefined) ringOn = key
+      else if (tries > 0) settleRing($, tries - 1)
     })()
   })
 }
 
-/** A request (`r`, `v`) waits in the prompt box under a line that says so: the line goes once the box is empty again. */
+/**
+ * The ring goes back to the catcher, now (it is always drawn, so there is nothing to wait for): the next letter is a
+ * key again. Only then are the fields closed: they are drawn as text from there on, and the ring, kept by its place,
+ * must not be left on what takes their place.
+ */
+const home = async ($: EngineInterface): Promise<void> => {
+  const key = drawnCatcher
+  ringTo = ''
+  const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch(() => ({ deny: 'no' }))
+  if (moved.deny === undefined) ringOn = key
+  // Not drawn at this moment (the add list stands in its place): once it is.
+  else settleRing($)
+  await update($, uiAtom, held => (held.editing || held.freshId !== null ? { ...held, editing: false, freshId: null } : held))
+  $.ui.invalidate('ui.render')
+}
+
+/**
+ * Moves the ring to an element of the detail pane: at once where it is drawn already, else a redraw later, tried
+ * again once more. Where it cannot be reached at all the field is given up and `hint` is said.
+ */
+const landOn = ($: EngineInterface, target: () => string, hint: string): void => {
+  const land = async (tries: number, last: string): Promise<void> => {
+    const key = target()
+    // Said before the move is asked: a letter that reaches the element before the answer does is its text.
+    ringTo = key
+    const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
+    if (moved.deny === undefined && key === target()) {
+      ringOn = key
+      if (ringTo === key) ringTo = ''
+      $.ui.invalidate('ui.render')
+
+      return
+    }
+    // Refused: not drawn yet, or drawn anew under another address meanwhile (letters typed on the way do that): that one counts from the start.
+    const left = key === last ? tries - 1 : LAND_TRIES
+    if (left > 0) return void $.clock.after(left > LAND_TRIES - 2 ? FOCUS_DELAY_MS : FOCUS_DELAY_MS * 2, () => void land(left, key))
+    if (ringTo === key) ringTo = ''
+    await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, notice: hint }))
+  }
+  void land(LAND_TRIES, '')
+}
+
+/**
+ * Opens the fields of the selected block for typing, the ring on `base` (the title when none is named): what `e`
+ * does, for the ways that are not a key (Tab from the catcher, a click on a field at rest).
+ */
+const openFields = async ($: EngineInterface, base: string = TITLE_KEY): Promise<void> => {
+  const ui = await read($, uiAtom)
+  const design = await read($, designAtom)
+  const node = design === null || ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
+  if (ui.status !== 'ready' || !node || ui.handed || (await lockedNow($))) return
+  if (!ui.editing || ui.help > 0 || ui.picker !== null || ui.describing) await update($, uiAtom, held => ({ ...held, editing: true, help: 0, picker: null, describing: false, detailHidden: false, confirmId: null }))
+  landOn($, () => fieldKey(base, node.id), `edit: ${EDIT_HINT}`)
+}
+
+/**
+ * Whether the pane is taking the keyboard back after a click on the graph and the ring is not on the catcher yet.
+ * A letter typed then finds the ring where the pane's take left it; on a Button (a field at rest) the engine gives
+ * the letter to the prompt box, and the keyboard with it: `prompt.edit` hears of it and makes it the key it was.
+ */
+let landing = false
+/** `landing` is given up after this long, whatever became of the ring. */
+const LANDING_MS = 400
+/**
+ * A click on the goal asked for its field and the pane is taking the keyboard for it: for that long (`LANDING_MS` at
+ * most) a drawing that finds the pane without the keys, or a move of the ring, does not close the field.
+ */
+let goalAsked = false
+
+/**
+ * A click gave the graph the keyboard, and nothing tells a hook when the graph loses it again (Escape is the
+ * engine's). So the pane takes the keys back at once, for its catcher (`picks`: for the add list's filter): from there
+ * the pane is told whether it holds them, and can say so truthfully. Refused (the prompt box holds text): the graph
+ * keeps the keyboard, so it answers no key until the person takes them to the prompt (`handed`).
+ */
+const retake = async ($: EngineInterface, picks: boolean): Promise<void> => {
+  landing = true
+  $.clock.after(LANDING_MS, () => {
+    landing = false
+  })
+  await $.ui.open(paneArgs(true)).catch(() => undefined)
+  // The ring is asked onto the catcher at once, before the fields close: left where it was, it would rest on what
+  // takes a field's place until it is moved. The pane taking the keyboard is itself a move of the ring, and a move
+  // asked while that one lands is refused ("the focus moved meanwhile"): it is asked again below, with no wait.
+  const early = picks || drawnCatcher === '' ? { deny: 'no' } : await $.ui.focus({ requestId: DESIGN_PANE_ID, key: drawnCatcher }).catch((error: unknown) => ({ deny: reason(error) }))
+  if (early.deny === undefined) ringOn = drawnCatcher
+  // The ring leaves the field it was in, if any: on the catcher nothing is being typed.
+  await update($, uiAtom, held => (held.editing || held.freshId !== null ? { ...held, editing: false, freshId: null } : held))
+  // Moving the ring is also how the pane learns whether it got the keyboard: a site that does not hold it is refused.
+  // (`$.ui.panes()` asked right after the open still says no.) One more try, since the pane may not be drawn yet.
+  const land = async (tries: number): Promise<void> => {
+    const key = picks ? pickerKey() : drawnCatcher
+    const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
+    const holds = moved.deny === undefined
+    if (!holds && tries > 0) {
+      $.clock.after(FOCUS_DELAY_MS * 2, () => void land(tries - 1))
+
+      return
+    }
+    landing = false
+    if (holds) ringOn = key
+    const now = await read($, uiAtom)
+    if (holds === now.handed) await update($, uiAtom, held => ({ ...held, handed: !holds, notice: !holds ? HANDED_NOTICE : held.notice === HANDED_NOTICE ? null : held.notice }))
+    else $.ui.invalidate('ui.render')
+  }
+  // The filter exists once the list is drawn: the ring moves there a frame later.
+  if (picks) $.clock.after(FOCUS_DELAY_MS, () => void land(1))
+  else await land(1)
+}
+
+/** The goal's field is drawn anew, as `redrawFields` does a block's. */
+const redrawGoal = (): void => {
+  descGen++
+  if (isDescField(ringOn)) ringOn = descKey()
+  if (isDescField(ringTo)) ringTo = descKey()
+}
+/**
+ * A key was typed. Once none has been for TIDY_MS the Inputs are tidied: the catcher and the door emptied of the keys
+ * they took, and a field that has letters kept beside it drawn anew with all of its text. Never while the typing goes
+ * on: a letter typed in the frame an Input is drawn anew would be dropped.
+ */
+const tidySoon = ($: EngineInterface): void => {
+  const mine = ++typingSeq
+  $.clock.after(TIDY_MS, () => {
+    if (mine !== typingSeq) return
+    let tidied = false
+    if (caught.taken > CATCH_FULL && caught.element === drawnCatcher) {
+      catchGen++
+      tidied = true
+    }
+    if (doored.taken > 0) {
+      doorGen++
+      doored = { element: '', taken: 0 }
+      tidied = true
+    }
+    // Drawn anew, a field keeps the cursor of the one before it, short of the end by the letters added. The ring is
+    // stepped off it and on again: landing puts the cursor at the end.
+    const at = ringOn
+    const again = (target: () => string): void => {
+      void $.ui
+        .focus({ requestId: DESIGN_PANE_ID, key: drawnCatcher })
+        .then(() => landOn($, target, `edit: ${EDIT_HINT}`))
+        .catch(() => undefined)
+    }
+    if (pins[descKey()]?.head) {
+      redrawGoal()
+      tidied = true
+      if (isDescField(at)) again(descKey)
+    }
+    if (Object.entries(pins).some(([element, pin]) => pin.head !== '' && isField(element))) {
+      redrawFields()
+      tidied = true
+      const [base = '', id = ''] = (at ?? '').replace(/#\d+$/, '').split('@')
+      if (at !== undefined && isField(at)) again(() => fieldKey(base, id))
+    }
+    if (tidied) $.ui.invalidate('ui.render')
+  })
+}
+/** The run laid over the design shown, as the steps need it. */
+const runContext = async ($: EngineInterface): Promise<RunContext> => {
+  const now = await read($, runAtom)
+  const held = overlaysDesign(now, await read($, runDesignAtom), await read($, uiAtom))
+
+  return { ...(held ? { run: now, locked: now.status === 'running' } : {}), ...(graphBox ? { graph: graphBox } : {}) }
+}
+
+/** A change is kept for `u`, counted as a revision, and saved. */
+const store = async ($: EngineInterface, step: Step, before: Design | null): Promise<DesignUi> => {
+  if (!step.changed || !step.design) return step.ui
+  if (step.what !== undefined) record(step.ui.name, before, step.what)
+  try {
+    if (isSaved(step.ui.name)) await $.fs.write(designFile(await $.session.root(), step.ui.name), serializeDesign(step.design))
+  } catch (error) {
+    return { ...step.ui, notice: `not saved: ${reason(error)}` }
+  }
+
+  return step.ui
+}
+
+/** The header's persona makes a gesture and, a moment after the last one, is at rest again. */
+const gesture = ($: EngineInterface, pose: Pose): void => {
+  restPersona?.cancel()
+  void update($, personaAtom, () => pose)
+  restPersona = $.clock.after(GESTURE_MS, () => {
+    restPersona = null
+    void update($, personaAtom, () => 'idle' as const)
+  })
+}
+
+/**
+ * The splash is on: it is over after its time, and the ring is then put where the designer has it. Started by the
+ * drawing that shows it; a reload in the middle of it starts it again.
+ */
+const startSplash = ($: EngineInterface): void => {
+  if (splashing) return
+  splashing = true
+  $.clock.after(SPLASH_MS + SPLASH_REST_MS, () => {
+    void update($, splashedAtom, () => true).then(() => settleRing($))
+  })
+}
+
+/** A key or a choice in the detail pane: the state is read as it is now, stepped, saved, written back. */
+const commit = async ($: EngineInterface, make: (design: Design | null, held: DesignUi, context: RunContext) => Step): Promise<Step> => {
+  const before = await read($, designAtom)
+  const held = await read($, uiAtom)
+  const step = make(before, held, await runContext($))
+  const nextUi = await store($, step, before)
+  if (step.design !== before) await update($, designAtom, () => step.design)
+  if (nextUi !== held) await update($, uiAtom, () => nextUi)
+  const pose = step.changed ? gestureOf(before, step.design) : null
+  if (pose !== null) gesture($, pose)
+
+  return { ...step, ui: nextUi }
+}
+
+/** A request (`r`, `q`) waits in the prompt box under a line that says so: the line goes once the box is empty again. */
 const watchBox = ($: EngineInterface): void => {
   if (boxWatched) return
   boxWatched = true
@@ -392,6 +743,316 @@ const watchBox = ($: EngineInterface): void => {
   look()
 }
 
+/** Says one thing on the message row. */
+const say = async ($: EngineInterface, notice: string): Promise<void> => {
+  await update($, uiAtom, held => ({ ...held, notice }))
+}
+
+/**
+ * `r` and `q` put a request in the prompt box, for the person to finish and send: from then on what they type
+ * is for the prompt. No call hands the keyboard from a pane to the prompt, so the pane is closed and shown again
+ * without it. Where that did not take the keys away, no key is acted on until the person does (`handed`).
+ */
+const request = async ($: EngineInterface, kind: 'run' | 'ask'): Promise<void> => {
+  const ui = await read($, uiAtom)
+  const now = await read($, designAtom)
+  if (kind === 'run' && !isSaved(ui.name)) return say($, 'run: a replay is not a saved design, there is nothing to hand off')
+  const line = kind === 'run' ? handoffPrompt(ui.name) : reviewPrompt(ui.name)
+  const filled = await $.prompt.fill({ text: line }).catch(() => ({ isFilled: false }))
+  await say($, kind === 'run' ? runNotice(now, line, filled.isFilled) : askNotice(line, filled.isFilled))
+  if (!filled.isFilled) return
+  watchBox($)
+  await $.ui.close({ id: DESIGN_PANE_ID }).catch(() => undefined)
+  await $.ui.open(paneArgs(false)).catch(() => undefined)
+  // The ring can be moved only in a site that holds the keyboard: if it still can, the keys did not go.
+  $.clock.after(FOCUS_DELAY_MS * 2, () => {
+    void $.ui
+      .focus({ requestId: DESIGN_PANE_ID, key: drawnCatcher })
+      .catch(() => ({ deny: 'no' }))
+      .then(moved => (moved.deny === undefined ? update($, uiAtom, held => ({ ...held, handed: true, notice: HANDED_NOTICE })) : undefined))
+  })
+}
+
+/**
+ * Enter in a field of a block: its text and whatever was typed in the block's other fields are saved as one edit,
+ * and the ring goes back to the catcher. The ring is claimed for the catcher first: a letter typed on Enter's heels
+ * is then no text of the field.
+ */
+const saveField = async ($: EngineInterface, id: string, base: string, value: string): Promise<void> => {
+  ringOn = drawnCatcher
+  savedField = { element: fieldKey(base, id), value, taken: 0 }
+  const ui = await read($, uiAtom)
+  const mine = drafts.id === id && drafts.name === ui.name
+  drafts = { name: ui.name, id, goal: drafts.name === ui.name ? drafts.goal : null, values: { ...(mine ? drafts.values : {}), [base]: value } }
+  await home($)
+  await flushDrafts($)
+}
+
+/** Enter in the goal's field: saved, and the detail pane is the selected block's again. */
+const saveGoal = async ($: EngineInterface, value: string): Promise<void> => {
+  drafts = { ...drafts, goal: null }
+  await commit($, (before, held, context) => describeDesign(before, held, value, context))
+  await home($)
+}
+
+/** A choice in the add list: the block is added and its title is the next thing typed; a type picked for a block sends the ring back to the catcher. */
+const pick = async ($: EngineInterface, choice: { type?: NodeType }): Promise<void> => {
+  await flushDrafts($)
+  const step = await commit($, (before, held, context) => pickBlock(before, held, choice, context))
+  const fresh = step.changed && step.ui.editing ? step.ui.freshId : null
+  if (fresh !== null) landOn($, () => fieldKey(TITLE_KEY, fresh), `edit: ${EDIT_HINT}`)
+  else if (!step.ui.picker) await home($)
+}
+
+/** Starts the design the start screen was opened for, from a template (or blank). */
+const startFrom = async ($: EngineInterface, templateId: string): Promise<void> => {
+  const step = startDesign(await read($, uiAtom), templateId)
+  if (!step.design) return
+  // Not written yet: the first edit (or handing it off) saves it. A design looked at and left leaves no file.
+  delete histories[step.ui.name]
+  await update($, designAtom, () => step.design)
+  // A design nobody named says once how it gets a name (the line goes with the next thing said).
+  await update($, uiAtom, () => ({ ...step.ui, help: 0, notice: isDefaultName(step.ui.name) ? `named ${step.ui.name} for now · /${COMMAND} rename ${step.ui.name} <name> names it` : null }))
+  settleRing($)
+}
+
+/** A saved design picked on the start screen: read again as it is now, and shown. */
+const openSaved = async ($: EngineInterface, name: string): Promise<void> => {
+  const held = await read($, uiAtom)
+  const text = await $.fs.read(designFile(await $.session.root(), name)).catch(() => undefined)
+  const step = openDesign(name, typeof text === 'string' ? text : undefined, held)
+  if (step.ui.status === 'pick') {
+    await update($, uiAtom, ui => ({ ...ui, notice: `${name} is gone: it could not be read` }))
+
+    return
+  }
+  await update($, designAtom, () => step.design)
+  await update($, uiAtom, () => step.ui)
+  settleRing($)
+}
+
+/** A row of the start screen is opened: by Enter on the marked one, or by a click on any. */
+const openEntry = async ($: EngineInterface, at?: number): Promise<void> => {
+  const ui = await read($, uiAtom)
+  if (ui.status !== 'pick') return
+  const entry = startEntries(ui.saved ?? [])[at ?? ui.startMark ?? 0]
+  if (!entry) return
+  if (entry.kind === 'saved') await openSaved($, entry.id)
+  else await startFrom($, entry.id)
+}
+
+/** One key on the start screen: `w` / `s` move the mark, Enter opens the marked row, `?` turns the help pages and `x` closes them. */
+const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
+  if (key === ENTER) {
+    await openEntry($)
+
+    return false
+  }
+  const op = KEY_OPS[key]
+  if (op === 'up' || op === 'down') await update($, uiAtom, held => ({ ...moveStartMark(held, op === 'up' ? -1 : 1), help: 0 }))
+  else if (op === 'help') await update($, uiAtom, held => ({ ...held, notice: null, help: ((held.help ?? 0) % HELP_PAGES) + 1 }))
+  else if (op === 'remove' && ((await read($, uiAtom)).help ?? 0) > 0) await update($, uiAtom, held => ({ ...held, help: 0 }))
+  else await say($, unboundNotice(key))
+
+  return true
+}
+
+/**
+ * One key, as the catcher was given it: a character, or `enter`. Resolves to false when the keys typed with it are
+ * not to be applied any more (the keyboard went to the prompt, nothing is on the board).
+ */
+const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
+  const ui = await read($, uiAtom)
+  const design = await read($, designAtom)
+  if (ui.status === 'pick') return startKey($, key)
+  if (ui.status !== 'ready' || design === null) return false
+  const { locked } = await runContext($)
+  const node = ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
+  // A field was asked for (`e`, a new block, `g`, `n`) and the ring is on its way there: it moves a redraw later. What
+  // is typed into the catcher meanwhile is that field's text, never a key: `e` then `x` types an x, it deletes nothing.
+  if (!ui.handed && !locked) {
+    if (ui.editing && node) {
+      const mine = drafts.id === node.id && drafts.name === ui.name
+      const text = (mine ? drafts.values[TITLE_KEY] : undefined) ?? (ui.freshId === node.id ? '' : node.title)
+      if (key === ENTER) await saveField($, node.id, TITLE_KEY, text)
+      else {
+        // The title's field may be drawn already, without this letter: the letter is kept beside it, after the text it
+        // opened with and before what was typed in the field itself since, until the typing pauses.
+        const pin = pins[fieldKey(TITLE_KEY, node.id)]
+        if (pin) pin.head += key
+        drafts = { name: ui.name, id: node.id, goal: drafts.name === ui.name ? drafts.goal : null, values: { ...(mine ? drafts.values : {}), [TITLE_KEY]: pin ? `${pin.value}${pin.head}${pin.tail}` : `${text}${key}` } }
+      }
+
+      return true
+    }
+    if (ui.describing) {
+      const text = drafts.goal !== null && drafts.name === ui.name ? drafts.goal : design.description
+      if (key === ENTER) await saveGoal($, text)
+      else {
+        const pin = pins[descKey()]
+        if (pin) pin.head += key
+        const whole = pin ? `${pin.value}${pin.head}${pin.tail}` : `${text}${key}`
+        drafts = drafts.name === ui.name ? { ...drafts, goal: whole } : { ...noDrafts(), name: ui.name, goal: whole }
+      }
+
+      return true
+    }
+    if (ui.picker !== null) {
+      if (key === ENTER) await pick($, {})
+      else {
+        await update($, uiAtom, held => typePicker(design, held, `${held.picker?.query ?? ''}${key}`).ui)
+        // `x` closed the list before the ring got to its filter.
+        if ((await read($, uiAtom)).picker === null) await home($)
+      }
+
+      return true
+    }
+  }
+  const op = KEY_OPS[key]
+  if (op === undefined) {
+    await say($, unboundNotice(key))
+
+    return true
+  }
+  // What was typed into a field and not sent is saved before the key acts.
+  const flushed = await flushDrafts($)
+  const step = await commit($, (before, held, context) => keyStep(before, held, op, context))
+  await keepSaid($, flushed)
+  // A request waits in the prompt box: the key was not acted on, and the pane says how to get to the prompt.
+  if (ui.handed) return false
+  if ((op === 'run' || op === 'review') && !locked) {
+    await request($, op === 'run' ? 'run' : 'ask')
+
+    return false
+  }
+  const editId = op === 'edit' && step.ui.editing ? step.ui.selectedId : null
+  if (editId !== null) landOn($, () => fieldKey(TITLE_KEY, editId), `edit: ${EDIT_HINT}`)
+  if (op === 'goal' && step.ui.describing) {
+    descGen++
+    landOn($, descKey, 'goal: press Tab to reach the field')
+  }
+  if (op === 'add' && step.ui.picker) {
+    // A new filter, with nothing typed in it.
+    pickGen++
+    landOn($, pickerKey, 'new block: press Tab to reach the filter')
+  }
+
+  return true
+}
+
+/** Keys join the line: each is applied on the state the one before it left. */
+const queueKeys = ($: EngineInterface, keys: readonly string[] | null): void => {
+  keyChain = keyChain
+    .then(async (): Promise<void> => {
+      if (keys === null) return say($, PASTE_NOTICE)
+      for (const key of keys) if (!(await runKey($, key))) return
+    })
+    .catch((error: unknown) => {
+      $.ui.toast(`conductor: ${reason(error)}`)
+    })
+    // The catcher is drawn again under its new key, empty, whatever the keys changed.
+    .then(() => $.ui.invalidate('ui.render'))
+}
+
+/**
+ * What the catcher was given: its whole text so far (it is emptied only once the typing has paused), so the new
+ * characters are the ones after those already taken. Up to BURST_MAX at once are keys, applied in order; more is a
+ * paste. Enter (`submit`) is a key after them.
+ */
+const catchKeys = ($: EngineInterface, element: string, kind: 'change' | 'submit', value: string): void => {
+  const { sent } = caught
+  // After Enter the text is new from its first character; where it still starts with all that Enter sent, from there.
+  const from = caught.element !== element ? 0 : sent === null ? Math.min(value.length, caught.taken) : value.length > sent.length && value.startsWith(sent) ? sent.length : 0
+  const fresh = value.slice(from)
+  caught = { element, taken: value.length, sent: kind === 'submit' ? value : null }
+  tidySoon($)
+  const burst = burstKeys(fresh)
+  queueKeys($, 'paste' in burst ? null : kind === 'submit' ? [...burst.keys, ENTER] : burst.keys)
+}
+
+/**
+ * What the door was given: the person's Tab left the ring on it and the fields are opening. Whatever is typed here
+ * is the title's text, as what is typed into the catcher after `e` is; Enter saves it.
+ */
+const doorKeys = ($: EngineInterface, element: string, kind: 'change' | 'submit', value: string): void => {
+  const fresh = doored.element === element ? value.slice(Math.min(value.length, doored.taken)) : value
+  doored = { element, taken: value.length }
+  tidySoon($)
+  keyChain = keyChain
+    .then(async (): Promise<void> => {
+      if (!(await read($, uiAtom)).editing) await openFields($)
+      if (!(await read($, uiAtom)).editing) return
+      for (const key of [...fresh, ...(kind === 'submit' && value !== '' ? [ENTER] : [])]) if (!(await runKey($, key))) return
+    })
+    .catch((error: unknown) => {
+      $.ui.toast(`conductor: ${reason(error)}`)
+    })
+    .then(() => $.ui.invalidate('ui.render'))
+}
+
+/**
+ * The list closed on Enter and the ring has not left its filter yet: what was typed there since is no filter text. It
+ * goes where a key typed now goes (a block was added: into its title). False when the keys are not to be applied.
+ */
+const closedFilter = async ($: EngineInterface, element: string, value: string): Promise<boolean> => {
+  if (pickedField.element !== element) return false
+  const fresh = value.slice(afterEnter(pickedField, value))
+  pickedField = { ...pickedField, taken: pickedField.taken + fresh.length }
+  const burst = burstKeys(fresh)
+  if ('paste' in burst) return false
+  for (const key of burst.keys) if (!(await runKey($, key))) return false
+
+  return true
+}
+
+/** Enter in the add list's filter: the marked type is taken. Pressed again before the ring has left, it is Enter for what opened next. */
+const filterEnter = ($: EngineInterface, element: string, value: string): void => {
+  keyChain = keyChain
+    .then(async (): Promise<void> => {
+      if ((await read($, uiAtom)).picker !== null) {
+        pickedField = { element, value, taken: 0 }
+
+        return pick($, {})
+      }
+      if (await closedFilter($, element, value)) await runKey($, ENTER)
+    })
+    .catch((error: unknown) => {
+      $.ui.toast(`conductor: ${reason(error)}`)
+    })
+    .then(() => $.ui.invalidate('ui.render'))
+}
+
+/**
+ * What the add list's filter holds: while nothing narrows the list `w` / `s` move the mark and `n` changes the
+ * place; those are taken out of the text (the filter is drawn again under a new key, without them).
+ */
+const filterKeys = ($: EngineInterface, element: string, value: string): void => {
+  keyChain = keyChain
+    .then(async (): Promise<void> => {
+      const design = await read($, designAtom)
+      if ((await read($, uiAtom)).picker === null) {
+        await closedFilter($, element, value)
+
+        return
+      }
+      const skip = picked.element === element ? Math.min(picked.taken, value.length) : 0
+      let taken = 0
+      await update($, uiAtom, held => {
+        const typed = typePicker(design, held, value.slice(skip))
+        taken = typed.taken
+        return typed.ui
+      })
+      picked = { element, taken: skip + taken }
+      if (taken > 0) pickGen++
+      // `x` closed the list: the ring goes back to the graph.
+      if ((await read($, uiAtom)).picker === null) await home($)
+    })
+    .catch((error: unknown) => {
+      $.ui.toast(`conductor: ${reason(error)}`)
+    })
+    .then(() => $.ui.invalidate('ui.render'))
+}
+
 export const registerDesign = (on: On, tracker: Tracker): void => {
   // run.tsx registers /conductor and answers its own verbs; it passes these on.
   on('command.run', { command: 'conductor', args: DESIGN_VERBS }, async ($, e, next) => {
@@ -400,7 +1061,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // Whatever was typed into a field and not sent is saved before the command acts (it may open another design, or run this one).
     await flushDrafts($)
     // No argument: a run in progress on its design (run.tsx's phase view when it came from none).
-    // With no run in progress: the design last opened, with the keyboard; the picker when there is none.
+    // With no run in progress: the design last opened, with the keyboard; the start screen when there is none.
     const bare = verb === '' ? bareTarget((await read($, runAtom)).status, await read($, runDesignAtom), await read($, uiAtom)) : null
     if (bare !== null && bare.view === 'run') return next(e)
     const shown = bare !== null && bare.view === 'design' && bare.live ? bare.name : null
@@ -496,6 +1157,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       // A replay's design lives in the session only (`isSaved`): no file is written, and none is listed.
       const name = designName(`replay-${template.id}`)
       const made: Design = { ...template.make(), name }
+      // Another design under the same name: what could be undone in the one before is not its history.
+      delete histories[name]
       await update($, designAtom, () => made)
       await update($, uiAtom, held => ({ ...carryUi(held, initialUi()), name, status: 'ready' as const, selectedId: made.nodes[0]?.id ?? null }))
       await $.ui.open(paneArgs(true))
@@ -511,7 +1174,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // Bare `design` (and bare /conductor with nothing opened yet): the saved designs to pick from, above the templates.
     const fresh = rest.join('').trim() === '' && (verb === 'design' || (bare !== null && bare.view === 'design' && !bare.live && bare.name === DEFAULT_DESIGN_NAME && (await read($, uiAtom)).status === 'closed'))
     const saved: SavedDesign[] = []
-    if (verb === 'list' || fresh) {
+    // The saved designs, each read: `/conductor list` prints them, the start screen lists them and draws the marked one.
+    const listSaved = async (): Promise<void> => {
       const dir = `${root.replace(/\/+$/, '')}/${DESIGN_DIR}`
       const entries = await $.fs.list(dir).catch(() => [])
       const names = entries
@@ -519,8 +1183,14 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         .map(entry => entry.name.slice(0, -'.json'.length))
         .filter(isSaved)
         .sort()
-      for (const one of names.slice(0, SAVED_MAX)) saved.push(savedDesign(one, await $.fs.read(`${dir}/${one}.json`).catch(() => '')))
+      for (const one of names.slice(0, SAVED_MAX)) {
+        const text = await $.fs.read(`${dir}/${one}.json`).catch(() => '')
+        const parsed = parseDesign(text)
+        previews[one] = parsed.ok ? parsed.design : null
+        saved.push(savedDesign(one, text))
+      }
     }
+    if (verb === 'list' || fresh) await listSaved()
 
     if (verb === 'list') {
       if (saved.length === 0) return { text: `No saved designs yet: /${COMMAND} design <name> starts one.` }
@@ -538,7 +1208,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       if (await $.fs.exists(path)) {
         const saved = parseDesign(await $.fs.read(path).catch(() => ''))
         // A draft never writes over work: an existing design is changed by asking in chat.
-        if (!saved.ok || saved.design.nodes.length > 0) {
+        if (!saved.ok || !isBlank(saved.design)) {
           return { text: `A design named ${name} exists (${DESIGN_DIR}/${name}.json). Open it with /${COMMAND} design ${name} and ask for changes in chat, or draft under another name.` }
         }
       }
@@ -549,7 +1219,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         return { text: `Design ${name} could not be saved: ${reason(error)}` }
       }
       await update($, designAtom, () => blank)
-      // The empty board says Claude is drafting until the first blocks land.
+      // The empty graph says Claude is drafting until the first blocks land.
       await update($, uiAtom, held => ({ ...carryUi(held, initialUi()), name, status: 'ready' as const, drafting: true }))
       await $.ui.open(paneArgs(false))
       const prompt = `Draft the "${name}" workflow design: ${brief}`
@@ -578,6 +1248,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       // A design started from a template and not edited yet is on the board only: running it is what saves it.
       const onBoard = (await read($, uiAtom)).name === name && (await read($, uiAtom)).status === 'ready' ? await read($, designAtom) : null
       if (isSaved(name) && onBoard !== null && !(await $.fs.exists(path))) await $.fs.write(path, serializeDesign(onBoard)).catch(() => undefined)
+      if (onBoard !== null) await update($, uiAtom, held => (held.unsaved ? { ...held, unsaved: false } : held))
       if (!(await $.fs.exists(path))) return { text: `No design named ${name} (${DESIGN_DIR}/${name}.json). /${COMMAND} design ${name} starts one.` }
       let body: string
       try {
@@ -587,7 +1258,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       }
       const parsed = parseDesign(body)
       if (!parsed.ok) return { text: `Design ${name} is not valid, nothing was handed off: ${parsed.error}` }
-      if (parsed.design.nodes.length === 0) return { text: `Design ${name} is empty: add a block before running it.` }
+      if (isBlank(parsed.design)) return { text: `Design ${name} is empty: add a block before running it.` }
 
       const handoff = buildHandoff(parsed.design, path)
       // The next run to start is this design's: its agents count against these ids.
@@ -605,7 +1276,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       // This answer's `context` carries the conventions: the prompt hook leaves them out when the prompt follows.
       delivered = name
       // Said before the handoff, never a gate: how much the design implies.
-      const facts = preflightLine(parsed.design, { blocks: false })
+      const facts = preflightLine(parsed.design)
       const prompt = `Implement and run the "${name}" workflow design.`
       const fill = async (): Promise<void> => {
         // Left for the person to finish: what to run it on.
@@ -633,7 +1304,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const previous = await read($, uiAtom)
     // Bare /conductor: the run's design, else the design this session last had open.
     const name = bare !== null && bare.view === 'design' ? bare.name : designName(rest.join(' '))
-    // A replay's design is made by `/conductor replay design`, never from the picker: its name is not offered for a new design.
+    // A replay's design is made by `/conductor replay design`, never from the start screen: its name is not offered for a new design.
     if (!isSaved(name) && !(verb === '' && previous.name === name && previous.status === 'ready')) {
       return { text: `Names starting with ${SCRATCH_PREFIX} are kept for replays (/${COMMAND} replay design <template>): choose another name for a design.` }
     }
@@ -643,7 +1314,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       // A field left open when the keyboard went to the prompt is closed: the keys are keys again.
       if (previous.editing || previous.describing || previous.picker !== null) await update($, uiAtom, held => ({ ...held, editing: false, describing: false, freshId: null, picker: null }))
       await $.ui.open(paneArgs(true))
-      // On the key rows, never in a field: the ring is kept by its place, and a field may stand there now.
+      // On the catcher, never in a field.
       settleRing($)
 
       return { text: shown !== null ? `Design ${name} opened with its run.` : `Design ${name} opened.` }
@@ -652,8 +1323,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       // Coming back: the saved designs first. A template starts a new design under a name none of them has.
       const started = openDesign(freeName(saved.map(one => one.name)), undefined, previous)
       await update($, designAtom, () => null)
-      await update($, uiAtom, () => ({ ...started.ui, saved }))
+      await update($, uiAtom, () => ({ ...started.ui, saved, startMark: 0 }))
       await $.ui.open(paneArgs(true))
+      settleRing($)
 
       return { text: `${saved.length} saved ${saved.length === 1 ? 'design' : 'designs'}: open one in the pane, or start a new one from a template.` }
     }
@@ -666,25 +1338,30 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         step = { ...step, ui: { ...step.ui, status: 'error', error: `could not be read: ${reason(error)}` } }
       }
     }
+    // No such design yet: the start screen, for this name. The saved ones are listed all the same; the mark starts on the first template.
+    if (step.ui.status === 'pick') {
+      if (!fresh) await listSaved()
+      step = { ...step, ui: { ...step.ui, saved, startMark: saved.length } }
+    }
     await update($, designAtom, () => step.design)
     await update($, uiAtom, () => step.ui)
-    // With the keyboard, the toolbar's hotkeys work at once: no click on the canvas.
+    // With the keyboard, the keys work at once: no click on the graph.
     await $.ui.open(paneArgs(true))
     settleRing($)
 
     if (step.ui.status === 'error') return { text: `Design ${name} could not be opened: ${step.ui.error}` }
 
-    return { text: step.ui.status === 'pick' ? `No design named ${name} yet: pick a template in the pane.` : `Design ${name} opened.` }
+    return { text: step.ui.status === 'pick' ? `No design named ${name} yet: start it from a template in the pane.` : `Design ${name} opened.` }
   })
 
   // The tool Claude edits a design with. The matcher is always true: run.tsx holds the unmatched session.start.
   on('session.start', { cwd: /^/ }, async ($, e, next) => {
     await $.tool.register({ name: TOOL_NAME, description: toolDescription(), inputSchema: TOOL_SCHEMA, isDeferred: false })
     // A load (the first, or a reload): the state outlives it, what it said of the moment does not. No field is open,
-    // nothing waits in the prompt box under a `run: …` line, and the ring starts on the key rows.
+    // nothing waits in the prompt box under a `run: …` line, and the ring starts on the catcher.
     await update($, uiAtom, held =>
-      held.editing || held.describing || held.picker !== null || held.handed || held.grabbedId !== null || held.confirmId !== null || (held.notice !== null && /^(run|ask): /.test(held.notice)) || held.notice === HANDED_NOTICE
-        ? { ...held, editing: false, describing: false, freshId: null, picker: null, handed: false, grabbedId: null, confirmId: null, notice: held.notice !== null && (/^(run|ask): /.test(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice }
+      held.editing || held.describing || held.picker !== null || held.handed || held.confirmId !== null || (held.notice !== null && /^(run|ask): /.test(held.notice)) || held.notice === HANDED_NOTICE
+        ? { ...held, editing: false, describing: false, freshId: null, picker: null, handed: false, confirmId: null, notice: held.notice !== null && (/^(run|ask): /.test(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice }
         : held,
     )
 
@@ -719,8 +1396,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const onBoard = shown.name === name && shown.status === 'ready' ? await read($, designAtom) : null
     if (onBoard !== null && !(await $.fs.exists(path))) await $.fs.write(path, serializeDesign(onBoard)).catch(() => undefined)
     if (!(await $.fs.exists(path))) return next(pass)
+    if (onBoard !== null && shown.unsaved) await update($, uiAtom, held => ({ ...held, unsaved: false }))
     const parsed = parseDesign(await $.fs.read(path).catch(() => ''))
-    if (!parsed.ok || parsed.design.nodes.length === 0) return next(pass)
+    if (!parsed.ok || isBlank(parsed.design)) return next(pass)
     tracker.handoff(handoffOf(name, parsed.design))
     await update($, uiAtom, held => ({ ...held, follow: true, runCleared: false, notice: held.notice?.startsWith('run: ') ? null : held.notice }))
     // `/conductor run` recorded the conventions with its own answer: once is enough.
@@ -734,7 +1412,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   })
 
   // The design tool. Every edit is made by src/design/chat.ts on the mod's own
-  // state, so the board redraws from the atoms and nothing unchecked is saved.
+  // state, so the graph redraws from the atoms and nothing unchecked is saved.
   on('tool.call', { tool: TOOL_FULL_NAME }, async ($, e) => {
     const input = e as unknown as Record<string, unknown>
     const action = input.action
@@ -833,152 +1511,137 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   })
 
   on('ui.message', { requestId: DESIGN_PANE_ID, element: CANVAS_KEY }, async ($, e, next) => {
-    const message = parseBoardMessage(e.data)
+    const message = parseGraphMessage(e.data)
     if (!message) return next(e)
 
-    // A click on the board or a key of its own is a way out of a field: what was typed there is saved first.
-    const flushed = await flushDrafts($)
-    const design = await read($, designAtom)
-    const ui = await read($, uiAtom)
-    const run = await read($, runAtom)
-    const over = overlaysDesign(run, await read($, runDesignAtom), ui)
-    const locked = over && run.status === 'running'
-    const travels = message.kind === 'key' && (message.op === 'undo' || message.op === 'redo')
-    const step = message.kind === 'key' && travels ? timeTravel(design, ui, message.op === 'undo' ? 'undo' : 'redo', over ? { run, locked } : {}) : applyMessage(design, ui, message, over ? { run, locked } : {})
-    let nextUi = step.ui
-    if (step.changed && step.design) {
-      if (step.what !== undefined) record(nextUi.name, design, step.what)
-      try {
-        if (isSaved(nextUi.name)) await $.fs.write(designFile(await $.session.root(), nextUi.name), serializeDesign(step.design))
-      } catch (error) {
-        nextUi = { ...nextUi, notice: `not saved: ${reason(error)}` }
-      }
-    }
-    // `r` and `v` on the board are the toolbar's: the request goes into the prompt box, for the person to finish and send,
-    // and the keys go with it. No call hands the keyboard from a pane to the prompt, so the pane is closed and shown
-    // again without it; where that did not take the keys away, the board answers no key until the person does (`handed`).
-    const asks = message.kind === 'key' && !ui.handed && ((message.op === 'run' && !locked) || message.op === 'review') ? message.op : null
-    if (asks === 'run' && !isSaved(nextUi.name)) nextUi = { ...nextUi, notice: 'run: a replay is not a saved design, there is nothing to hand off' }
-    else if (asks !== null) {
-      const line = asks === 'run' ? handoffPrompt(nextUi.name) : reviewPrompt(nextUi.name)
-      const filled = await $.prompt.fill({ text: line }).catch(() => ({ isFilled: false }))
-      nextUi = { ...nextUi, notice: asks === 'run' ? runNotice(step.design, line, filled.isFilled) : askNotice(line, filled.isFilled) }
-      if (filled.isFilled) {
-        await $.ui.close({ id: DESIGN_PANE_ID }).catch(() => undefined)
-        await $.ui.open(paneArgs(false)).catch(() => undefined)
-        // The ring can be moved only in a site that holds the keyboard: if it still can, the keys did not go.
-        $.clock.after(FOCUS_DELAY_MS * 2, () => {
-          void $.ui
-            .focus({ requestId: DESIGN_PANE_ID, key: HOME_KEY })
-            .catch(() => ({ deny: 'no' }))
-            .then(moved => (moved.deny === undefined ? update($, uiAtom, held => ({ ...held, handed: true, notice: HANDED_NOTICE })) : undefined))
-        })
-        watchBox($)
-      }
-    }
-    // Writing the atoms redraws the pane, which hands the board its next props.
-    if (step.design !== design) await update($, designAtom, () => step.design)
-    if (nextUi !== ui) await update($, uiAtom, () => nextUi)
-    await keepSaid($, flushed)
-    // A click gave the board the keyboard, and nothing tells a hook when the board loses it again (Escape is the
-    // engine's). So the pane takes the keys back at once, for its key rows: from there the pane is told whether it
-    // holds them, and can say so truthfully. Refused (the prompt box holds text): the board keeps the keyboard, so
-    // it answers no key until the person takes them to the prompt (`handed`).
-    if (message.kind !== 'key') {
-      await $.ui.open(paneArgs(true)).catch(() => undefined)
-      // "Edit" and a `+` need a field to type in: it exists once the update above is drawn, so the ring moves there a frame later.
-      const edits = message.kind === 'edit' && nextUi.editing
-      const picks = nextUi.picker !== null && message.kind === 'addAt'
-      const key = edits ? fieldKey(TITLE_KEY, nextUi.selectedId ?? '') : picks ? PICKER_KEY : locked ? HOME_LOCKED_KEY : HOME_KEY
-      // Moving the ring is also how the pane learns whether it got the keyboard: a site that does not hold it is refused.
-      // (`$.ui.panes()` asked right after the open still says no.) One more try, since the pane may not be drawn yet.
-      const land = async (tries: number): Promise<void> => {
-        const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
-        const holds = moved.deny === undefined
-        if (!holds && tries > 0) {
-          $.clock.after(FOCUS_DELAY_MS * 2, () => void land(tries - 1))
-
-          return
-        }
-        const now = await read($, uiAtom)
-        if (holds === now.handed) await update($, uiAtom, held => ({ ...held, handed: !holds, notice: !holds ? HANDED_NOTICE : held.notice === HANDED_NOTICE ? null : held.notice }))
-      }
-      $.clock.after(FOCUS_DELAY_MS, () => void land(1))
+    // A key the graph itself was given: the same as typed into the catcher. It held the keyboard, so the click before
+    // it was not heard of (two posts in a frame can drop one): the pane takes the keys back first, as after a click.
+    if (message.kind === 'key') {
+      if (!(await read($, uiAtom)).handed) await retake($, false)
+      queueKeys($, [message.key])
 
       return {}
     }
-    // A key the board itself was given (it held the keyboard for a moment, or the pane could not take it back).
-    const edits = message.op === 'edit' && nextUi.editing
-    const picks = nextUi.picker !== null && (message.op === 'addAfter' || message.op === 'addInside')
-    const describes = nextUi.describing && !ui.describing
-    if (edits || picks || describes) {
-      await $.ui.open(paneArgs(true))
-      const key = edits ? fieldKey(TITLE_KEY, nextUi.selectedId ?? '') : picks ? PICKER_KEY : DESC_KEY
-      const land = async (tries: number): Promise<void> => {
-        const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
-        if (moved.deny === undefined) return
-        if (tries > 0) $.clock.after(FOCUS_DELAY_MS * 2, () => void land(tries - 1))
-        else if (edits) await update($, uiAtom, held => ({ ...held, notice: `edit: ${EDIT_HINT}` }))
-      }
-      $.clock.after(FOCUS_DELAY_MS, () => void land(1))
+    // A click on the graph is a way out of a field: what was typed there is saved first.
+    const flushed = await flushDrafts($)
+    const design = await read($, designAtom)
+    const ui = await read($, uiAtom)
+    const context = await runContext($)
+    const step = applyMessage(design, ui, message, context)
+    const nextUi = await store($, step, design)
+    // Writing the atoms redraws the pane, which hands the graph its next props.
+    if (step.design !== design) await update($, designAtom, () => step.design)
+    if (nextUi !== ui) await update($, uiAtom, () => nextUi)
+    await keepSaid($, flushed)
+    // A `[+]` needs its filter to type in. (So does a list the click left open: the catcher is not drawn under it.)
+    await retake($, nextUi.picker !== null && !context.locked)
+
+    return {}
+  })
+
+  // A click on the goal under the header: what `g` does. The click gave those rows the keyboard, so the pane takes it
+  // back first, as after a click on the graph: a field opened while the pane does not hold the keys is closed again.
+  on('ui.message', { requestId: DESIGN_PANE_ID, element: GOAL_KEY }, async $ => {
+    const flushed = await flushDrafts($)
+    // A request waits in the prompt box: the click says the keys are the pane's again.
+    if ((await read($, uiAtom)).handed) await retake($, false)
+    goalAsked = true
+    $.clock.after(LANDING_MS, () => {
+      goalAsked = false
+      $.ui.invalidate('ui.render')
+    })
+    await $.ui.open(paneArgs(true)).catch(() => undefined)
+    const step = await commit($, (before, held, context) => keyStep(before, held, 'goal', context))
+    await keepSaid($, flushed)
+    if (step.ui.status === 'ready' && step.ui.describing) {
+      descGen++
+      landOn($, descKey, 'goal: press Tab to reach the field')
+    } else {
+      // Not opened (a run locks the design, the keys stay with the prompt): the ring rests where it does with no field open.
+      goalAsked = false
+      settleRing($)
     }
 
     return {}
   })
 
-  // The ring on one of the two fields is "editing": the engine wraps a focused
-  // field over as many rows as its text takes, so the pane makes room for that
-  // (and an inline pane shows its fields at all). The person moving the ring off
-  // them ends it; the mod's own moves (a field's Enter sends the ring home) are
-  // settled where they are made.
-  on('ui.focus', { requestId: DESIGN_PANE_ID }, async ($, e, next) => {
-    const person = e.origin.kind === 'person'
+  // The wheel. The pane's tree is as tall as its body, so the engine has nothing to scroll: over the graph's rows the
+  // ticks are the graph's, which pans by them (the Client takes the sum from its props). Anywhere else, and for the
+  // scroll keys, the move is the engine's.
+  on('ui.scroll', { requestId: DESIGN_PANE_ID }, async ($, e, next) => {
+    const at = e.pointer
+    const area = graphArea
+    if (e.origin.kind !== 'person' || at === undefined || area === null) return next(e)
+    if (at.row < area.top || at.row >= area.top + area.rows || at.column < area.left || at.column >= area.left + area.columns) return next(e)
+    wheelRows += e.by
+    $.ui.invalidate('ui.render')
+
+    return {}
+  })
+
+  // Where the ring is. The person's Tab and arrows walk it over every stop: a move that lands on anything that is
+  // neither a field nor the type picker (the engine's own stop on the pane's close mark, where Enter would close the pane) is
+  // followed at once by the mod's own move back to the catcher. A move cannot be sent elsewhere in the chain: the engine
+  // refuses an element where the person's move named none. The ring on a field is "editing". The mod's own moves do
+  // not come here (they are settled where they are made).
+  on('ui.focus', { requestId: DESIGN_PANE_ID }, async ($, raised, next) => {
+    const person = raised.origin.kind === 'person'
+    // The picker's label never keeps the ring: the move is sent on to the picker.
+    const sent = person ? offLabel(raised.element) : raised.element
+    const e = sent === raised.element ? raised : { ...raised, element: sent }
     const before = await read($, uiAtom)
-    // The person's Tab and arrows walk the ring over every stop, and Enter presses what it rests on: a ring walked onto
-    // `r: run` or `x: del` would run or delete on the next Enter. A hook is not told which key moved the ring, so the
-    // ring never rests on a key but the home one: a move onto any other key lands there. Every key still answers its
-    // letter and a click; the fields are reached with `e`, `d` or a click on them.
-    const homeKey = person && before.status === 'ready' && isKey(e.element) ? ((await lockedNow($)) ? HOME_LOCKED_KEY : HOME_KEY) : undefined
-    const target = homeKey !== undefined && e.element !== homeKey ? { ...e, element: homeKey } : e
-    const moved = await next(target)
-    if (moved.deny !== undefined) return moved
-    // The ring left where it was: what was typed there is saved (Tab to the next field, a click on a picker or a key).
+    const door = person && isDoor(e.element)
+    // On the door with the fields open, the person stepped back from the title: the way to the graph.
+    const leaves = door && before.editing
+    const stray = person && (before.status === 'ready' || before.status === 'pick') && drawnCatcher !== '' && !isCatcher(e.element) && !isDetailStop(e.element) && !door
+    const was = ringOn
+    // Said before the move is answered: a letter typed on its heels finds the ring known to be there.
+    ringOn = stray || leaves ? drawnCatcher : e.element
+    const moved = await next(e)
+    if (moved.deny !== undefined) {
+      ringOn = was
+
+      return moved
+    }
+    if (stray || leaves) await $.ui.focus({ requestId: DESIGN_PANE_ID, key: drawnCatcher }).catch(() => settleRing($))
+    // The ring left where it was: what was typed there is saved (Tab to the next field, a click on the type).
     const flushed = person ? await flushDrafts($) : null
-    const onField = isField(target.element)
+    // In the detail pane: on a field, on the type picker, or on the way to one (the door, a field at rest).
+    const rest = stray ? null : restBase(e.element)
+    const inDetail = !stray && !leaves && (isField(e.element) || e.element === TYPE_KEY || door || rest !== null)
     const held = await read($, uiAtom)
-    if (held.status === 'ready' && held.editing !== onField && (onField || person)) await update($, uiAtom, ui => ({ ...ui, editing: onField, freshId: onField ? ui.freshId : null }))
+    if (held.status === 'ready' && held.editing !== inDetail && (inDetail || person)) await update($, uiAtom, ui => ({ ...ui, editing: inDetail, freshId: inDetail ? ui.freshId : null }))
+    // The person's Tab from the catcher: the fields open, and the ring goes on to the title. (A field at rest it came to rest on: that field.)
+    if ((door && !leaves) || rest !== null) await openFields($, rest ?? TITLE_KEY)
     // The goal's field closes when the person moves the ring off it.
-    if (held.status === 'ready' && held.describing && target.element !== DESC_KEY && person) await update($, uiAtom, ui => ({ ...ui, describing: false }))
+    if (held.status === 'ready' && held.describing && !isDescField(e.element) && person && !goalAsked) await update($, uiAtom, ui => ({ ...ui, describing: false }))
     await keepSaid($, flushed)
+    // The legend and the detail pane's last rows name the keys of where the ring is.
+    $.ui.invalidate('ui.render')
 
     return moved
   })
 
   // The pane is closed (the person's mark or chord, an unload): what was typed into a field goes into the design first.
   on('ui.close', { id: DESIGN_PANE_ID }, async ($, e, next) => {
-    paneHeld = false
     await flushDrafts($)
 
     return next(e)
   })
 
-  // A letter that is no key here, pressed while the pane holds the keyboard, is given to the prompt box by the engine, and
-  // the keyboard goes with it. Seen from here: one character typed into an empty box (the matcher: no other typing in the
-  // prompt comes this way) right after a drawing that held the keys. It is not let into the box, and the pane takes the
-  // keyboard back, which the engine allows over an empty box. Once per drawing that held the keys: where the take is
-  // refused, the next letter is the prompt's.
+  // A letter typed while the pane takes the keyboard back after a click on the graph (`landing`), with the ring not yet
+  // on the catcher: the engine gave it to the prompt box, and the keyboard with it. Seen from here it is one character
+  // typed into an empty box (the matcher: no other typing in the prompt comes this way). It is not let into the box:
+  // it is the key it was meant as, and the pane takes the keyboard again (from a clock callback: inside this hook the
+  // take is refused).
   on('prompt.edit', { text: '' }, async ($, e, next) => {
-    const ui = await read($, uiAtom)
-    const stray = paneHeld && ui.status === 'ready' && !ui.editing && !ui.describing && e.key !== undefined && e.key.ctrl !== true && e.key.meta !== true && /^[a-z0-9]$/i.test(e.inputText)
-    if (!stray) return next(e)
-    paneHeld = false
-    await update($, uiAtom, held => ({ ...held, notice: `${e.inputText} is not a key here` }))
-    // Once the edit has been answered (the box is empty again): the take is refused while this hook holds it.
+    if (!landing || e.key === undefined || e.key.ctrl === true || e.key.meta === true || [...e.inputText].length !== 1) return next(e)
+    landing = false
+    const key = e.inputText
     $.clock.after(FOCUS_DELAY_MS, () => {
-      void $.ui
-        .open(paneArgs(true))
+      void retake($, false)
         .catch(() => undefined)
-        .then(() => settleRing($))
+        .then(() => queueKeys($, [key]))
     })
 
     return { text: e.text, cursor: e.cursor }
@@ -987,221 +1650,79 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   on('ui.render', { component: 'Pane', requestId: DESIGN_PANE_ID }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
+    const Input = 'Input' in els ? els.Input : null
     const ui = await read($, uiAtom)
     const design = await read($, designAtom)
     const file = `${DESIGN_DIR}/${ui.name}.json`
-    const columns = Math.max(20, (e.props.bodyColumns || 80) - 2)
+    const bodyColumns = e.props.bodyColumns || 80
+    const columns = Math.max(20, bodyColumns - 2)
+    // The header's persona stands at its left: the name's row and the goal's have the rest.
+    const headColumns = columns - SMALL_W
     // The run laid over this design, when it was started from it.
     const run = await read($, runAtom)
     const over = overlaysDesign(run, await read($, runDesignAtom), ui)
     const locked = over && run.status === 'running'
     // The tick clock is read only while it matters, so an idle pane is not redrawn by it.
-    const overlay = over ? runOverlay(run, locked ? await read($, clockAtom) : 0) : undefined
-    const placement = e.props.placement === 'inline' ? 'inline' : 'dock'
+    const clock = locked ? await read($, clockAtom) : 0
+    const overlay = over ? runOverlay(run, clock) : undefined
+    // The header's persona: a gesture it was asked for, else what the run laid over the design calls for, else at rest.
+    const asked = await read($, personaAtom)
+    const pose: Pose = asked !== 'idle' ? asked : ((over ? runPose(run.status, clock) : null) ?? 'idle')
+    const splashed = await read($, splashedAtom)
+    const dock = e.props.placement !== 'inline'
+    // Docked and wide the graph and the detail pane stand side by side; otherwise the same parts are one column.
+    const wide = dock && bodyColumns >= WIDE_MIN_COLUMNS
     // Whether the pane holds the keyboard: Escape hands it to the prompt, and a field left open then is closed to the eye.
     const focused = e.props.isFocused !== false
-    const compact = compactOf(ui, placement)
     const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 48
     const node = design === null || ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
-    const lints = design ? lint(design) : []
-    // The header is one row, always: the name, how many lints stand, and at the right the run in as many words as fit.
-    const lintMark = lints.length > 0 ? `${GLYPH.lint} ${lints.length}` : ''
-    const fullTitle = `wf: ${ui.name}`
-    const summary = over ? runSummary(run, elapsedOf(await read($, timesAtom), run), columns - Math.min(fullTitle.length, 16) - (lintMark === '' ? 0 : lintMark.length + 2) - 2) : null
-    const headRight = summary !== null ? summary.text : 'design'
-    const titleText = clip(fullTitle, Math.max(8, columns - headRight.length - (lintMark === '' ? 0 : lintMark.length + 2) - 2))
-    // What the design is for. Docked it has rows under the header (up to GOAL_ROWS, wrapped); inline (few rows) it follows the name.
-    const dock = placement === 'dock'
-    const goal = (design?.description ?? '').replace(/\s+/g, ' ').trim()
-    const describing = ui.describing === true && !locked && design !== null
-    const goalRoom = columns - titleText.length - (lintMark === '' ? 0 : lintMark.length + 2) - headRight.length - 7
-    const goalInline = !dock && !describing && goalRoom >= 16 ? clip(goal === '' ? (focused ? 'd: say what it is for' : '') : goal, goalRoom) : ''
-    const goalLines = dock && !describing ? firstLines(goal === '' ? (focused ? 'goal: not said yet · d: say what this workflow is for' : 'goal: not said yet') : `goal: ${goal}`, columns, GOAL_ROWS) : []
-    // Its field, while typed in, wraps its text: a few rows for that.
-    const goalRows = describing ? 1 + Math.min(4, 1 + wrapText(goal, Math.max(8, columns - 4)).length) : goalLines.length
-    const ownLints = node ? lints.filter(one => one.nodeId === node.id) : []
-    const lintLines = ownLints.flatMap(one => wrapText(`${GLYPH.lint} ${one.message}`, columns)).slice(0, dock ? 6 : 3)
-    const agents = over && ui.selectedId !== null ? agentsOf(run, ui.selectedId) : null
-    const agentRows = agents ? agents.shown.length + (agents.rest > 0 ? 1 : 0) : 0
-    // The picker (a block to add, or a block's type) is the pane's while it holds the keyboard. Escape hands the keys
-    // to the prompt and no hook hears of it: drawn without it, the picker is closed to the eye and the board is back.
-    const picking = ui.picker !== null && !locked && focused
-    const retyping = picking && ui.picker?.retypeId !== undefined ? findNode(design ?? emptyDesign(ui.name), ui.picker.retypeId) : undefined
-    // The help card takes the inspector's place, a page at a time: it never squeezes the board.
-    const helpLines = !picking && ui.help > 0 ? helpPage(ui.help, node?.type, file, columns) : null
-    // Inline a page is cut to the rows the pane has under its header (a page's last lines are the least needed).
-    const help = helpLines !== null && placement === 'inline' ? helpLines.slice(0, Math.max(1, bodyRows - 4)) : helpLines
-    // An inline pane has few rows: its inspector is one line until a field is being typed in.
-    const collapsed = inspectorCollapsed(placement, { editing: ui.editing && focused })
-    // What is said on the message row: a change just made (with the way back), a refused edit, the delete question,
-    // what a grab's keys do, the lock; with none of them, while the keys are in the prompt, where they are.
-    const said: { text: string; color: 'warning' | 'subtle' | undefined } | null =
-      ui.notice !== null && (ui.notice !== LOCK_NOTICE || locked)
-        ? { text: ui.notice, color: noticeInforms(ui.notice) ? undefined : 'warning' }
-        : ui.grabbedId !== null && !locked
-          ? { text: `${ui.grabbedId} grabbed: h j k l move it, g drops it`, color: 'subtle' }
-          : locked
-            ? { text: LOCK_NOTICE, color: 'subtle' }
-            : null
-    // Without the keyboard the pane says nothing that names a key of its own: the cue takes the row, and what was said
-    // follows it only stripped of its key, and only where both fit.
-    const afterCue = said !== null ? withoutKeys(said.text) : null
-    const cueRoom = columns * (dock ? 2 : 1) - 8
-    // A request waiting in the prompt box is itself about the prompt (`finish the prompt, then Enter`): where the whole cue leaves it no room, the cue's first half does.
-    const cue =
-      afterCue !== null && KEYS_CUE.length + 3 + afterCue.length <= cueRoom
-        ? `${KEYS_CUE} · ${afterCue}`
-        : afterCue !== null && /^(run|ask): /.test(afterCue)
-          ? `${KEYS_CUE.split(' · ')[0] ?? KEYS_CUE} · ${afterCue}`
-          : KEYS_CUE
-    const message = focused ? said : dock ? { text: cue, color: 'subtle' as const } : null
-    // The fields this block's type calls for (teach.ts says which): text ones a row each, pickers on one row.
-    const knobs = node ? knobsOf(node) : []
-    const textKnobs = TEXT_KNOBS.filter(key => knobs.includes(key))
-    // A field shows what is being typed in it (a draft) until it is saved: only the block, of the design, it was typed for.
-    const typed = (key: string, saved: string): string => (node && drafts.id === node.id && drafts.name === ui.name ? (drafts.values[key] ?? saved) : saved)
-    // Drafts and the keyboard, as this drawing finds them. Text typed and not saved is saved as soon as a drawing sees
-    // that its field can no longer be typed in: the pane lost the keyboard (Escape, which no hook hears; a chat turn),
-    // the pane changed shape (a resize moves it between dock and inline and takes the keys), another block is shown.
-    const shape = `${placement}/${columns}`
-    const orphaned = hasDrafts() && (!focused || shape !== paneShape || drafts.name !== ui.name || (drafts.id !== null && drafts.id !== node?.id) || (drafts.goal !== null && ui.describing !== true))
-    paneShape = shape
-    paneHeld = focused
-    if (orphaned && !flushAsked) {
-      flushAsked = true
-      const lostKeys = !focused
-      $.clock.after(0, () => {
-        flushAsked = false
-        // The keyboard went: the field is closed with what it held saved, and is opened again with `e` or a click.
-        void flushDrafts($).then(() => (lostKeys ? update($, uiAtom, held => (held.editing || held.describing ? { ...held, editing: false, describing: false, freshId: null } : held)) : undefined))
-      })
-    }
-    const texts: { key: string; label: string; value: string; placeholder?: string }[] = node
-      ? [
-          // A block just added opens with its title field empty: the default title shows dim and stays if nothing is typed.
-          { key: TITLE_KEY, label: FIELD_LABEL.title, value: typed(TITLE_KEY, ui.freshId === node.id ? '' : node.title), placeholder: node.title },
-          { key: NOTES_KEY, label: FIELD_LABEL.notes, value: typed(NOTES_KEY, node.notes ?? ''), placeholder: FIELD_PLACEHOLDER.notes },
-          ...textKnobs.map((knob: TextKnob) => ({
-            key: `${KNOB_KEY}${knob}`,
-            label: FIELD_LABEL[knob],
-            value: typed(`${KNOB_KEY}${knob}`, node.knobs?.[knob] ?? ''),
-            placeholder: FIELD_PLACEHOLDER[knob],
-          })),
-        ]
-      : []
-    const pickers = { model: knobs.includes('model'), effort: knobs.includes('effort'), isolation: knobs.includes('isolation'), votes: knobs.includes('votes') }
-    // A field at rest is one line, cut with `…`. Docked each has its row; inline (few rows) the short ones go two to a row.
-    const long = (key: string): boolean => key === NOTES_KEY || key === `${KNOB_KEY}prompt`
-    const short = texts.filter(one => !long(one.key))
-    const fieldLines = dock ? texts.map(one => [one]) : [...short.flatMap((one, i) => (i % 2 === 0 ? [short.slice(i, i + 2)] : [])), ...texts.filter(one => long(one.key)).map(one => [one])]
-    const fieldWidth = (label: string, across: number): number => Math.max(12, (across > 1 ? Math.floor(columns / 2) - 1 : columns) - label.length - 3)
-    const allowed = retyping ? retypeChoices(retyping) : null
-    const matches = picking && ui.picker ? fuzzy(ui.picker.query).filter(type => allowed === null || allowed.includes(type)) : []
-    const listed = matches.slice(0, PICK_ROWS[placement])
-    // The keys. While a run locks editing only what still works is drawn; the lint key while a lint stands; the key
-    // that puts a run's results away while they show. Docked every key keeps its cell, drawn or not.
-    const labelOf = (one: KeyDef): string =>
-      one.op === 'grab' && ui.grabbedId !== null
-        ? 'drop'
-        : one.op === 'remove' && ui.confirmId !== null
-          ? 'all?'
-          : one.op === 'compact' && compact
-            ? 'full'
-            : one.op === 'card' && ui.help > 0
-              ? ui.help < HELP_PAGES ? 'next' : 'close'
-              : !dock && one.short !== undefined ? one.short : one.label
-    const works = (one: KeyDef): boolean =>
-      locked ? LOCKED_OPS.includes(one.op) : (one.op !== 'nextLint' || lints.length > 0) && (one.op !== 'clearRun' || over)
-    // Inline: every key that works now is drawn, under its short label, on one row where they fit (they do, but for a
-    // block that has every optional key at once in a narrow pane) and on a second row where they do not. None is left
-    // out: a message may name any key. Only what cannot work now is not drawn (`i` on a block that holds none, `y` with nothing to redo).
-    const inlineKeys = [...BLOCK_KEYS, ...DESIGN_KEYS].filter(one => works(one) && (one.op !== 'addInside' || node === undefined || 'children' in node) && (one.op !== 'redo' || (histories[ui.name]?.redo.length ?? 0) > 0))
-    const keyLines: KeyDef[][] = [[]]
-    let rowUsed = 0
-    for (const one of inlineKeys) {
-      const cells = 3 + labelOf(one).length
-      if (rowUsed > 0 && rowUsed + 1 + cells > columns) {
-        keyLines.push([])
-        rowUsed = 0
-      }
-      keyLines[keyLines.length - 1]?.push(one)
-      rowUsed += (rowUsed > 0 ? 1 : 0) + cells
-    }
-    const keyRows = dock ? 2 : keyLines.length
-    // The headline says the type in two rows: what it does, and when to use it.
-    const headText = node ? `${node.id} · ${TEACH[node.type].name}: ${TEACH[node.type].hint}` : ''
-    // What is said on the message row may take a second row (the preflight with its lint ids), never more. Docked the row is always there.
-    const messageLines = message !== null ? wrapText(message.text, columns).slice(0, 2) : []
-    const messageRows = dock ? Math.max(1, messageLines.length) : 0
-    // The rows of the pane that are not the board, as they are drawn below: the board takes every other row,
-    // so the keys and the inspector stand at the bottom of the pane and only the board changes size.
-    const pickerRows = picking ? 1 + (matches[0] ? 1 : 0) + Math.max(1, listed.length) + 1 : 0
-    const emptyLines = !node && !(ui.selectedId === UNMAPPED_ID && agents) && !(ui.drafting && design !== null && design.nodes.length === 0)
-      ? wrapText(design !== null && design.nodes.length > 0 ? 'Click a card to select it, or + to add a block there.' : focused ? 'Empty design: click + on the board, or press a, to add the first block. Or ask Claude in the prompt to draft it.' : 'Empty design: click + on the board to add the first block, or ask Claude in the prompt to draft it.', columns).slice(0, dock ? 3 : 1)
-      : []
-    let chrome = 1 + goalRows
-    if (picking) chrome += (dock ? 1 : 0) + pickerRows + messageRows
-    else if (dock) {
-      chrome += 1 + messageRows + keyRows
-      if (help) chrome += help.length + 1
-      else if (node && locked) chrome += 2 + lintLines.length + agentRows
-      else if (node) chrome += 2 + agentRows + lintLines.length + fieldLines.length + 1
-      else if (ui.selectedId === UNMAPPED_ID && agents) chrome += 1 + agentRows
-      else chrome += emptyLines.length
-    } else {
-      // Inline: the status line, the fields while one is typed in, the one key row.
-      chrome += keyRows
-      if (help) chrome += help.length + 1
-      else if (node && collapsed) chrome += 1
-      else if (node && locked) chrome += 2 + lintLines.length + agentRows
-      else if (node) chrome += 1 + fieldLines.length + 1
-      else chrome += 1
-    }
-    // An inline pane with a field, the picker or the help card open may shrink the board to a card's worth of rows.
-    // Under the help card, read for a moment, three rows of it are enough to keep the place.
-    // Docked the pane scrolls before the board shrinks under a card's worth of rows. Inline the pane never scrolls: its
-    // first row is the header, and a tree taller than the body would push that out of view, so the board gives up rows instead.
-    const least = !dock ? BOARD_LEAST_ROWS : BOARD_ROOM_MIN
-    const room = Math.max(least, bodyRows - chrome)
-    // Which way the board flows is decided for the pane at rest (header, key row, one line of inspector): opening the inspector must not turn it.
-    const turnRoom = Math.max(BOARD_ROOM_MIN, bodyRows - 3)
-    const context = async (): Promise<RunContext> => {
-      const now = await read($, runAtom)
-      const held = overlaysDesign(now, await read($, runDesignAtom), await read($, uiAtom))
-      const shown = await read($, designAtom)
-      // The arrows mean what they do on the board as it is drawn now.
-      const orientation = shown ? boardView(shown, placement, columns, room, { run: held ? runOverlay(now) : undefined, compact: compactOf(await read($, uiAtom), placement), turnRoom, fill: true }).orientation : undefined
+    const problems = design ? lint(design) : []
+    // The start screen: no design is open yet, one of its rows is marked.
+    const starting = ui.status === 'pick' || (ui.status === 'ready' && !design)
+    const entries = starting ? startEntries(ui.saved ?? []) : []
+    const mark = Math.max(0, Math.min(entries.length - 1, ui.startMark ?? 0))
+    const marked = entries[mark]
 
-      return held ? { run: now, locked: now.status === 'running', orientation, placement } : { orientation, placement }
-    }
-    // The ring is kept by its place among the stops. Where this drawing's stops are not the last one's (a run ended and
-    // the fields are back, another block with other fields is selected, the help card opened) and no field is asked for,
-    // the ring is put on the home key: it never comes to rest in a text field by itself.
-    const stops = [ui.status, ui.name, locked, picking, help !== null, describing, collapsed, node?.id ?? '', knobs.join(','), [...BLOCK_KEYS, ...DESIGN_KEYS].filter(one => (dock ? works(one) : inlineKeys.includes(one))).map(one => one.hotkey).join('')].join('|')
-    if (stops !== ringStops) {
-      ringStops = stops
-      if (focused && ui.status === 'ready' && !ui.editing && !describing) settleRing($)
-    }
-    // One row: the name, the lint count, (inline) what the design is for, and at the right the run in the words that fit,
-    // or the plain label `design` (nothing to press). Every part is cut to its room here, so the row never wraps.
-    const header = (
-      <Box flexDirection="row" justifyContent="space-between">
-        <Box flexDirection="row" flexShrink={0}>
-          <Text bold>{titleText}</Text>
-          {lintMark !== '' && <Text key="design-lint-count" color="warning">{`  ${lintMark}`}</Text>}
-          {goalInline !== '' && <Text key="design-goal-inline" color="subtle">{`  — ${goalInline}`}</Text>}
+    // Row 1: the design's name, and at the right what state it is in. Every part is cut to its room, so the row never wraps.
+    const drafting = ui.drafting === true && design !== null && isBlank(design)
+    const summary = over ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, columns - 24)) : null
+    const state: { text: string; color: 'claude' | 'success' | 'error' | typeof FADED } =
+      summary !== null
+        ? { text: summary.text.replace(/^[a-z]+/, word => word.toUpperCase()), color: summary.color }
+        : drafting
+          ? { text: 'DRAFTING', color: 'claude' }
+          : starting && marked
+            ? { text: marked.kind === 'saved' ? 'START · a saved design' : marked.kind === 'blank' ? 'START · a blank design' : `START · from the ${marked.title} template`, color: FADED }
+            : ui.status !== 'ready' || !design
+              ? { text: 'design', color: FADED }
+              : { text: `EDITING · ${!isSaved(ui.name) ? 'replay, not saved' : !ui.unsaved ? 'saved' : isBlank(design) ? 'not saved yet' : 'unsaved template'}`, color: FADED }
+    // On the start screen the name is the one the marked row opens: the saved design's, or the one a new design gets.
+    const shownName = starting && marked?.kind === 'saved' ? marked.id : ui.name
+    // After the name, in a colour of its own, the design's facts (the agents it starts): left out where the row has no room for them.
+    const headOf = (facts: string | null) => {
+      const room = headColumns - COMMAND.length - 5 - state.text.length
+      const count = facts !== null && room - facts.length - 3 >= 8 ? facts : null
+      return (
+        <Box flexDirection="row" justifyContent="space-between">
+          <Box flexDirection="row" flexShrink={0}>
+            <Text bold color="claude">{COMMAND}</Text>
+            <Text color={FADED}>{' / '}</Text>
+            <Text bold>{clip(shownName, Math.max(8, room - (count === null ? 0 : count.length + 3)))}</Text>
+            {count !== null && <Text color={FADED}>{' / '}</Text>}
+            {count !== null && <Text key="design-facts" color="suggestion">{count}</Text>}
+          </Box>
+          <Box flexShrink={0}>
+            <Text key="design-state" color={state.color}>{state.text}</Text>
+          </Box>
         </Box>
-        <Box flexShrink={0}>
-          {summary !== null ? <Text key="design-run-summary" color={summary.color}>{summary.text}</Text> : <Text color="subtle">design</Text>}
-        </Box>
-      </Box>
-    )
+      )
+    }
 
     if (ui.status === 'closed') {
       return (
         <Box flexDirection="column">
           <Text bold>{`${GLYPH.diamond} ${DESIGN_PANE_TITLE}`}</Text>
-          <Text color="subtle">{`${GLYPH.railEnd} /${COMMAND} design <name> opens a design`}</Text>
+          <Text color={FADED}>{`${GLYPH.railEnd} /${COMMAND} design <name> opens a design`}</Text>
         </Box>
       )
     }
@@ -1209,551 +1730,834 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     if (ui.status === 'error') {
       return (
         <Box flexDirection="column" paddingLeft={1}>
-          {header}
+          {headOf(null)}
           <Text color="error">{`${file} could not be used: ${ui.error ?? 'unknown reason'}`}</Text>
-          <Text color="subtle">{`The file was left as it is. Fix or remove it, then run /${COMMAND} design ${ui.name} again.`}</Text>
+          <Text color={FADED}>{`The file was left as it is. Fix or remove it, then run /${COMMAND} design ${ui.name} again.`}</Text>
         </Box>
       )
     }
 
-    if (ui.status === 'pick' || !design) {
-      const start = async (templateId: string): Promise<void> => {
-        const step = startDesign(await read($, uiAtom), templateId)
-        if (!step.design) return
-        // Not written yet: the first edit (or handing it off) saves it. A design looked at and left leaves no file.
-        delete histories[step.ui.name]
-        await update($, designAtom, () => step.design)
-        // A design nobody named says once how it gets a name (the line goes with the next thing said).
-        await update($, uiAtom, () => (isDefaultName(step.ui.name) ? { ...step.ui, notice: `named ${step.ui.name} for now · /${COMMAND} rename ${step.ui.name} <name> names it` } : step.ui))
-        // The template Button that held the ring is gone; without this the ring
-        // falls on the title field and the first keys are typed into it.
-        settleRing($)
-      }
-
-      // A saved design picked from the list: read again as it is now, and shown.
-      const openSaved = async (name: string): Promise<void> => {
-        const held = await read($, uiAtom)
-        const path = designFile(await $.session.root(), name)
-        const text = await $.fs.read(path).catch(() => undefined)
-        const step = openDesign(name, typeof text === 'string' ? text : undefined, held)
-        if (step.ui.status === 'pick') {
-          await update($, uiAtom, ui => ({ ...ui, notice: `${name} is gone: it could not be read` }))
-
-          return
-        }
-        await update($, designAtom, () => step.design)
-        await update($, uiAtom, () => step.ui)
-        settleRing($)
-      }
-      const saved = ui.saved ?? []
-      const nameRoom = Math.max(...saved.slice(0, SAVED_ROWS).map(one => one.name.length), 0)
-
-      return (
-        <Box flexDirection="column" paddingLeft={1}>
-          {header}
-          {saved.length > 0 && <Text key="design-saved-head" color="subtle">Open a saved design:</Text>}
-          {saved.slice(0, SAVED_ROWS).map((one, index) => (
-            <Box flexDirection="row" gap={1}>
-              <Button key={`open:${one.name}`} label={one.name.padEnd(nameRoom)} autoFocus={index === 0 ? true : undefined} onPress={() => openSaved(one.name)} />
-              <Text color="subtle" wrap="truncate-end">{savedLine({ ...one, name: '' }).replace(/^ · /, '')}</Text>
-            </Box>
+    // What the screen is made of, the same for the start screen and the designer: rows of the detail pane, the
+    // legend, the footer, and the frame that holds them.
+    type Item = { rows: number; el: RenderChildren }
+    type Tint = typeof FADED | 'error' | 'warning' | 'suggestion'
+    const blank: Item = { rows: 1, el: <Text> </Text> }
+    // The persona's pixels: half-blocks in its own colours, a row of spans to a row of cells.
+    const spanRows = (rows: readonly (readonly PersonaSpan[])[]) =>
+      rows.map(row => (
+        <Box flexDirection="row" height={1} flexShrink={0}>
+          {row.map(span => (
+            <Text color={span.color} backgroundColor={span.ground}>{span.text}</Text>
           ))}
-          {saved.length > SAVED_ROWS && <Text color="subtle">{`… ${saved.length - SAVED_ROWS} more: /${COMMAND} list names them, /${COMMAND} design <name> opens one`}</Text>}
-          {ui.notice !== null && <Text color="warning">{ui.notice}</Text>}
-          <Text color="subtle">{saved.length > 0 ? `Or start a new one (${ui.name}) from a template:` : `No design named ${ui.name} yet. Start from:`}</Text>
-          <Text key="design-name-route" color="subtle" wrap="truncate-end">{isDefaultName(ui.name) ? `It will be named ${ui.name}. To name it first: /${COMMAND} design <name>` : `Another name: /${COMMAND} design <name>`}</Text>
-          {TEMPLATES.map(template => (
-            <Box flexDirection="row" gap={1}>
-              <Button
-                key={`template:${template.id}`}
-                label={template.title}
-                autoFocus={saved.length === 0 && template === TEMPLATES[0] ? true : undefined}
-                onPress={() => start(template.id)}
-              />
-              <Text color="subtle" wrap="truncate-end">{template.blurb}</Text>
-            </Box>
-          ))}
-          <Box flexDirection="row" gap={1}>
-            <Button key={`template:${BLANK_TEMPLATE_ID}`} label="Blank" onPress={() => start(BLANK_TEMPLATE_ID)} />
-            <Text color="subtle">An empty design</Text>
+        </Box>
+      ))
+    const rowsOf = (items: readonly Item[]): number => items.reduce((sum, item) => sum + item.rows, 0)
+    const cap = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1)
+    const line = (text: string, color?: Tint, bold?: true): Item => ({ rows: 1, el: <Text color={color} bold={bold} wrap="truncate-end">{text}</Text> })
+    const lines = (rows: readonly string[], color?: Tint): Item[] => rows.map(row => line(row, color))
+    // A label is quiet: `claude` is kept for what can be pressed and for the selection.
+    const label = (text: string, color: 'suggestion' | 'error' = 'suggestion'): Item => line(text, color)
+    /** The first of `levels` plans that fits `rows`; the last one where none does. */
+    const fit = (levels: number, rows: number, plan: (level: number) => Item[]): Item[] => {
+      for (let level = 0; level < levels - 1; level++) {
+        const items = plan(level)
+        if (rowsOf(items) <= rows) return items
+      }
+      return plan(levels - 1)
+    }
+    // A rule across the pane: under the header and above the footer; stacked, between the graph and the detail pane too.
+    const rule = () => <Text color={RULE}>{'─'.repeat(columns)}</Text>
+    // One row of keys, in the footer's legend and on the detail pane's last rows: each key in brackets in the accent colour, its word dim; all of it dim while the keys are in the prompt.
+    const legendRow = (row: readonly LegendItem[]) => (
+      <Text wrap="truncate-end" dimColor={focused ? undefined : true}>
+        {row.flatMap((item, index) => [
+          <Text color={focused ? 'claude' : FADED}>{`${index > 0 ? ' '.repeat(LEGEND_GAP) : ''}[${item.keys}]`}</Text>,
+          <Text color={FADED}>{` ${item.word}`}</Text>,
+        ])}
+      </Text>
+    )
+    // The footer is its legend, centred: docked, one row where the pane is wide enough for its keys and two where it is
+    // not, whatever they hold, so the footer keeps its height; inline, one row.
+    const legendMost = !dock ? 1 : columns >= LEGEND_CORE_W ? 1 : LEGEND_WRAP_ROWS
+    const legendOf = (items: readonly LegendItem[]) => (
+      <Box key="design-legend" flexDirection="column" alignItems="center" height={legendMost} flexShrink={0}>
+        {legendRows(items, columns, legendMost).map(legendRow)}
+      </Box>
+    )
+    // The rows. Header, goal, rules and footer keep theirs; the graph and the detail pane share the rest. Docked, a rule
+    // stands under the header and one above the footer, and `stacked` (the detail pane under the graph) one between the two.
+    // Inline the rows are few: no rule, what is said has the row over the keys, and the pane never asks for more rows than it has (it would scroll, and the header leave).
+    const footRows = dock ? legendMost : 2
+    const mainRowsFor = (goalRows: number, stacked: boolean): number => Math.max(wide ? GRAPH_LEAST_ROWS + 2 : dock ? HINT_ROWS + 1 : 2, bodyRows - 1 - goalRows - (dock ? 2 : 0) - (stacked ? 1 : 0) - footRows)
+    // The key catcher, the ring's place while no field is open: in the tree, where it is the pane's first stop, and not drawn.
+    const catcher = () =>
+      Input && (
+        <Box key="design-keys" display="none">
+          <Input
+            key={catcherKey()}
+            autoFocus
+            value=""
+            placeholder=""
+            submitLabel=""
+            onInput={(value, input) => catchKeys($, input.element, 'change', value)}
+            onSubmit={(value, input) => catchKeys($, input.element, 'submit', value)}
+          />
+        </Box>
+      )
+    // What is said (a change and its way back, a refusal, where the keys are), on one row, centred. Docked it stands in
+    // the rule over the footer, so nothing moves when something is said; inline it has the row over the keys.
+    type Said = { text: string; color: 'warning' | typeof FADED | undefined } | null
+    const saidW = Math.max(1, columns - (dock ? 2 * (SAID_RULE_W + 1) : 0))
+    const saidRow = (said: Said) => {
+      const text = said === null ? '' : clip(said.text, saidW)
+      if (!dock) {
+        return (
+          <Box key="design-message" flexDirection="column" alignItems="center" height={1}>
+            <Text color={said?.color} wrap="truncate-end">{text === '' ? ' ' : text}</Text>
           </Box>
-          <Text key="design-draft-route" color="subtle">{`or type: /${COMMAND} draft ${saved.length > 0 ? '<name>' : ui.name} <what you want>  (Claude drafts it on the board)`}</Text>
-        </Box>
+        )
+      }
+      if (text === '') return rule()
+      const left = Math.max(0, Math.floor((columns - text.length - 2) / 2))
+      return (
+        <Text key="design-message" wrap="truncate-end">
+          <Text color={RULE}>{'─'.repeat(left)}</Text>
+          <Text color={said?.color}>{` ${text} `}</Text>
+          <Text color={RULE}>{'─'.repeat(Math.max(0, columns - text.length - 2 - left))}</Text>
+        </Text>
       )
     }
-
-    // The board's region takes every row the rest of the pane leaves (the board pans inside it), so the pane keeps
-    // its height whatever is selected: the keys stay on the pane's last rows and the prompt below does not move.
-    const whole = boardView(design, placement, columns, room, { run: overlay, selectedId: ui.selectedId, compact, turnRoom, fill: true })
-    // Rows the board does not need are not left blank: the inspector's long texts wrap into them (docked),
-    // the selected block's lints and a finished run's failures are said in them (inline).
-    let free = picking || help !== null ? 0 : Math.max(0, room - whole.height)
-    const take = (wanted: number): number => {
-      const got = Math.max(0, Math.min(wanted, free))
-      free -= got
-      return got
+    const goalRow = (rows: readonly string[], dim: boolean) => (
+      <Box key="design-goal" flexDirection="column">
+        {rows.map((row, index) => (
+          <Text wrap="truncate-end">
+            <Text bold>{index === 0 ? GOAL_LABEL : ' '.repeat(GOAL_LABEL.length)}</Text>
+            <Text color={dim ? FADED : undefined}>{row}</Text>
+          </Text>
+        ))}
+      </Box>
+    )
+    // The same rows as the person can press them (./goal.tsx): a click on them opens the goal's field, as `g` does. A
+    // Client and no Button: a Button is a stop of the ring, and Tab from the graph would land on it before the title.
+    const goalPress = (rows: readonly string[], dim: boolean) =>
+      'Client' in els ? (
+        <Box key="design-goal" flexDirection="column" height={rows.length}>
+          <els.Client key={GOAL_KEY} module="./goal.tsx" width="100%" height={rows.length} props={{ label: GOAL_LABEL, rows, dim, faded: FADED } as never} />
+        </Box>
+      ) : (
+        goalRow(rows, dim)
+      )
+    // The keys that act on the detail pane, for its last rows: two rows docked, one inline or where the pane is short.
+    const hintsOf = (items: readonly LegendItem[], width: number, rows: number): LegendItem[][] => legendRows(items, width, dock && rows >= 8 ? HINT_ROWS : 1)
+    // The detail pane: its content, and on its last rows the keys that act on it.
+    const detailBox = (width: number, rows: number, hints: readonly (readonly LegendItem[])[], items: readonly Item[]) => (
+      <Box key="design-detail" flexDirection="column" width={width} height={rows} flexShrink={0}>
+        {rows - hints.length > 0 && (
+          <Box key="design-content" flexDirection="column" height={rows - hints.length} overflow="hidden">
+            {/* Never squeezed: what does not fit is cut at the bottom, whole rows. */}
+            <Box flexDirection="column" flexShrink={0}>
+              {items.map(item => item.el)}
+            </Box>
+          </Box>
+        )}
+        <Box key="design-hints" flexDirection="column" height={hints.length} flexShrink={0}>
+          {hints.map(legendRow)}
+        </Box>
+      </Box>
+    )
+    // One column of margin at each side: `columns` is the body's less the two. `detail` is null while the detail pane is hidden.
+    const frame = (catching: boolean, head: RenderChildren, goal: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, beside: boolean, mainRows: number, said: Said, legend: RenderChildren) => (
+      <Box flexDirection="column" paddingLeft={1} paddingRight={1}>
+        {catching && catcher()}
+        <Box flexDirection="row">
+          <Box key="design-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
+            {spanRows(smallPersona(pose))}
+          </Box>
+          <Box flexDirection="column" width={headColumns} flexShrink={0}>
+            {head}
+            {goal}
+          </Box>
+        </Box>
+        {dock && rule()}
+        {beside ? (
+          <Box flexDirection="row" height={mainRows}>
+            {graph}
+            <Box width={3} flexShrink={0}>
+              <Text color={RULE}>{Array.from({ length: mainRows }, () => ' │ ').join('\n')}</Text>
+            </Box>
+            {detail}
+          </Box>
+        ) : (
+          <Box flexDirection="column">
+            {graph}
+            {dock && detail !== null && rule()}
+            {detail}
+          </Box>
+        )}
+        {saidRow(said)}
+        {legend}
+      </Box>
+    )
+    // A help page as rows: its title and which page it is, then paragraphs, or a table whose first column is the key.
+    const helpItems = (page: number, type: NodeType | undefined, width: number, rows: number, start: boolean): Item[] => {
+      const column = helpColumn(page)
+      return fitHelp(helpPage(page, type, file, width, start), rows).map(row =>
+        row.kind === 'title'
+          ? {
+              rows: 1,
+              el: (
+                <Box flexDirection="row" justifyContent="space-between" height={1}>
+                  <Text bold wrap="truncate-end">{row.text}</Text>
+                  <Box flexShrink={0}>
+                    <Text color={FADED}>{`Help ${page}/${HELP_PAGES}`}</Text>
+                  </Box>
+                </Box>
+              ),
+            }
+          : row.kind === 'key'
+            ? {
+                rows: 1,
+                el: (
+                  <Text wrap="truncate-end">
+                    <Text color={page === 3 ? 'claude' : undefined} bold={page === 3 ? undefined : true}>{row.key.padEnd(column)}</Text>
+                    <Text>{row.text}</Text>
+                  </Text>
+                ),
+              }
+            : row.kind === 'blank'
+              ? blank
+              : line(row.text),
+      )
     }
-    const plainInspector = dock && node !== undefined && !locked
-    const headLines = wrapText(headText, columns)
-    const headShown = node ? headLines.slice(0, 1 + (dock ? take(Math.min(headLines.length - 1, WRAP_EXTRA)) : 0)) : []
-    if (headShown.length < headLines.length && headShown.length > 0) headShown[headShown.length - 1] = clip(`${headShown[headShown.length - 1] ?? ''} ${headLines[headShown.length] ?? ''}`, columns)
-    // A long notes or prompt at rest is one line cut with `…` in its field: what the field cut is said under it, dim.
-    const overflow: Record<string, string[]> = {}
-    if (plainInspector) {
-      for (const one of texts.filter(each => long(each.key))) {
-        const width = fieldWidth(one.label, 1)
-        const value = one.value.replace(/\s+/g, ' ').trim()
-        if (value.length <= width) continue
-        // From the very character the field cut at (it shows `width - 1` of them and `…`): the rows go on where the field stops, nothing said twice.
-        const rest = wrapText(value.slice(width - 1).trim(), Math.max(12, columns - 2))
-        const rows = take(Math.min(rest.length, WRAP_EXTRA))
-        if (rows > 0) overflow[one.key] = firstLines(rest.join(' '), Math.max(12, columns - 2), rows)
+    const graphBoxOf = (width: number, rows: number, props: unknown, fallback: RenderChildren) => (
+      <Box key="design-graph" flexDirection="column" width={width} height={rows} flexShrink={0}>
+        {rows < 1 ? null : 'Client' in els ? <els.Client key={CANVAS_KEY} module="./canvas.tsx" width="100%" height={rows} props={props as never} /> : fallback}
+      </Box>
+    )
+
+    // The splash, once a session: the conductor and its ensemble for a few beats, then the screen below. The keys wait
+    // for that screen: no catcher is drawn under the splash. A pane too short for it goes without.
+    if (!splashed) {
+      startSplash($)
+      const sceneRows = columns >= SCENE_COLUMNS && bodyRows >= SCENE_ROWS + 3 ? SCENE_ROWS : SOLO_ROWS
+      if (bodyRows >= sceneRows + 3) {
+        return (
+          <Box flexDirection="column" paddingLeft={1} paddingRight={1} height={dock ? bodyRows : undefined} justifyContent="center">
+            <Box key="design-splash" flexDirection="column" alignItems="center" height={sceneRows} flexShrink={0}>
+              {'Client' in els ? <els.Client key={SPLASH_KEY} module="./splash.tsx" width="100%" height={sceneRows} props={{ rows: sceneRows } as never} /> : spanRows(splashScene(2, columns, sceneRows).lines)}
+            </Box>
+            <Text> </Text>
+            <Box flexDirection="column" alignItems="center" flexShrink={0}>
+              <Text bold color="claude">{`${GLYPH.diamond} ${PANE_TITLE}`}</Text>
+              <Text color={FADED}>{SPLASH_NOTE}</Text>
+            </Box>
+          </Box>
+        )
       }
     }
-    const failed = !dock && over && run.status !== 'running' ? Object.values(run.agents).filter(agent => agent.status === 'failed') : []
-    const inlineSaid: { text: string; color: 'warning' | 'error' }[] =
-      !dock && !picking && help === null && collapsed
-        ? [
-            ...ownLints.flatMap(one => wrapText(`${GLYPH.lint} ${one.message}`, columns)).map(text => ({ text, color: 'warning' as const })),
-            ...(failed.length > 0 ? wrapText(`${FAILED} failed: ${failed.map(agent => agent.label).join(' · ')}`, columns).map(text => ({ text, color: 'error' as const })) : []),
-          ]
-        : []
-    const inlineRows = inlineSaid.slice(0, take(inlineSaid.length))
-    const extraRows = (headShown.length > 0 && dock ? headShown.length - 1 : 0) + Object.values(overflow).reduce((sum, lines) => sum + lines.length, 0) + inlineRows.length
-    // Inline, a pane too short for what is open under the board (the fields, the picker, a help page) draws fewer rows of
-    // board than three, down to none: the header stays on the pane's first row.
-    const boardRows = dock ? Math.max(3, whole.rows - extraRows) : Math.min(Math.max(3, whole.rows - extraRows), Math.max(0, bodyRows - chrome))
-    const view = { ...whole, rows: Math.max(1, boardRows) }
 
-    // A change is kept for `u`, counted as a revision, and saved.
-    const store = async (step: Step, before: Design | null): Promise<DesignUi> => {
-      if (!step.changed || !step.design) return step.ui
-      if (step.what !== undefined) record(step.ui.name, before, step.what)
-      try {
-        if (isSaved(step.ui.name)) await $.fs.write(designFile(await $.session.root(), step.ui.name), serializeDesign(step.design))
-      } catch (error) {
-        return { ...step.ui, notice: `not saved: ${reason(error)}` }
+    if (starting) {
+      const saved = ui.saved ?? []
+      const helping = (ui.help ?? 0) > 0
+      const beside = wide
+      const detailW = beside ? detailWidth(columns) : columns
+      const graphW = beside ? columns - detailW - 3 : columns
+      // The marked row's design, read-only: a saved one from its file (kept from the listing, read again after a reload), a template made anew.
+      let shown: Design | null = null
+      if (marked?.kind === 'saved') {
+        if (previews[marked.id] === undefined) {
+          const parsed = parseDesign(await $.fs.read(designFile(await $.session.root(), marked.id)).catch(() => ''))
+          previews[marked.id] = parsed.ok ? parsed.design : null
+        }
+        shown = previews[marked.id] ?? null
+      } else if (marked) shown = TEMPLATES.find(one => one.id === marked.id)?.make() ?? emptyDesign(ui.name)
+      const purpose = shown?.description.replace(/\s+/g, ' ').trim() ?? ''
+      const goalLines = firstLines(purpose !== '' ? purpose : marked?.kind === 'blank' ? 'an empty design: its goal is yours to say' : marked?.kind === 'saved' && shown === null ? 'this file does not read as a design' : 'not said yet', Math.max(12, headColumns - GOAL_LABEL.length), dock ? GOAL_ROWS : 1)
+      // Two rows whatever the marked row says, so nothing under them moves with the mark.
+      const goalRows = dock ? GOAL_ROWS : 1
+      const mainRows = mainRowsFor(goalRows, dock && !wide)
+      // The keys: the list's on the detail pane's last rows, the rest in the footer.
+      const keys = legendItems({ ring: 'start', placed: false, retype: false, empty: true, helping, locked: false, selected: false, container: false, nested: false, results: false, undo: false, redo: false, knobs: [], hidden: false })
+      const legend = legendOf(keys.footer)
+      const message = focused ? ui.notice : KEYS_CUE
+
+      // The list: the saved designs, then the templates, one row each, the marked one said in `claude`.
+      const nameW = Math.min(Math.max(...entries.map(one => one.title.length)), Math.max(8, Math.floor(detailW / 2) - 4))
+      const countW = Math.max(...entries.map(one => (one.kind === 'blank' ? 0 : blocksWord(one.blocks).length)))
+      const entryRow = (entry: (typeof entries)[number], at: number): Item => {
+        const lit = at === mark
+        const note = clip(entry.note, Math.max(0, detailW - 2 - nameW - 2 - countW - 2))
+        return {
+          rows: 1,
+          el: (
+            <Box flexDirection="row" height={1}>
+              <Button key={`${START_KEY}${entry.kind}:${entry.id}`} plain onPress={() => openEntry($, at)}>
+                <Text color="claude" bold>{lit ? '▸ ' : '  '}</Text>
+                <Text color={lit ? 'claude' : undefined} bold>{clip(entry.title, nameW).padEnd(nameW)}</Text>
+                <Text color={FADED}>{`  ${(entry.kind === 'blank' ? '' : blocksWord(entry.blocks)).padEnd(countW)}`}</Text>
+                <Text color={FADED}>{note === '' ? '' : `  ${note}`}</Text>
+              </Button>
+            </Box>
+          ),
+        }
       }
+      // How to name a new design first, and how to have Claude draft one: each command on a row of its own.
+      const routes = [`A new design is named ${ui.name}. ${isDefaultName(ui.name) ? 'To name it first' : 'For another name'}:`, `  /${COMMAND} design <name>`, 'To have Claude draft one:', `  /${COMMAND} draft <name> <what you want>`]
+      const detailRows = beside ? mainRows : Math.max(Math.min(HINT_ROWS + 1, mainRows), Math.min(mainRows - Math.max(GRAPH_LEAST_ROWS, Math.floor(mainRows * (1 - DETAIL_REST_SHARE) * 0.6)), helping ? mainRows : entries.length + 8))
+      const hints = hintsOf(keys.detail, detailW, detailRows)
+      const contentRows = Math.max(0, detailRows - hints.length)
+      const listed = fit(4, contentRows, level => {
+        const gaps = level < 1 ? [blank] : []
+        const ways = level < 2 ? [...gaps, ...lines(routes.map(row => clip(row, detailW)), FADED)] : []
+        // Short of rows, the saved designs are a window around the marked one; the templates are always all there.
+        const room = level < 3 ? saved.length : Math.max(1, Math.min(SAVED_ROWS, contentRows - (entries.length - saved.length) - 3))
+        const from = room >= saved.length ? 0 : listWindow(saved.length, room, Math.min(mark, saved.length - 1))
+        const more = saved.length - Math.min(room, saved.length)
+        return [
+          ...(saved.length > 0 ? [label('Saved designs'), ...entries.slice(from, from + Math.min(room, saved.length)).map((entry, index) => entryRow(entry, from + index)), ...(more > 0 ? [line(`… ${more} more: w and s reach them`, FADED)] : []), ...gaps] : []),
+          label('New from a template'),
+          ...entries.slice(saved.length).map((entry, index) => entryRow(entry, saved.length + index)),
+          ...ways,
+        ]
+      })
+      const content = helping ? helpItems(ui.help, undefined, detailW, contentRows, true) : listed
 
-      return step.ui
-    }
-
-    // An inspector edit: read the state as it is now, patch, save, write back.
-    const edit = async (id: string, patch: NodePatch): Promise<void> => {
-      const before = await read($, designAtom)
-      const step = patchNode(before, await read($, uiAtom), id, patch, await context())
-      const nextUi = await store(step, before)
-      if (step.design !== before) await update($, designAtom, () => step.design)
-      await update($, uiAtom, () => nextUi)
-    }
-
-    // A toolbar key or a picker choice: the same read, step, save, write back.
-    const commit = async (make: (design: Design, held: DesignUi, context: RunContext) => Step): Promise<Step> => {
-      const before = await read($, designAtom)
-      const held = await read($, uiAtom)
-      const step = make(before ?? design, held, await context())
-      const nextUi = await store(step, before)
-      if (step.design !== before) await update($, designAtom, () => step.design)
-      if (nextUi !== held) await update($, uiAtom, () => nextUi)
-
-      return { ...step, ui: nextUi }
-    }
-    // The ring is moved a redraw after the state that draws its target was written, always: the same
-    // wait whatever held the ring before (a Button, a Select just used, a field), so the same outcome.
-    // A target not drawn yet is tried once more before the hint is shown.
-    const focus = (key: string, hint: string): void => {
-      const land = async (tries: number): Promise<void> => {
-        const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
-        if (moved.deny === undefined) return
-        if (tries > 0) $.clock.after(FOCUS_DELAY_MS * 2, () => void land(tries - 1))
-        else await update($, uiAtom, held => ({ ...held, notice: hint }))
+      const box: GraphBox = { columns: graphW, rows: Math.max(1, beside ? mainRows : mainRows - detailRows) }
+      const graphRows = beside ? mainRows : mainRows - detailRows
+      graphBox = box
+      // Above it: the header's row, the goal's, and docked the rule under them.
+      graphArea = graphRows < 1 || !('Client' in els) ? null : { top: 1 + goalRows + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
+      drawnCatcher = Input !== null ? catcherKey() : ''
+      fieldsDrawn = false
+      const stops = [ui.status, ui.name, saved.length, helping].join('|')
+      if (stops !== ringStops) {
+        ringStops = stops
+        if (focused) settleRing($)
       }
-      $.clock.after(FOCUS_DELAY_MS, () => void land(1))
-    }
-    // After a field's Enter or a picker's choice the ring goes back to the toolbar, so the next letter is a key again.
-    const home = (): void => settleRing($)
-    // `r` and `v` put a request in the prompt box, for the person to finish and send: from then on what they type
-    // is for the prompt. No call hands the keyboard from a pane to the prompt, so the pane is closed and shown again
-    // without it. Where that did not take the keys away, no key is acted on until the person does (`handed`).
-    const request = async (kind: 'run' | 'ask'): Promise<void> => {
-      const now = await read($, designAtom)
-      if (kind === 'run' && !isSaved(ui.name)) {
-        await update($, uiAtom, held => ({ ...held, notice: 'run: a replay is not a saved design, there is nothing to hand off' }))
+      const preview = graphBoxOf(graphW, graphRows, shown ? { ...previewProps(shown, box), wheel: { from: LOAD, rows: wheelRows } } : null, null)
+      const goal = (
+        <Box key="design-goal" flexDirection="column" height={goalRows}>
+          {goalRow(goalLines, purpose === '')}
+        </Box>
+      )
 
-        return
-      }
-      const line = kind === 'run' ? handoffPrompt(ui.name) : reviewPrompt(ui.name)
-      const filled = await $.prompt.fill({ text: line }).catch(() => ({ isFilled: false }))
-      const notice = kind === 'run' ? runNotice(now, line, filled.isFilled) : askNotice(line, filled.isFilled)
-      await update($, uiAtom, held => ({ ...held, notice }))
-      if (!filled.isFilled) return
-      watchBox($)
-      await $.ui.close({ id: DESIGN_PANE_ID }).catch(() => undefined)
-      await $.ui.open(paneArgs(false)).catch(() => undefined)
-      // The ring can be moved only in a site that holds the keyboard: if it still can, the keys did not go.
-      $.clock.after(FOCUS_DELAY_MS * 2, () => {
-        void $.ui
-          .focus({ requestId: DESIGN_PANE_ID, key: HOME_KEY })
-          .catch(() => ({ deny: 'no' }))
-          .then(moved => (moved.deny === undefined ? update($, uiAtom, held => ({ ...held, handed: true, notice: HANDED_NOTICE })) : undefined))
+      return frame(
+        true,
+        // The agents the marked row's design starts, where it has blocks to count.
+        headOf(shown !== null && !isBlank(shown) ? factsLine(shown) : null),
+        goal,
+        shown ? preview : <Box key="design-graph" width={graphW} height={graphRows} flexShrink={0} />,
+        detailBox(detailW, detailRows, hints, content),
+        beside,
+        mainRows,
+        message === null ? null : { text: message, color: focused ? 'warning' : FADED },
+        legend,
+      )
+    }
+    if (!design) return <Box />
+
+    // What takes the detail pane in place of the selected block: the add list (a block to add, or a block's type), the
+    // goal's field, a help page. The first two are the pane's only while it holds the keyboard: Escape hands the keys
+    // to the prompt and no hook hears of it, so drawn without it they are closed to the eye.
+    const picking = ui.picker !== null && !locked && focused
+    const describing = ui.describing === true && !locked && focused && !picking
+    const helping = !picking && !describing && ui.help > 0
+    const hidden = ui.detailHidden === true && !picking && !describing && !helping
+
+    // The widths. Beside the graph the detail pane has about a third, and one column of rule stands between them.
+    const beside = wide && !hidden
+    const detailW = beside ? detailWidth(columns) : columns
+    const graphW = beside ? columns - detailW - 3 : columns
+    // The view follows the selection where something other than the person's keys moved it out of sight.
+    const viewRoot = viewRootOf(design, ui, graphW)
+
+    // Row 2, up to two docked: what the design is for.
+    const goal = design.description.replace(/\s+/g, ' ').trim()
+    const goalLines = firstLines(goal === '' ? (focused && !locked ? 'not said yet · g sets it' : 'not said yet') : goal, Math.max(12, headColumns - GOAL_LABEL.length), dock ? GOAL_ROWS : 1)
+
+    // The keys that work now, in their fixed order: the graph's in the footer's right half, the detail pane's on its last rows.
+    const history = histories[ui.name]
+    const keys = legendItems({
+      ring: !focused ? 'graph' : ui.picker !== null && !locked ? 'list' : ui.describing && !locked ? 'goal' : ui.editing ? 'fields' : 'graph',
+      placed: ui.picker?.anchorId !== undefined && ui.picker.retypeId === undefined,
+      retype: ui.picker?.retypeId !== undefined,
+      empty: isBlank(design),
+      fixed: node?.type === 'args',
+      helping,
+      locked,
+      selected: node !== undefined,
+      container: canOpen(design, viewRoot, node?.id ?? null),
+      nested: viewRoot !== null,
+      results: over,
+      undo: (history?.undo.length ?? 0) > 0,
+      redo: (history?.redo.length ?? 0) > 0,
+      // As the chips on the card name them.
+      knobs: [1, 2, 3].map(slot => (node ? (quickKnob(node, slot) ?? null) : null)).map(name => (name === null ? null : cap(name))),
+      hidden,
+    })
+    const legend = legendOf(keys.footer)
+
+    // What is said on the message row: a change just made (with the way back), a refused edit, the delete question, the lock.
+    const said: Said =
+      ui.notice !== null && (ui.notice !== LOCK_NOTICE || locked)
+        ? { text: ui.notice.endsWith(UNDO_HINT) && !ui.notice.startsWith('redone: ') ? `Last change: ${ui.notice}` : ui.notice, color: noticeInforms(ui.notice) ? undefined : 'warning' }
+        : locked
+          ? { text: LOCK_NOTICE, color: FADED }
+          : null
+    // Without the keyboard the pane says nothing that names a key of its own: the cue takes the row, and what was said
+    // follows it only stripped of its key, and only where both fit.
+    const afterCue = ui.notice !== null ? withoutKeys(ui.notice) : null
+    const cue =
+      afterCue !== null && KEYS_CUE.length + 3 + afterCue.length <= saidW
+        ? `${KEYS_CUE} · ${afterCue}`
+        : afterCue !== null && /^(run|ask): /.test(afterCue)
+          ? `${KEYS_CUE.split(' · ')[0] ?? KEYS_CUE} · ${afterCue}`
+          : KEYS_CUE
+    const message: Said = focused ? said : { text: cue, color: FADED }
+    const mainRows = mainRowsFor(goalLines.length, dock && !wide && !hidden)
+
+    // The fields this block's type calls for (teach.ts says which), in the detail pane's order: the knobs typed as text.
+    const parent = node ? flatten(design).find(row => row.node.id === node.id)?.parentId : undefined
+    const knobs = node ? knobsOf(node, parent === undefined ? undefined : findNode(design, parent)?.type) : []
+    const textKnobs = TEXT_KNOBS.filter(key => knobs.includes(key))
+    // A field shows what is being typed in it (a draft) until it is saved: only the block, of the design, it was typed for.
+    const typed = (key: string, saved: string): string => (node && drafts.id === node.id && drafts.name === ui.name ? (drafts.values[key] ?? saved) : saved)
+    // Drafts and the keyboard, as this drawing finds them. Text typed and not saved is saved as soon as a drawing sees
+    // that its field can no longer be typed in: the pane lost the keyboard (Escape, which no hook hears; a chat turn),
+    // the pane changed shape (a resize moves it between dock and inline and takes the keys), another block is shown.
+    const shape = `${dock ? 'dock' : 'inline'}/${columns}`
+    const orphaned = hasDrafts() && (!focused || shape !== paneShape || drafts.name !== ui.name || (drafts.id !== null && drafts.id !== node?.id) || (drafts.goal !== null && ui.describing !== true))
+    paneShape = shape
+    // The keyboard went with a field open: the field is closed, with what it held saved; `e` or a click opens it again.
+    const lostKeys = !focused && !goalAsked && (ui.editing || ui.describing)
+    if ((orphaned || lostKeys) && !flushAsked) {
+      flushAsked = true
+      $.clock.after(0, () => {
+        flushAsked = false
+        void flushDrafts($).then(() => (lostKeys ? update($, uiAtom, held => (held.editing || held.describing ? { ...held, editing: false, describing: false, freshId: null } : held)) : undefined))
       })
     }
-    const press = async (op: ToolbarOp): Promise<void> => {
-      // A key (its letter cannot be pressed from a field, a click on it can): what was typed is saved before it acts.
-      const flushed = await flushDrafts($)
-      const wasHanded = (await read($, uiAtom)).handed
-      const step = await commit((before, held, ctx) => keyStep(before, held, op, ctx))
-      await keepSaid($, flushed)
-      // A request waits in the prompt box: the key was not acted on, and the pane says how to get to the prompt.
-      if (wasHanded) return
-      if (op === 'run' && !locked) return request('run')
-      if (op === 'review') return request('ask')
-      if (op === 'edit') {
-        if (step.ui.editing && node) focus(fieldKey(TITLE_KEY, node.id), `edit: ${EDIT_HINT}`)
-        return
-      }
-      if (op === 'describe') {
-        if (step.ui.describing) focus(DESC_KEY, 'goal: press tab to reach the field')
-        return
-      }
-      if (op === 'cancel') home()
-      if (step.ui.picker && (op === 'addAfter' || op === 'addInside')) focus(PICKER_KEY, 'add: press tab to reach the field')
+    const ownProblems = node ? problems.filter(one => one.nodeId === node.id) : []
+    const named = new Set(ownProblems.flatMap(one => problemFields(one.rule)))
+    const texts: { key: string; knob: string; label: string; value: string; placeholder: string }[] = node
+      ? [
+          // A block just added opens with its title field empty: the default title shows dim and stays if nothing is typed.
+          { key: TITLE_KEY, knob: 'title', label: FIELD_LABEL.title, value: typed(TITLE_KEY, ui.freshId === node.id ? '' : node.title), placeholder: node.title },
+          // A phase is its title and no more: it has a notes field only for notes it already carries.
+          ...(hasNotes(node) ? [{ key: NOTES_KEY, knob: 'notes', label: FIELD_LABEL.notes, value: typed(NOTES_KEY, node.notes ?? ''), placeholder: FIELD_PLACEHOLDER.notes }] : []),
+          ...textKnobs.map((knob: TextKnob) => ({
+            key: `${KNOB_KEY}${knob}`,
+            knob,
+            label: FIELD_LABEL[knob],
+            value: typed(`${KNOB_KEY}${knob}`, node.knobs?.[knob] ?? ''),
+            placeholder: FIELD_PLACEHOLDER[knob],
+          })),
+        ]
+      : []
+    const agents = over && ui.selectedId !== null ? agentsOf(run, ui.selectedId) : null
+    const matches = picking && ui.picker ? pickerMatches(design, ui.picker) : []
+    const marker = matches[Math.min(ui.picker?.pick ?? 0, Math.max(0, matches.length - 1))]
+    const editable = node !== undefined && !locked
+    // The fields are text to read until they are opened (`e`, Enter, Tab, a click on one): only then are they drawn to type in.
+    const fielding = editable && ui.editing && focused && !picking && !describing && !helping && Input !== null
+    // The fields closed since the last drawing: the ones opened next are new ones.
+    if (fieldsDrawn && !fielding) editGen++
+    fieldsDrawn = fielding
+    if (!fielding && !describing && Object.keys(pins).length > 0) pins = {}
+    // The catcher is in the tree wherever the ring may rest on it: not with the add list or the goal's field, which take its place among the stops.
+    const catching = Input !== null && !picking && !describing
+    drawnCatcher = catching ? catcherKey() : ''
+    // The ring is kept by its place among the stops. Where this drawing's stops are not the last one's (a run ended and
+    // the fields are back, the add list closed) and no field is asked for, the ring is put on the catcher.
+    const stops = [ui.status, ui.name, locked, picking, helping, describing, hidden, node?.id ?? '', knobs.join(',')].join('|')
+    if (stops !== ringStops) {
+      ringStops = stops
+      if (focused && !ui.editing && !describing) settleRing($)
     }
-    const pick = async (choice: { type?: NodeType; query?: string }): Promise<void> => {
-      await flushDrafts($)
-      const step = await commit((before, held, ctx) => pickBlock(before, held, choice, ctx))
-      // A block was added: its title is the next thing typed. Anything else: back to the keys.
-      if (step.changed && step.ui.editing && step.ui.freshId !== null) focus(fieldKey(TITLE_KEY, step.ui.freshId), `edit: ${EDIT_HINT}`)
-      else if (step.changed && step.ui.editing) home()
-      else if (!step.ui.picker) home()
-    }
-    // Enter on a field: its text and whatever was typed in the block's other fields are saved as one edit, and the keys are keys again.
+
+    // Enter on a field. With the ring known to be elsewhere it came to rest here unasked (it is kept by its place, and the
+    // stops changed under it), or Enter was pressed twice: nothing more is meant for this field, and a second Enter is a key.
     const save = async (key: string, value: string): Promise<void> => {
       if (!node) return
-      // The ring came to rest here unasked (it is kept by its place, and the stops changed under it): nothing was meant for this field.
-      if (!(await read($, uiAtom)).editing) {
-        drafts = noDrafts()
-        home()
-
-        return
-      }
-      drafts = { name: ui.name, id: node.id, goal: drafts.goal, values: { ...(drafts.id === node.id && drafts.name === ui.name ? drafts.values : {}), [key]: value } }
-      await flushDrafts($)
-      await update($, uiAtom, held => (held.editing || held.freshId !== null ? { ...held, editing: false, freshId: null } : held))
-      home()
+      const element = fieldKey(key, node.id)
+      if (ringOn === undefined || ringOn === element || ringTo === element) return saveField($, node.id, key, fieldText(element, value).text)
+      if (savedField.element === element) queueKeys($, [ENTER])
+      settleRing($)
     }
-    // A keystroke in a field: kept as a draft of that block's field, at once (no redraw).
-    const typeIn = (key: string, value: string): void => {
+    // A keystroke in a field: kept as a draft of that block's field, and the pane is drawn again, to show all of the text under the field.
+    const typeIn = (key: string, element: string, value: string): void => {
       if (!node) return
-      drafts = { name: ui.name, id: node.id, goal: drafts.name === ui.name ? drafts.goal : null, values: { ...(drafts.id === node.id && drafts.name === ui.name ? drafts.values : {}), [key]: value } }
-      // No field was asked for, yet a letter reached one: the ring was left on it by a change of the stops. The letter
-      // is dropped and the ring goes to the keys. (A field asked for is `editing` from the ring's own move onto it.)
-      if (ui.editing) return
-      void read($, uiAtom).then(now => {
-        if (now.editing) return
-        drafts = noDrafts()
-        home()
-      })
-    }
-    // A picker's choice (model, effort, …): what was typed is saved first, then the choice, each an edit of its own.
-    const choose = async (id: string, patch: NodePatch): Promise<void> => {
-      const flushed = await flushDrafts($)
-      await edit(id, patch)
-      await keepSaid($, flushed)
-      home()
-    }
-    const rows = flatten(design)
+      // The ring is known to be elsewhere, yet a letter reached this field: it was left here by a change of the stops, or
+      // Enter was just pressed here and the ring is on its way out. The letter is no text of this field: after Enter it
+      // is a key; otherwise it is dropped, and the ring goes where it belongs.
+      const now = fieldKey(key, node.id)
+      if (ringOn !== undefined && ringOn !== element && ringTo !== element && ringOn !== now && ringTo !== now) {
+        if (savedField.element === element) {
+          const fresh = value.slice(afterEnter(savedField, value))
+          savedField = { ...savedField, taken: savedField.taken + fresh.length }
+          const burst = burstKeys(fresh)
+          if (fresh !== '') queueKeys($, 'paste' in burst ? null : burst.keys)
+        }
 
-    // The selected block's agents, while a run is laid over the design: right under its headline, above the fields.
-    const agentList =
-      agents && agents.shown.length > 0 ? (
-        <Box key="design-agents" flexDirection="column">
-          {agents.shown.map(agent => (
-            <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : undefined}>
-              {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${agent.title}  ${agent.status} · ${fmtTokens(agent.tokens)} tokens`}
-            </Text>
-          ))}
-          {agents.rest > 0 && <Text color="subtle">{`… ${agents.rest} more`}</Text>}
-        </Box>
-      ) : null
-    const models = node?.knobs?.model && !MODEL_CHOICES.includes(node.knobs.model) ? [...MODEL_CHOICES, node.knobs.model] : MODEL_CHOICES
-    const votes = node?.knobs?.votes !== undefined && !VOTE_CHOICES.includes(node.knobs.votes) ? [...VOTE_CHOICES, node.knobs.votes] : VOTE_CHOICES
-    // The type at the moment it matters: what it does (wrapped while the board leaves rows free), and when to use it.
-    const headline = node ? (
-      <Box key="design-headline" flexDirection="column">
-        {headShown.map((line, index) =>
-          index === 0 ? (
-            <Text wrap="truncate-end">
-              <Text bold>{line.slice(0, `${node.id} · ${TEACH[node.type].name}`.length)}</Text>
-              <Text color="subtle">{line.slice(`${node.id} · ${TEACH[node.type].name}`.length)}</Text>
-            </Text>
-          ) : (
-            <Text color="subtle" wrap="truncate-end">{line}</Text>
-          ),
-        )}
-        <Text color="subtle" wrap="truncate-end">{useWhen(node.type)}</Text>
-      </Box>
-    ) : null
-    const lintList = lintLines.map(line => <Text color="warning" wrap="truncate-end">{line}</Text>)
-    // One key: its letter in the accent colour while the pane holds the keyboard; all of it dim while the keys are in the prompt.
-    // Docked it stands in a cell of its own width, drawn or not, so no key moves another.
-    const homeKey = locked ? HOME_LOCKED_KEY : HOME_KEY
-    const keyCell = (one: KeyDef, fixed: boolean) => {
-      const label = labelOf(one)
-      const cells = 3 + (fixed ? Math.max(one.cells, label.length) : label.length)
-      if (!works(one)) return <Box width={cells} flexShrink={0} />
-
-      return (
-        <Box width={cells} flexShrink={0}>
-          {focused ? (
-            <Button key={keyOf(one.op)} hotkey={one.hotkey} autoFocus={keyOf(one.op) === homeKey ? true : undefined} plain label={label} onPress={() => press(one.op)} />
-          ) : (
-            <Button key={keyOf(one.op)} autoFocus={keyOf(one.op) === homeKey ? true : undefined} plain dimColor label={`${one.hotkey}: ${label}`} onPress={() => press(one.op)} />
-          )}
-        </Box>
-      )
+        return settleRing($)
+      }
+      tidySoon($)
+      const mine = drafts.id === node.id && drafts.name === ui.name
+      let text: string
+      if (element === now) {
+        const whole = fieldText(element, value)
+        text = whole.text
+        if (whole.loose) redrawFields()
+      } else {
+        // The field has been drawn anew since, and this is the one before it: only what was added at its end since it was last heard of is new.
+        const pin = pins[element]
+        const known = pin ? `${pin.value}${pin.tail}` : null
+        if (!pin || known === null || !value.startsWith(known) || value.length === known.length) return
+        pin.tail = value.slice(pin.value.length)
+        text = `${(mine ? drafts.values[key] : undefined) ?? ''}${value.slice(known.length)}`
+        redrawFields()
+      }
+      drafts = { name: ui.name, id: node.id, goal: drafts.name === ui.name ? drafts.goal : null, values: { ...(mine ? drafts.values : {}), [key]: text } }
+      if (!ui.editing) void update($, uiAtom, held => (held.editing ? held : { ...held, editing: true }))
+      $.ui.invalidate('ui.render')
     }
-    const keys = dock ? (
-      <Box key="design-toolbar" flexDirection="column">
-        <Box flexDirection="row" columnGap={1}>{BLOCK_KEYS.map(one => keyCell(one, true))}</Box>
-        <Box flexDirection="row" columnGap={1}>{DESIGN_KEYS.map(one => keyCell(one, true))}</Box>
-      </Box>
-    ) : (
-      <Box key="design-toolbar" flexDirection="column">
-        {keyLines.map(line => (
-          <Box flexDirection="row" columnGap={1}>{line.map(one => keyCell(one, false))}</Box>
-        ))}
-      </Box>
-    )
-    const field = (one: (typeof texts)[number], across: number) => (
-      // The label is drawn here, not by the field: a field's own label is squeezed by a long value
-      // (it lost its space, then wrapped onto a second row). This one never shrinks.
-      <Box flexDirection="row" width={across > 1 ? '50%' : '100%'}>
-        <Box flexShrink={0}>
-          <Text color="subtle">{`${one.label}: `}</Text>
-        </Box>
-        {/* A width of its own: left to grow, the field measured the whole row and its `⏎ save` wrapped under a long text. */}
-        <Box width={fieldWidth(one.label, across)}>
-          {'Input' in els && (
-            <els.Input
-              key={fieldKey(one.key, node?.id ?? '')}
-              placeholder={one.placeholder}
-              value={one.value}
-              submitLabel=""
-              onInput={value => typeIn(one.key, value)}
-              onSubmit={value => save(one.key, value)}
-            />
-          )}
-        </Box>
-      </Box>
-    )
-    const fields = node && 'Input' in els && (
-      <Box flexDirection="column">
-        {fieldLines.map(line => (
-          <Box flexDirection="column">
-            <Box flexDirection="row" columnGap={2}>{line.map(one => field(one, line.length))}</Box>
-            {line.length === 1 && (overflow[line[0]?.key ?? ''] ?? []).map(rest => <Text color="subtle" wrap="truncate-end">{`  ${rest}`}</Text>)}
-          </Box>
-        ))}
-      </Box>
-    )
-    const pickerRow = node && 'Select' in els && (
-      <Box flexDirection="row" gap={2}>
-        {/* The type is picked from the same list a block is added from: every type on a row with what it does, none scrolled away. */}
-        <Button
-          key="design-type"
-          plain
-          label={`type: ${node.type} ▾`}
-          onPress={async () => {
-            await flushDrafts($)
-            const step = await commit((before, held, ctx) => openRetype(before, held, node.id, ctx))
-            if (step.ui.picker) focus(PICKER_KEY, 'type: press tab to reach the field')
-          }}
-        />
-        {pickers.model && (
-          <els.Select
-            key="design-model"
-            label="model"
-            value={node.knobs?.model ?? INHERIT}
-            options={[{ value: INHERIT }, ...models.map(value => ({ value }))]}
-            onSelect={value => choose(node.id, { knobs: { model: value === INHERIT ? '' : value } })}
-          />
-        )}
-        {pickers.effort && (
-          <els.Select
-            key="design-effort"
-            label="effort"
-            value={node.knobs?.effort ?? INHERIT}
-            options={[{ value: INHERIT }, ...EFFORTS.map(value => ({ value }))]}
-            onSelect={value => choose(node.id, { knobs: { effort: EFFORTS.find(one => one === value) } })}
-          />
-        )}
-        {pickers.isolation && (
-          <els.Select
-            key="design-isolation"
-            label="isolation"
-            value={node.knobs?.isolation ?? 'none'}
-            options={[{ value: 'none' }, { value: 'worktree' }]}
-            onSelect={value => choose(node.id, { knobs: { isolation: value === 'worktree' ? 'worktree' : undefined } })}
-          />
-        )}
-        {pickers.votes && (
-          <els.Select
-            key="design-votes"
-            label="votes"
-            value={node.knobs?.votes === undefined ? 'none' : String(node.knobs.votes)}
-            options={[{ value: 'none' }, ...votes.map(count => ({ value: String(count) }))]}
-            onSelect={value => choose(node.id, { knobs: { votes: value === 'none' ? undefined : Number(value) } })}
-          />
-        )}
-      </Box>
-    )
-    // Inline, one line says the selected block: what was just said, else the block, its title and how its notes start.
-    const cueTail = afterCue ?? (node ? inspectorSummary(node, Math.max(8, columns - KEYS_CUE.length - 3)) : '')
-    const statusLine = !focused ? (
-      // Without the keyboard: where the keys are, first; then the block, or what was just said without its key.
-      <Text key="design-summary" wrap="truncate-end">
-        <Text color="subtle">{KEYS_CUE}</Text>
-        {cueTail !== '' && <Text>{` · ${cueTail}`}</Text>}
-      </Text>
-    ) : said ? (
-      <Text key="design-summary" color={said.color} wrap="truncate-end">{said.text}</Text>
-    ) : node ? (
-      <Text key="design-summary" wrap="truncate-end">
-        {ownLints.length > 0 && <Text color="warning">{`${GLYPH.lint} `}</Text>}
-        <Text bold>{inspectorSummary(node, columns - 12)}</Text>
-        <Text color="subtle">{agents && agents.shown.length > 0 ? ` · ${agents.shown.length + agents.rest} agents` : locked ? '' : ' · e: edit'}</Text>
-      </Text>
-    ) : ui.selectedId === UNMAPPED_ID && agents ? (
-      <Text key="design-summary" wrap="truncate-end">{`unmapped: ${agents.shown.length + agents.rest} agents whose label names no block of this design`}</Text>
-    ) : (
-      <Text key="design-summary" color="subtle" wrap="truncate-end">{ui.drafting && design.nodes.length === 0 ? ' ' : (emptyLines[0] ?? ' ')}</Text>
-    )
+    const retype = async (target: DesignNode): Promise<void> => {
+      await flushDrafts($)
+      const step = await commit($, (before, held, context) => openRetype(before, held, target.id, context))
+      if (!step.ui.picker) return
+      pickGen++
+      landOn($, pickerKey, 'type: press Tab to reach the filter')
+    }
 
-    return (
-      <Box flexDirection="column" paddingLeft={1}>
-        {header}
-        {describing && 'Input' in els ? (
-          // The field has rows of its own, with nothing beside it: so placed, a focused field wraps a long text and all of it can be read while typing.
-          <Box key="design-goal-field" flexDirection="column">
-            <Text color="subtle">goal: what this workflow is for (Enter saves)</Text>
-            <Box flexDirection="column">
-              <els.Input
-                key={DESC_KEY}
-                placeholder={GOAL_PLACEHOLDER}
-                value={drafts.goal !== null && drafts.name === ui.name ? drafts.goal : design.description}
-                submitLabel=""
-                onInput={value => {
-                  drafts = drafts.name === ui.name ? { ...drafts, goal: value } : { ...noDrafts(), name: ui.name, goal: value }
-                }}
-                onSubmit={async value => {
-                  drafts = drafts.name === ui.name ? { ...drafts, goal: null } : noDrafts()
-                  await commit((before, held, ctx) => describeDesign(before, held, value, ctx))
-                  home()
-                }}
-              />
-            </Box>
-          </Box>
-        ) : dock ? (
-          <Box key="design-goal" flexDirection="column">
-            {goalLines.map(line => (
-              <Text color={goal === '' ? 'subtle' : undefined} wrap="truncate-end">{line}</Text>
-            ))}
-          </Box>
-        ) : null}
-        {boardRows < 1 ? null : 'Client' in els ? (
-          <els.Client key={CANVAS_KEY} module="./canvas.tsx" width="100%" height={view.rows} props={boardProps(design, ui, view, overlay, placement)} />
-        ) : (
-          <Box flexDirection="column">
-            {rows.map(row => (
-              <Text color={row.node.id === ui.selectedId ? 'claude' : undefined} bold={row.node.id === ui.selectedId ? true : undefined}>
-                {`${row.node.id === ui.selectedId ? GLYPH.diamond : ' '} ${'  '.repeat(row.depth)}${TEACH[row.node.type].glyph} ${row.node.id}  ${row.node.title}`}
+    // The detail pane's parts. A thin rule stands under its heading; a blank row between two fields and two sections, while there are rows for it.
+    const thin: Item = { rows: 1, el: <Text color={RULE}>{'─'.repeat(detailW)}</Text> }
+    /** A wrapped text cut to `most` rows, `…` on the last; `tail` keeps its end (where the typing is) and marks the start. */
+    const capped = (rows: readonly string[], most: number, tail: boolean = false): string[] => {
+      if (rows.length <= most) return [...rows]
+      if (tail) return rows.slice(rows.length - most).map((row, index) => (index === 0 ? `…${row.slice(1)}` : row))
+      return rows.slice(0, most).map((row, index) => (index === most - 1 ? `${clip(row, detailW - 1)}…` : row))
+    }
+    const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
+    // The ring's field, or the one it is on its way to: all of its text is drawn under it as it is typed.
+    const ringAt = ringTo !== '' ? ringTo : ringOn
+    const activeBase = fielding && isField(ringAt) ? baseOf(ringAt ?? '') : null
+    // The door stands at the right end of the heading's row: two cells, empty, seen only for the moment the ring is on it.
+    const DOOR_W = 2
+    const heading: Item | null = node
+      ? {
+          rows: 1,
+          el: (
+            <Box key="design-heading" flexDirection="row" justifyContent="space-between" height={1}>
+              <Text wrap="truncate-end">
+                <Text color={ACCENT[node.type]} bold>{node.type.toUpperCase()}</Text>
+                <Text color={FADED}>{' / '}</Text>
+                <Text bold>{clip(node.title, Math.max(4, detailW - node.type.length - node.id.length - 5 - DOOR_W))}</Text>
               </Text>
-            ))}
-          </Box>
-        )}
-        {inlineRows.map(line => (
-          <Text color={line.color} wrap="truncate-end">{line.text}</Text>
-        ))}
-        {dock && <Text color="subtle">{'─'.repeat(columns)}</Text>}
-        {picking && ui.picker ? (
-          <Box key="design-picker" flexDirection="column">
-            {'Input' in els && (
-              <els.Input
-                key={PICKER_KEY}
-                label={retyping ? `type of ${retyping.id} (now ${retyping.type})` : `+ add ${placeLabel(design, ui.picker.at)}`}
-                placeholder="type to narrow"
-                value={ui.picker.query}
-                submitLabel={matches[0] ? `${retyping ? 'make it' : 'add'} ${matches[0]}` : 'no match'}
-                autoFocus
-                onInput={value => update($, uiAtom, held => typePicker(held, value))}
-                onSubmit={value => pick({ query: value })}
-              />
-            )}
-            {matches[0] && <Text key="design-pick-when" wrap="truncate-end">{`${matches[0]} · ${useWhen(matches[0])}`}</Text>}
-            {matches.length === 0 && <Text color="subtle">no block type matches</Text>}
-            {listed.map(type => (
-              <Box flexDirection="row" gap={1}>
-                <Button key={`pick:${type}`} plain dimColor={type === matches[0] ? undefined : true} label={type.padEnd(14)} onPress={() => pick({ type })} />
-                <Text color="subtle" wrap="truncate-end">{TEACH[type].hint}</Text>
+              <Box flexDirection="row" flexShrink={0}>
+                <Text color={FADED}>{node.id}</Text>
+                {editable && Input && (
+                  <Box width={DOOR_W} flexShrink={0}>
+                    <Input
+                      key={doorKey()}
+                      value=""
+                      placeholder=""
+                      submitLabel=""
+                      onInput={(value, input) => doorKeys($, input.element, 'change', value)}
+                      onSubmit={(value, input) => doorKeys($, input.element, 'submit', value)}
+                    />
+                  </Box>
+                )}
               </Box>
-            ))}
-            <Box flexDirection="row" gap={2}>
-              <Button key="design-add-cancel" plain dimColor label="cancel" onPress={() => press('cancel')} />
-              <Text color="subtle" wrap="truncate-end">{matches.length > listed.length ? `… ${matches.length - listed.length} more types: type to narrow · Esc: keys to the prompt` : 'Esc: keys to the prompt'}</Text>
             </Box>
-          </Box>
-        ) : help ? (
-          <Box key="design-card" flexDirection="column">
-            {help.map(line => (
-              <Text>{line}</Text>
-            ))}
-            <Text color="subtle">{focused ? `help ${ui.help}/${HELP_PAGES} · c: ${ui.help < HELP_PAGES ? 'next page' : 'close'}` : `help ${ui.help}/${HELP_PAGES}`}</Text>
-          </Box>
-        ) : !dock ? (
-          <Box key="design-inspector" flexDirection="column">
-            {statusLine}
-            {node && !collapsed && !locked && fields}
-            {node && !collapsed && !locked && pickerRow}
-          </Box>
-        ) : node && locked ? (
-          <Box key="design-inspector" flexDirection="column">
-            {headline}
-            {lintList}
-            {agentList}
-          </Box>
-        ) : node ? (
-          <Box key="design-inspector" flexDirection="column">
-            {headline}
-            {lintList}
-            {agentList}
-            {fields}
-            {pickerRow}
-          </Box>
-        ) : ui.selectedId === UNMAPPED_ID && agents ? (
-          <Box key="design-inspector" flexDirection="column">
-            <Text wrap="truncate-end">
-              <Text bold>unmapped</Text>
-              <Text color="subtle">: agents whose label names no block of this design</Text>
-            </Text>
-            {agentList}
-          </Box>
-        ) : (
-          // While Claude drafts, the board says so, once.
-          <Box key="design-inspector" flexDirection="column">
-            {emptyLines.map(line => (
-              <Text color="subtle" wrap="truncate-end">{line}</Text>
-            ))}
-          </Box>
-        )}
-        {dock && (
-          // Always there, so nothing below it moves when something is said: a change and its way back, a refusal, where the keys are.
-          <Box key="design-message" flexDirection="column">
-            {messageLines.length === 0 ? <Text> </Text> : messageLines.map(line => <Text color={message?.color} wrap="truncate-end">{line}</Text>)}
-          </Box>
-        )}
-        {!picking && keys}
-      </Box>
+          ),
+        }
+      : null
+    const fieldLabel = (one: (typeof texts)[number]) => (
+      <Text wrap="truncate-end">
+        <Text color="suggestion">{cap(one.label)}</Text>
+        {one.value.trim() === '' && named.has(one.knob) ? <Text color="error">{' [not set]'}</Text> : null}
+      </Text>
     )
+    // A field at rest: its label, then all of its value, wrapped. One press anywhere on it opens the fields on this one.
+    const restField = (one: (typeof texts)[number], most: number): Item => {
+      const value = oneLine(one.value)
+      const rows = value === '' ? [] : capped(wrapText(value, detailW), most)
+      const lost = value === '' && named.has(one.knob)
+      const body = value === '' ? [<Text color={lost ? 'error' : FADED}>{NOT_SET}</Text>] : rows.flatMap((row, index) => (index === 0 ? [<Text>{row}</Text>] : ['\n', <Text>{row}</Text>]))
+      return {
+        rows: 1 + Math.max(1, rows.length),
+        el: (
+          <Box flexDirection="column" flexShrink={0}>
+            <Button key={`${REST_KEY}${fieldKey(one.key, node?.id ?? '')}`} plain onPress={() => openFields($, one.key)}>
+              {[<Text color="suggestion">{cap(one.label)}</Text>, '\n', ...body]}
+            </Button>
+          </Box>
+        ),
+      }
+    }
+    // A field open for typing: one line (the engine's field wraps only at the pane's full width), and, where the text is
+    // longer than the line, all of it wrapped under the field: as typed so far under the ring's own, dim under the others.
+    const openField = (one: (typeof texts)[number], most: number, others: boolean): Item => {
+      const element = fieldKey(one.key, node?.id ?? '')
+      const lit = activeBase === one.key
+      const whole = oneLine(one.value)
+      const shown = pinned(element, one.value)
+      // Under it too while the field itself does not show all of it: letters typed on the ring's way stand beside it until the typing pauses.
+      const under = (lit || others) && (whole.length > detailW - 4 || (pins[element]?.head ?? '') !== '') ? capped(wrapText(one.value, detailW), most, lit) : []
+      return {
+        rows: 2 + under.length,
+        el: (
+          <Box flexDirection="column" flexShrink={0}>
+            {fieldLabel(one)}
+            {/* A row of its own, under its label: the whole width is the text's. */}
+            <Box flexDirection="column" flexShrink={0} height={1}>
+              {Input && (
+                <Input
+                  key={element}
+                  placeholder={one.placeholder}
+                  value={shown}
+                  submitLabel=""
+                  onInput={(value, input) => typeIn(one.key, input.element, value)}
+                  onSubmit={value => save(one.key, value)}
+                />
+              )}
+            </Box>
+            {under.map(row => (
+              // To the full width: a row that got shorter leaves no cells of the one before it.
+              <Text color={lit ? undefined : FADED} wrap="truncate-end">{row.padEnd(detailW)}</Text>
+            ))}
+          </Box>
+        ),
+      }
+    }
+    // Under the fields, one to a row, a label and its value: the block's type, which a press changes; and, read only, the
+    // worktree its file asks for (Claude sets that knob, the pane has no control for it).
+    const PICKER_LABEL_W = 11
+    const typeLine = (target: DesignNode): Item => ({
+      rows: 1,
+      el: (
+        // The label is drawn first and comes second among the stops (the row runs backward): Tab reaches the picker before its label.
+        <Box flexDirection="row-reverse" justifyContent="flex-end" flexShrink={0}>
+          {/* The type is picked from the same list a block is added from: every type on a row with what it does, none scrolled away. */}
+          <Button key={TYPE_KEY} plain label={`${target.type} ▾`} onPress={() => retype(target)} />
+          <Box width={PICKER_LABEL_W} flexShrink={0}>
+            <Button key={`${LABEL_KEY}${TYPE_KEY}`} plain onPress={() => retype(target)}>
+              <Text color="suggestion">{'Type'.padEnd(PICKER_LABEL_W)}</Text>
+            </Button>
+          </Box>
+        </Box>
+      ),
+    })
+    // The args block has no type to pick: it becomes no other block.
+    const pickerItems: Item[] = node ? [...(editable && node.type !== 'args' ? [typeLine(node)] : []), ...(node.knobs?.isolation === 'worktree' ? [line(`${'Isolation'.padEnd(PICKER_LABEL_W)}worktree`, FADED)] : [])] : []
+    // The selected block's agents, while a run is laid over the design.
+    const agentItems = (most: number): Item[] => {
+      if (!agents || agents.shown.length === 0) return []
+      const all = agents.shown.length + agents.rest
+      const shown = agents.shown.slice(0, Math.max(1, all > most ? most - 1 : most))
+      return [
+        label('Run'),
+        ...shown.map(agent => ({
+          rows: 1,
+          el: (
+            <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : undefined}>
+              {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${agent.title}  ${agent.status} · ${fmtTokens(agent.tokens)}`}
+            </Text>
+          ),
+        })),
+        ...(shown.length < all ? [line(`… ${all - shown.length} more`, FADED)] : []),
+      ]
+    }
+    // The selected block, as far as the rows go. With all of them: a blank row between two sections, every text whole.
+    // Short of rows, with the fields open, the whole texts under the ones the ring is not in go first (each is in its
+    // field, cut: they are said twice); then the blank rows; then what the type means (the help page says it); then
+    // the long texts are cut, to fewer rows each time.
+    const CUTS = [8, 5, 3, 2, 1] as const
+    const inspector = (level: number): Item[] => {
+      if (!node || !heading) return []
+      const most = level < 4 ? Infinity : (CUTS[level - 4] ?? 1)
+      const sections: Item[][] = []
+      if (level < 3) {
+        sections.push([label('Meaning'), ...lines(capped(wrapText(`${cap(TEACH[node.type].hint)}.`, detailW), most)), ...lines(capped(wrapText(`${cap(useWhen(node.type))}.`, detailW), most), FADED)])
+      }
+      for (const one of ownProblems) {
+        const parts = problemParts(one.message)
+        sections.push([label('Error', 'error'), ...lines(capped(wrapText(parts.error, detailW), most)), ...(parts.fix === '' ? [] : [label('Fix'), ...lines(capped(wrapText(parts.fix, detailW), most))])])
+      }
+      if (editable) for (const one of texts) sections.push([fielding ? openField(one, most, level < 1) : restField(one, most)])
+      if (pickerItems.length > 0) sections.push(pickerItems)
+      const ran = agentItems(Number.isFinite(most) ? Math.max(2, most) : AGENT_ROWS_MAX)
+      if (ran.length > 0) sections.push(ran)
+      return [heading, thin, ...sections.flatMap((section, index) => (index > 0 && level < 2 ? [blank, ...section] : section))]
+    }
+    const INSPECTOR_LEVELS = 4 + CUTS.length
+
+    // The add list: every type on a row, name and hint, in two groups; the marked one opens to all of its hint and when to use it.
+    const NAME_W = Math.max(...matches.map(type => type.length), 0) + 2
+    const typeRow = (type: NodeType, opened: boolean): Item => {
+      const lit = type === marker
+      const hint = `${cap(TEACH[type].hint)}.`
+      const more = lit && opened ? [...wrapText(hint, detailW - 2), ...wrapText(`${cap(useWhen(type))}.`, detailW - 2)] : []
+      const split = lit && opened ? wrapText(hint, detailW - 2).length : 0
+      return {
+        rows: 1 + more.length,
+        el: (
+          <Box flexDirection="column" flexShrink={0}>
+            <Button key={`pick:${type}`} plain onPress={() => pick($, { type })}>
+              {[
+                <Text color="claude" bold>{lit ? '▸ ' : '  '}</Text>,
+                <Text color={ACCENT[type]} bold={lit ? true : undefined}>{type.toUpperCase().padEnd(NAME_W)}</Text>,
+                ...(more.length > 0 ? [] : [<Text color={FADED}>{clip(hint, Math.max(0, detailW - 2 - NAME_W))}</Text>]),
+                ...more.flatMap((row, index) => ['\n', <Text color={index < split ? undefined : FADED}>{`  ${row}`}</Text>]),
+              ]}
+            </Button>
+          </Box>
+        ),
+      }
+    }
+    const addList = (level: number): Item[] => {
+      if (!ui.picker) return []
+      // A filter ranks the types, best first: the groups are for the list as it opens.
+      const grouped = ui.picker.query === '' && level < 2
+      const opened = level < 3
+      const groups = grouped ? PALETTE_GROUPS.map(one => ({ heading: one.heading, types: matches.filter(type => groupOf(type) === one.group) })).filter(one => one.types.length > 0) : [{ heading: '', types: matches }]
+      return [
+        ...firstLines(addHeading(design, ui.picker), detailW, 2).map(row => line(row, undefined, true)),
+        thin,
+        {
+          rows: 1,
+          el: (
+            <Box flexDirection="row" height={1}>
+              <Box flexShrink={0}>
+                <Text color="suggestion">{'Filter '}</Text>
+              </Box>
+              <Box width={Math.max(8, detailW - 7)}>
+                {Input && (
+                  <Input
+                    key={pickerKey()}
+                    placeholder="type to narrow"
+                    value={ui.picker.query}
+                    submitLabel=""
+                    onInput={(value, input) => filterKeys($, input.element, value)}
+                    onSubmit={(value, input) => filterEnter($, input.element, value)}
+                  />
+                )}
+              </Box>
+            </Box>
+          ),
+        },
+        ...(matches.length === 0 ? [line('no block type matches', 'warning')] : []),
+        ...groups.flatMap(group => [...(level < 1 ? [blank] : []), ...(group.heading === '' ? [] : [line(group.heading, FADED)]), ...group.types.map(type => typeRow(type, opened))]),
+      ]
+    }
+
+    // The goal's field: one line, and all of the goal as typed so far under it.
+    const goalField = (): Item[] => {
+      const element = descKey()
+      const value = drafts.goal !== null && drafts.name === ui.name ? drafts.goal : design.description
+      const shown = pinned(element, value)
+      const under = oneLine(value).length > detailW - 4 || (pins[element]?.head ?? '') !== '' ? wrapText(value, detailW) : []
+      return [
+        label('Goal'),
+        ...lines(wrapText('What this workflow is for, in a sentence: Claude reads it as the goal.', detailW), FADED),
+        blank,
+        {
+          rows: 1,
+          el: (
+            <Box key="design-goal-field" flexDirection="column" flexShrink={0} height={1}>
+              {Input && (
+                <Input
+                  key={element}
+                  placeholder={GOAL_PLACEHOLDER}
+                  value={shown}
+                  submitLabel=""
+                  onInput={(typedNow, input) => {
+                    if (input.element !== descKey()) return
+                    tidySoon($)
+                    const whole = fieldText(input.element, typedNow)
+                    if (whole.loose) redrawGoal()
+                    drafts = drafts.name === ui.name ? { ...drafts, goal: whole.text } : { ...noDrafts(), name: ui.name, goal: whole.text }
+                    $.ui.invalidate('ui.render')
+                  }}
+                  onSubmit={(typedNow, input) => saveGoal($, fieldText(input.element, typedNow).text)}
+                />
+              )}
+            </Box>
+          ),
+        },
+        ...lines(under.map(row => row.padEnd(detailW))),
+      ]
+    }
+    // Nothing selected: the design's goal, and how to go on.
+    const idle = (): Item[] => [
+      label('Goal'),
+      ...lines(wrapText(goal === '' ? 'Not said yet.' : goal, detailW).slice(0, 6), goal === '' ? FADED : undefined),
+      // While Claude drafts, the graph says so, once.
+      ...(drafting
+        ? []
+        : [
+            blank,
+            label(!isBlank(design) ? 'Nothing selected' : 'An empty design'),
+            ...lines(
+              wrapText(
+                !isBlank(design)
+                  ? 'Click a card to select it, or a [+] to add a block there.'
+                  : focused
+                    ? 'Press n to add the first block and g to say what the workflow is for; or tell Claude in the prompt what to build.'
+                    : 'Click [+] on the graph to add the first block, or tell Claude in the prompt what to build.',
+                detailW,
+              ),
+              FADED,
+            ),
+          ]),
+    ]
+    const stray = (): Item[] => [line('UNMAPPED', undefined, true), ...lines(wrapText('Agents whose label names no block of this design.', detailW), FADED), blank, ...agentItems(AGENT_ROWS_MAX)]
+
+    // The detail pane's rows. Beside the graph it has all of them. Under it, it has a fixed share at rest, so nothing
+    // shifts with the selection; while a field, the add list, the goal or a help page is open it takes what that needs.
+    // Hidden, it has none: the graph has them all.
+    const openNeed = picking ? rowsOf(addList(0)) : describing ? rowsOf(goalField()) : helping ? rowsOf(helpItems(ui.help, node?.type, detailW, 99, false)) : rowsOf(inspector(0))
+    // Inline, at rest, it is its last row alone: the keys that open it.
+    const restRows = dock ? Math.max(Math.min(HINT_ROWS + 1, mainRows), Math.min(mainRows - GRAPH_LEAST_ROWS, Math.floor(mainRows * DETAIL_REST_SHARE))) : 1
+    const opened = picking || describing || helping || fielding
+    const detailRows = hidden ? 0 : wide ? mainRows : opened ? Math.max(restRows, Math.min(openNeed + HINT_ROWS, mainRows - (dock ? GRAPH_LEAST_ROWS : 0))) : restRows
+    const hints = hintsOf(keys.detail, detailW, detailRows)
+    const contentRows = Math.max(0, detailRows - hints.length)
+    // The graph's region: every row the rest leaves, whatever the graph's own height (it pans inside), so the region never changes size with the selection.
+    const graphRows = Math.max(0, beside ? mainRows : mainRows - detailRows)
+    const box: GraphBox = { columns: graphW, rows: Math.max(1, graphRows) }
+    graphBox = box
+    // Above it: the header's row, the goal's, and docked the rule under them.
+    graphArea = graphRows < 1 || !('Client' in els) ? null : { top: 1 + goalLines.length + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
+
+    // What the detail pane holds above the rows of its keys.
+    const content: Item[] =
+      picking && ui.picker
+        ? fit(5, contentRows, addList)
+        : describing
+          ? goalField()
+          : helping
+            ? helpItems(ui.help, node?.type, detailW, contentRows, false)
+            : node
+              ? fit(INSPECTOR_LEVELS, contentRows, inspector)
+              : ui.selectedId === UNMAPPED_ID && agents
+                ? stray()
+                : idle()
+
+    // The graph's region: the one part that changes size. Inside a container opened with `o` the graph's own first row says where the view is.
+    const graph = graphBoxOf(
+      graphW,
+      graphRows,
+      { ...graphProps(design, ui, box, overlay), wheel: { from: LOAD, rows: wheelRows }, ...(focused ? {} : { quiet: true }) },
+      flatten(design)
+        .slice(0, graphRows)
+        .map(row => (
+          <Text color={row.node.id === ui.selectedId ? 'claude' : undefined} bold={row.node.id === ui.selectedId ? true : undefined} wrap="truncate-end">
+            {`${row.node.id === ui.selectedId ? GLYPH.diamond : ' '} ${'  '.repeat(row.depth)}${TEACH[row.node.type].glyph} ${row.node.id}  ${row.node.title}`}
+          </Text>
+        )),
+    )
+
+    return frame(catching, headOf(factsLine(design)), locked ? goalRow(goalLines, goal === '') : goalPress(goalLines, goal === ''), graph, hidden ? null : detailBox(detailW, detailRows, hints, content), beside, mainRows, message, legend)
   })
 }

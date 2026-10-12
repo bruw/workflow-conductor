@@ -1,6 +1,6 @@
 import type { AgentRun, RunState } from '../run/events'
 
-import { GLYPH } from './theme'
+import { FADED, GLYPH, RULE } from './theme'
 
 // The run pane as plain rows: no `$`, no elements. hooks/run.tsx maps rows to elements.
 
@@ -157,7 +157,7 @@ function tally(counts: Counts & { tokens: number }): Part[] {
     { text: pad },
     ...(failed ? [{ text: failed, color: 'error' as const }] : []),
     { text: settled },
-    { text: fmtTokens(counts.tokens).padStart(TOKEN_COLUMN, ' '), color: 'subtle' },
+    { text: fmtTokens(counts.tokens).padStart(TOKEN_COLUMN, ' '), color: FADED },
   ]
 }
 
@@ -207,7 +207,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
       parts: line(
         [
           { text: `${GLYPH.dot} `, color: statusColor },
-          { text: 'wf: ', color: 'subtle' },
+          { text: 'wf: ', color: FADED },
           { text: state.name ?? state.runId ?? 'workflow', bold: true },
         ],
         [{ text: state.status, color: statusColor }, ...tally(all)],
@@ -236,10 +236,10 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
         parts: line(
           [
             { text: `${glyph}  `, color },
-            { text: phase, color: phase === NO_PHASE ? 'subtle' : undefined },
-            { text: `  ×${counts.total}`, color: 'subtle' },
+            { text: phase, color: phase === NO_PHASE ? FADED : undefined },
+            { text: `  ×${counts.total}`, color: FADED },
           ],
-          [{ text: `▕${progress}▏`, color: counts.running > 0 ? 'claude' : 'subtle' }, ...tally(counts)],
+          [{ text: `▕${progress}▏`, color: counts.running > 0 ? 'claude' : RULE }, ...tally(counts)],
           width,
         ),
         counts: { total: counts.total, running: counts.running, done: counts.done, failed: counts.failed },
@@ -266,13 +266,13 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
           phase,
           parts: line(
             [
-              { text: `${GLYPH.rail}  ${branch} `, color: 'subtle' },
+              { text: `${GLYPH.rail}  ${branch} `, color: RULE },
               { text: `${agentGlyph} `, color: agentColor },
               { text: agent.label || agent.agentId },
             ],
             [
-              { text: took, color: 'subtle' },
-              { text: tokens.padStart(TOKEN_COLUMN, ' '), color: 'subtle' },
+              { text: took, color: FADED },
+              { text: tokens.padStart(TOKEN_COLUMN, ' '), color: FADED },
             ],
             width,
           ),
@@ -293,8 +293,8 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
       kind: 'footer',
       key: 'footer',
       glyph: GLYPH.railEnd,
-      color: 'subtle',
-      parts: line([{ text: `${GLYPH.railEnd}─ `, color: 'subtle' }, { text: summary.join(' · '), color: 'subtle' }], [], width),
+      color: FADED,
+      parts: line([{ text: `${GLYPH.railEnd}─ `, color: RULE }, { text: summary.join(' · '), color: FADED }], [], width),
       counts: { total: all.total, running: all.running, done: all.done, failed: all.failed },
       tokens: fmtTokens(all.tokens),
     }),

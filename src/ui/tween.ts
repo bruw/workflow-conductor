@@ -1,8 +1,10 @@
-// Motion: a tiny tween utility and the per-item offset animator the flow
-// board uses, once for its cards' columns and once for their rows. Pure TypeScript: time is a number handed in, never read from a clock.
+// Motion: a tiny tween utility and the per-item offset animator the graph
+// uses three times over: for its cards' columns, their rows and their heights.
+// Pure TypeScript: time is a number handed in, never read from a clock.
 //
-// Rows are whole cells, so a row's motion is an integer offset from where it
-// now belongs, starting at (old y - new y) and decaying to 0.
+// Cells are whole, so an item's motion is an integer offset from where it now
+// belongs, starting at (old - new) and decaying to 0. The names say `row` and
+// `y` for any of the three.
 
 /** One frame of the surface's clock, and the interval the shared ticker asks for. */
 export const FRAME_MS = 16

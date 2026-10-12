@@ -13,7 +13,7 @@ import type { ReplayFixture } from '../src/run/replay'
 import type { Handoff, Tracker } from '../src/run/tracker'
 import { buildRunRows, togglePhase } from '../src/ui/rail'
 import type { Part, Row } from '../src/ui/rail'
-import { GLYPH, PANE_ID, PANE_TITLE } from '../src/ui/theme'
+import { FADED, GLYPH, PANE_ID, PANE_TITLE } from '../src/ui/theme'
 
 const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
@@ -233,7 +233,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         <Text bold>{`${GLYPH.diamond} ${PANE_TITLE}`}</Text>
         {rows.length === 0 && <Text dimColor>{`${GLYPH.railEnd} ${PLACEHOLDER}`}</Text>}
         {rows.slice(0, MAX_ROWS).map(draw)}
-        {rows.length > MAX_ROWS && <Text color="subtle">{`… ${rows.length - MAX_ROWS} more rows`}</Text>}
+        {rows.length > MAX_ROWS && <Text color={FADED}>{`… ${rows.length - MAX_ROWS} more rows`}</Text>}
       </Box>
     )
   })

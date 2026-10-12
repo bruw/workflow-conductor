@@ -13,20 +13,26 @@ A workflow is a plain-JS script run by the `Workflow` tool. API: `agent(prompt, 
 
 ## Layout
 
+The files as they stand after Redesign v1 (last section), which replaced the flow board's modules (`board-model.ts` is gone; see "What was deleted" there for the two that remained while this was written).
+
 ```
 .claude-plugin/plugin.json
 hooks/hooks.json            { "modules": ["./register.tsx"] }
 hooks/register.tsx          composes run + design hooks only
-hooks/run.tsx               run hooks + run pane tree
-hooks/design.tsx            design hooks, inspector, commands (rename from .ts when it draws)
-hooks/canvas.tsx            Client module: the flow board
-src/run/                    events.ts reducer.ts journal.ts
-src/design/                 model.ts ops.ts lints.ts templates.ts teach.ts chat.ts
-src/ui/                     rail.ts theme.ts tween.ts board-layout.ts board-paint.ts board-model.ts
+hooks/run.tsx               run hooks + run pane tree (the phase view)
+hooks/design.tsx            design hooks, commands, the designer's screen: header, detail pane, footer, the key catcher
+hooks/canvas.tsx            Client module: the graph
+hooks/splash.tsx            Client module: the splash's scene, counting its own beats
+src/run/                    events.ts reducer.ts journal.ts tracker.ts replay.ts
+src/design/                 model.ts ops.ts lints.ts templates.ts teach.ts chat.ts handoff.ts history.ts session.ts
+src/ui/                     graph-layout.ts graph-paint.ts graph-model.ts keys.ts text.ts rail.ts theme.ts tween.ts persona.ts
 types/index.d.ts            $.state contract
-tests/ fixtures/
-scripts/dev-session.sh capture.sh
-docs/SPEC.md API-NOTES.md
+tests/                      stale, not run (AGENTS.md)
+fixtures/                   recorded runs for /conductor replay
+scripts/                    dev-session.sh send.sh capture.sh render-graph.ts make-fixture.ts
+spikes/probe/               the probe mod of docs/API-NOTES.md
+docs/SPEC.md API-NOTES.md PRODUCT.md redesign-v1/BRIEF.md
+AGENTS.md                   rules for agents: no tests
 ```
 
 Rule: `src/` is pure TypeScript with no `$`, no engine imports beyond types. Hooks modules stay thin.
@@ -58,6 +64,7 @@ type DesignNode = {
     fanout?: string       // what it fans out over: "changed files", "×4 dimensions"
     votes?: number        // verify / judge blocks
     until?: string        // loop blocks: "2 dry rounds", "budget < 50k"
+    when?: string         // a block directly in a branch: the condition that picks this arm (Redesign v1)
   }
   children?: DesignNode[] // stages inside pipeline/parallel/loop
 }
@@ -66,6 +73,8 @@ type NodeType =
   | 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code'
   // patterns
   | 'verify' | 'judge-panel' | 'loop-until-dry' | 'sweep' | 'critic'
+  // frame (see "Blocks: args, phase, borders by flow")
+  | 'args' | 'phase'
 ```
 
 The JSON holds design data only. General conventions and instructions never go in it.
@@ -128,7 +137,9 @@ These files are internal and may change between versions: parse defensively, nev
 
 ## UX
 
-The designer's drawing and editing were replaced by the flow board (last section): the row sketch and the `j/k`-first input below describe the first design and the run pane, not the designer.
+Replaced for the designer by "Redesign v1: graph, detail pane, legend" (last section): the rows, the input, adding, drag, the empty state, teaching and lints as listed here. Still current: the aesthetic, the timers and update rate, "Out of pane", and the run pane (`hooks/run.tsx`).
+
+The designer's drawing and editing were first replaced by the flow board ("Flow board" below): the row sketch and the `j/k`-first input below describe the first design and the run pane, not the designer.
 
 Aesthetic: native Claude Code, geeky, text-first. Motion: short eased tweens on state change only.
 
@@ -177,12 +188,14 @@ Aesthetic: native Claude Code, geeky, text-first. Motion: short eased tweens on 
 
 ## Testing layers
 
-1. `claude plugin validate .`
-2. `bunx tsc -p .`
-3. `claude plugin test .` — `*.test.ts`, imports from `claude-code/testing`. Pure logic, hook events, and UI trees mounted on `terminal` and `desktop` (loop the body over both). `Client` acts: `key`, `pointer`, `post`, `advance`, `resize`. The clock is mocked.
-4. Real paint: `scripts/dev-session.sh` (tmux, `claude --plugin-dir . --debug`), then `scripts/capture.sh`.
+The project writes and runs no tests (`AGENTS.md`). A change is verified with:
 
-The test kit checks the tree a hook returns, not the surface's paint.
+1. `claude plugin validate .`
+2. `bunx tsc -p .` (errors under `tests/` are known and ignored).
+3. Real paint: `scripts/dev-session.sh` (tmux, `claude --plugin-dir . --debug`), `scripts/send.sh` to send keys, then `scripts/capture.sh`.
+4. The graph alone, with no session: `bun scripts/render-graph.ts <template | stress case | design.json>` prints it as the pane paints it (`--list` names what it can draw).
+
+The files under `tests/` (`claude plugin test .`, `*.test.ts` on `claude-code/testing`) date from before review round 3 and are stale: they are not run and not updated, and `bun run check` (`package.json`) still calls them. Where earlier sections say "tests will need updating", that was dropped, not done.
 
 ## Findings from implementation
 
@@ -233,6 +246,8 @@ The test kit checks the tree a hook returns, not the surface's paint.
 - **Lost on reload:** known node ids are not restored if the plugin reloads mid-run.
 
 ## Flow board (replaces the designer's tree view)
+
+Replaced by "Redesign v1: graph, detail pane, legend" (last section): the layout rules (both orientations, compact, sideways pan, the fan-out border), the pane chrome (key row, inspector, help card, pickers), the messages, the key model and the `edit` / `del` marks. Still current: the run overlay's wording (`runWords`, `fitStatus`), following the run, elapsed time, preflight, bare `/conductor`, the selection kept per design, and the findings except the two on `Input` wrapping and on the wheel (corrected in the last section).
 
 The tree showed containment; a workflow is flow. The designer draws the design as a board of cards. Three pure modules: `src/ui/board-layout.ts` (cells), `board-paint.ts` (styled spans), `board-model.ts` (props, messages, the Client's reducer). `hooks/canvas.tsx` is the Client. The docked pane (narrow, tall, flowing top to bottom) is the main view; inline (wide, short, left to right) is the other.
 
@@ -296,7 +311,7 @@ The tree showed containment; a workflow is flow. The designer draws the design a
 - Run overlay: on each card's bottom border, status glyph and `2/4 done · 1 failed · 22.3k` (`runWords`: agents that ended well of agents started, failures by name, tokens once there are any; containers sum their children). A border too short takes the next shorter wording (`fitStatus`: without tokens, then `2/4 · 1 failed`, then `2/4`). Never-reached blocks dim with `not run`. While running: no `+`, no `edit`/`del`, a press only selects or pans. The selected block's agents are listed in the inspector.
 - **Following the run:** while `designUi.follow` holds, the selection is put on the block that is running (`runningBlock`: the last in design order with an agent running), so the board scrolls there and the inspector lists its agents. Any move of the selection by the person (an arrow, a click) clears `follow`; a handoff or a replay sets it again. It is written by run.tsx's `write` (the tracker's state write), since no hook of design.tsx runs when the run moves and a drawing may not write state.
 - **Elapsed time:** `runTimes` atom (`stampTimes`), stamped by run.tsx as the state is written and about once a second on the frame tick; the drawing reads the atom, never the clock.
-- **Preflight:** `r` and `/conductor run <name> [fill]` say `N blocks · at least N agents · N lints` (`preflight`, `preflightLine` in `lints.ts`) before handing off. A floor: a fan-out or votes multiplies only where it is a number; branches side by side count the larger of their own agents and the stated count; one path of a `branch`; a loop once; `code` and `subworkflow` nothing. It informs, never blocks.
+- **Preflight:** `r` and `/conductor run <name> [fill]` say `agents = N · problems in n3, n5` (`preflight`, `preflightLine` in `lints.ts`; `agents ≥ N (more: …)` where a count is open; the blocks that have a problem are named, not counted) before handing off. A floor: a fan-out or votes multiplies only where it is a number; branches side by side count the larger of their own agents and the stated count; one path of a `branch`; a loop once; `code` and `subworkflow` nothing. It informs, never blocks.
 - **Bare `/conductor`** (`bareTarget`, asked by both hooks modules): a run in progress → its design, or the phase view when it came from none; otherwise the design last opened this session with the keyboard (the template picker for `untitled` with none); a finished run from no design, with no design opened, is still the phase view. Never the empty run view.
 - **Selection kept:** `designUi.picks` holds the block each design was left on; reopening a design selects it (`openDesign(name, text, previous)`).
 
@@ -310,7 +325,7 @@ The tree showed containment; a workflow is flow. The designer draws the design a
 - **Dock width:** `command.run` carries `e.presentation.columns`, the terminal's width; no other hook is told it, so it is remembered in a module variable. `dockColumns` asks for at most 55% of it less 3 (56 with the width unknown). **A kept width wins:** Claude Code stores the dock's width in `~/.claude.json` (`dockColumns`, 87 here), and with it set a 110-column terminal still gave the dock 85 and the transcript 24 after asking for 57, also after closing and reopening the pane. The mod cannot change that; dragging the dock's border does.
 - A drawing that reads `$.clock.now()` is invalidated by the clock (`ui.render`: "a clock invalidates"): times are stamped into an atom elsewhere.
 - A replay reuses its run id (`replay:<name>`), so the times are reset by the replay command, not by the id changing.
-- A pointer `move` with no button reaches `onPointer` (tmux: SGR code 35): that is how a hidden `+` shows under the pointer. One `setState` per change of slot, none while the pointer stays on it.
+- A pointer `move` with no button reaches `onPointer` (tmux: SGR code 35): that is how the `[+]` the pointer is on is lit (every `[+]` is drawn now; on the flow board it was how a hidden one showed). One `setState` per change of slot, none while the pointer stays on it.
 - `$.ui.open({ focus: true })` on the open pane takes the keyboard back from a clicked Client; `$.ui.focus` then lands on a field. A `ui.focus` hook sees the ring move (`e.element`, `e.origin.kind`).
 - A hot reload of the plugin hands the keyboard to the prompt.
 - A string sent to a focused Client in one burst arrives as a single paste key and is ignored; Escape first hands the keys back to the prompt.
@@ -360,7 +375,7 @@ Claude drafts and changes a design; the board follows live. Pure logic in `src/d
 8. `verify-nothing-before`: a `verify` nothing reaches (`hasInput`): no block before it in its own chain or any chain around it (the top level, `pipeline`, `loop`, `loop-until-dry`), no container around it with a `fanout`, and not in a loop beside other blocks.
 9. `single-branch`: a `parallel` or `sweep` holding exactly one block where neither states a `fanout` (one block run once per item is a real use).
 10. `loop-no-decider`: a `loop` / `loop-until-dry` with blocks, whose last block of a round (`producer`: the last stage, followed into containers, not into a `branch`) is a model's answer (`agent`, `verify`, `judge-panel`, `critic`) with no `schema`, so the stop test has nothing exact to read; or is a `critic` while the loop has no `until`. A round ending in `code`, a `branch` or a `subworkflow` is left alone.
-- Findable: the header says `▲ N`; `n` (`nextLint`) selects the next block with a lint in design order, round again from the top, and is drawn only while a lint stands; `preflightLine` names the blocks, `2 lints (n3, n5)` (`LINT_IDS_MAX` 6).
+- Findable: the header says `▲ N`; `n` (`nextLint`) selects the next block with a lint in design order, round again from the top, and is drawn only while a lint stands; `preflightLine` names the blocks, `2 lints (n3, n5)` (`LINT_IDS_MAX` 6). (As it stands now, last section: no count anywhere, no key for the next one; `preflightLine` says `problems in n3, n5`.)
 
 **The goal.** `design.description` (no new field) is drawn under the header docked (`goal: …`, or `goal: not said yet · d: say what this workflow is for`), after the name inline. `d` (`describe`, `designUi.describing`) opens its field (`design-description`) on rows of its own, where a focused field wraps; Enter saves (`describeDesign`). The handoff's second line is `Goal of the workflow (the design's \`description\`): …`, and it says a block's `prompt` knob is the intent for that agent's prompt. The chat tool's description says the same of `description`.
 
@@ -394,6 +409,8 @@ Claude drafts and changes a design; the board follows live. Pure logic in `src/d
 - `$.fs.list` entries are read one by one for the picker and `/conductor list` (at most `SAVED_MAX` 60).
 
 ## Review round 3: safety and coherence
+
+Replaced by "Redesign v1" (last section): the cue as hotkey Buttons, the two key rows and the whole **Layout** part, the type picker's rows, the compact rule under **Branch arms**, and `edit` / `del` under **Pointer**. Still current: what a mod can know of the keyboard, "the board never keeps the keyboard", the refusal (`handed`), `r` and the review key handing the keys to the prompt, undo, the revisions Claude reads, drag-only-the-selected-card.
 
 Nothing done by accident may damage a design, and the screen holds still.
 
@@ -438,7 +455,7 @@ Nothing done by accident may damage a design, and the screen holds still.
 - Board: `layout.rules`. Top to bottom, side by side: the word in the gap (`stackGap`: 4 cells for `or`, 3 for `∥`). Compact (one under the other): a dotted row with the word between two blocks. Left to right a stack stands across the flow and gets no rule (the arrows tell the sequence).
 
 **Small things**
-- Preflight: `agentsText`: `12 agents` when every count is stated, else `12+ agents (more: 2 blocks fan out over an unknown number, 1 loop repeats, 1 subworkflow starts its own)`.
+- Preflight: `agentsText`: `agents = 12` when every count is stated, else `agents ≥ 12 (more: 2 blocks fan out over an unknown number, 1 loop repeats, 1 subworkflow starts its own)`.
 - Header: `running · …` / `finished · …`. `unmapped` card: no `×`, no double border; its title says the count.
 - `▼ N more below` always has a number: the blocks wholly out of view, or `N more rows` when only part of one is.
 - A retyped block still titled after its old type takes the new type's name. `TEACH[type].name` is the type's id everywhere.
@@ -452,6 +469,8 @@ Nothing done by accident may damage a design, and the screen holds still.
 - Tests were not touched in this round and were not run: those that drive the old pointer rules (select on press, `+` on press), the old key row and the confirm text will need updating.
 
 ## Review round 4: typed text is kept, and the keyboard is where the pane says
+
+Replaced by "Redesign v1" (last section): the home key and the rewrite of the ring onto it ("No arrow-then-Enter runs or deletes"), the inline key rows and the `prompt.edit` swallow ("The pane never advertises a key that goes to the prompt"), "Short terminals", and `overflow` under "Leftovers". Still current: `drafts` and `flushDrafts`, the ring's engine facts, `settleRing`, the cue first on the message row (`KEYS_CUE`, `withoutKeys`), names.
 
 **Typed field text is never dropped** (`hooks/design.tsx`: `drafts`, `flushDrafts`)
 - `drafts = { name, id, values, goal }`: what was typed and not saved, for one block of one design, by field (`design-notes`, `design-knob:fanout`), and for the goal's field. A module variable (a keystroke must not redraw the pane).
@@ -493,3 +512,238 @@ Nothing done by accident may damage a design, and the screen holds still.
 - The `run: …` / `ask: …` line: cleared by `prompt.submit` (any prompt), by `session.start`, and by `watchBox` (reads `$.prompt.read()` every `BOX_POLL_MS` while the line stands, clears it when the box is empty).
 
 **Not exercised this round:** a chat/tool edit arriving while a field holds a draft (code path only; no model turns), `prompt.submit` clearing the run line (same), the desktop surface. Tests were not touched: those on the home key, `INLINE_DROP`, field keys, `KEYS_CUE` placement, `seen` and `bareTarget` will need updating.
+
+## Redesign v1: graph, detail pane, legend
+
+The designer is a workspace of four fixed parts: a graph of the workflow (top to bottom only), a detail pane, a header, and a footer that is a key legend. The keyboard is WASD, typed into a key catcher. The brief it was built from is `docs/redesign-v1/BRIEF.md` (corrected to as-built); this section is the record. It replaces the parts of "UX", "Flow board" and review rounds 3 and 4 named at the top of each. Seen live on Claude Code 2.1.296, terminal, tmux.
+
+```
+┌─ SWEEP / multi-modal sweep ×4 · each: search angles: by container, by content, by entity,… ─ n1 ─┐
+│ ╭───────────────────────────────────────────────────────────────────────────────────────── n2 ─╮ │
+│ │ AGENT / search                                                                           low │ │
+│ │ One agent per search angle.                              output: { sources: [{ ref, why }] } │ │
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────╯ │
+└────────────────────────────────────────────── [+] ───────────────────────────────────────────────┘
+                                             all ⇓  [+]
+╭───────────────────────────────────────────────────────────────────────────────────────────── n3 ─╮
+│ CODE / dedupe sources                                                                            │
+│ Plain code over all sweep results: drop duplicate refs before the expensive reading starts.      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                 ↓  [+]
+┌─ PIPELINE / deep read · each: deduped sources · count unknown ────────────────────────────── n4 ─┐
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ n5 ━┓ │
+│ ┃ AGENT / read source                                                        1 model  2 effort ┃ │
+│ ┃ One reader per source.                    output: { claims: [{ claim, quote, confidence }] } ┃ │
+│ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │
+│                                                ↓  [+]                                            │
+│ ╭───────────────────────────────────────────────────────────────────────────────────────── n6 ─╮ │
+│ │ VERIFY / check claims                                                                        │ │
+│ │ Drop claims the source does not actually sup…  votes 2 · output: { refuted: boolean, reason… │ │
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────╯ │
+└────────────────────────────────────────────── [+] ───────────────────────────────────────────────┘
+                                             all ⇓  [+]
+╭───────────────────────────────────────────────────────────────────────────────────────────── n7 ─╮
+│ CRITIC / completeness critic                                                                     │
+│ Asks what is missing: an angle not searched, a claim…  output: { gaps: [{ what, how_to_fill }] } │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                 ↓  [+]
+╭───────────────────────────────────────────────────────────────────────────────────────────── n8 ─╮
+│ AGENT / synthesize                                                                               │
+│ Runs once over all verified claims; cite the source of each and state open gaps.                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                [+]
+```
+
+`bun scripts/render-graph.ts research --cols 100 --rows 40 --select n5`. The README has renders of a branch's arms, a carousel and a nested view; the other cases are `branch-when`, `parallel-9`, `deep-6`, `empty`, `empty-container`, `long` (`--list`).
+
+**Modules**
+- `src/ui/graph-layout.ts`: a Design as cards, arrows, slots, gutters, chips and crumbs in cells (`layoutGraph`), the hit tests (`graphAt`), the pan (`panTo`), and the walks over it (`navigate`, `moveTarget`, `viewShows`, `viewFor`, `parentView`, `canOpen`). The layout says the words too, as segments with a role (`Seg`, `SegRole`).
+- `src/ui/graph-paint.ts`: a layout as rows of styled spans (`paintGraph`); each role gets its look (`segLook`), and what lies over the cards is drawn: the run, the pointer, a card in hand, cards on the move, the window's edges, the breadcrumb.
+- `src/ui/graph-model.ts`: the Client's props (`GraphProps`), its messages (`GraphMessage`, `parseGraphMessage`), its local state and reducer (`GraphState`, `graphReduce`, `syncGraph`, `moveGraph`, `tickGraph`), and the help pages' words on the graph (`LEGEND`, `MOUSE_HELP`).
+- `src/ui/keys.ts`: the one key table (`KEY_OPS`, `KeyOp`, `LOCKED_OPS`, `burstKeys`) and the legend made from it (`legendItems`, `legendRows`).
+- `src/design/session.ts`: the pane's state and every step on it (`applyOp`, `applyMessage`, `pickBlock`, `typePicker`, …), the view (`viewRootOf`, `graphProps`, `graphOf`), the screen's shape (`detailWidth`, `dockColumns`, `factsLine`), the help pages (`helpPage`, `KEY_HELP`), the start screen (`startEntries`).
+- `hooks/design.tsx`: draws the screen, holds the key catcher and the ring, saves. `hooks/canvas.tsx`: the Client, drawing the graph from props.
+- `scripts/render-graph.ts`: the layout and the paint as text, with no session.
+
+**The screen** (`ui.render` in `hooks/design.tsx`)
+- **Wide** = docked (`placement !== 'inline'`) and `e.props.bodyColumns >= WIDE_MIN_COLUMNS` (100). The pane draws in `columns = bodyColumns - 2`, one cell in from the left. The detail pane is `detailWidth(columns)` wide (`DETAIL_SHARE` 0.3, within `DETAIL_MIN_W` 38 and `DETAIL_MAX_W` 52); three cells of rule (` │ `) stand between it and the graph, which has the rest.
+- **Stacked** = docked and narrower, or inline: header, goal, graph, detail pane under it, footer.
+- **Rules** (`rule()`, a row of `─` as wide as the pane, in `RULE`): docked, one under the header and goal rows and one above the footer, wide and stacked alike; stacked, one more between graph and detail pane (none while the detail pane is hidden). Inline has none.
+- **Rows.** `mainRowsFor(goalRows, stacked)` = `bodyRows` less 1 (header), the goal's rows, the rules (docked 2, a third one stacked, inline 0) and the footer (`footRows`): docked, the legend's rows, 1 where `columns >= LEGEND_CORE_W` and `LEGEND_WRAP_ROWS` 2 under that; inline 2, one row for what was said and one of legend. Wide, graph and detail pane both have all of them. Stacked, the detail pane at rest has `DETAIL_REST_SHARE` 0.45 of them (never leaving the graph under `GRAPH_LEAST_ROWS` 3; inline: one row, its key hints), and while a field, the add list, the goal or a help page is open it takes what that needs. Hidden, it has none. The graph's region gets every row the rest leaves, whatever the graph's own height: it pans inside. The tree is never taller than `bodyRows`.
+- **Dock width asked:** `dockColumns(terminalColumns)` = the terminal's columns (from `command.run`'s `e.presentation.columns`) less `DOCK_MARGIN` 30, at least 40; nothing is asked while the width is unknown. Inline `PANE_ROWS` 28 are asked. A kept dock width still wins.
+- **Header, row 1** (`headOf(facts)`): `conductor / <name> / <facts>` and at the right the state (`design-state`): `EDITING · saved` | `unsaved template` (`designUi.unsaved`) | `not saved yet` (unsaved and empty) | `replay, not saved`; `DRAFTING`; the run's summary with its first word in capitals (`RUNNING · 5/9 agents done · 57.4k tokens · 4.5s`, `runSummary`, cut to its room); on the start screen `START · a saved design` | `from the <title> template` | `a blank design`. The name is cut to what the state leaves. The facts (`design-facts`, in `suggestion`) are `factsLine` → `agentsCount` in `lints.ts`: the agents the design starts and nothing else, `agents = 18` with every count stated, `agents ≥ 12` where a fan-out names no number, a loop repeats or a subworkflow starts its own; no block count, no problem count. They are left out where the row would leave the name under 8 cells.
+- **Row 2:** `Goal: <description>`, up to `GOAL_ROWS` 2 docked (`firstLines`), 1 inline; `not said yet · g sets it` (without the key while not focused or locked). In the designer, unless a run locks it, the rows are a Client (`goalPress`, `hooks/goal.tsx`, element `goal`): `claude` under the pointer, and a click on them (down and up inside) posts to `ui.message`, which opens the goal's field as `g` does. It is no Button, which would be a stop of the ring between the catcher and the title. The click gave the Client the keyboard, so the hook takes it back (`$.ui.open` with focus) before the field opens, and `goalAsked` (for `LANDING_MS` at most) keeps a drawing that still finds the pane unfocused, or a move of the ring, from closing the field meanwhile.
+- **What was said** (`saidRow`): `designUi.notice` (`Last change: …` before one that ends in `UNDO_HINT`; plain where `noticeInforms`, else `warning`; `LOCK_NOTICE` while a run locks), on one row, centred, cut to `saidW`. Docked it stands in the rule over the footer (`SAID_RULE_W` 3 cells of rule kept at each side), so no row is kept for it and nothing moves when something is said; inline it has the row over the legend. Not focused: `KEYS_CUE` (`Input: prompt · click the graph or /conductor`) first, as since round 4.
+- **Footer** (`legendOf`): the legend and nothing else (`legendItems(…).footer`: the graph's keys and the pane's own), plain `Text`, each key in brackets in `claude` and its word in `FADED`, all dim while not focused; centred, as wide as the pane. Its rows (`legendMost`) depend on the width alone, so the footer keeps its height whatever is selected: docked 1 where `columns >= LEGEND_CORE_W` (112: the `core` keys of the fullest legend on one row, `keys.ts`), else `LEGEND_WRAP_ROWS` 2; inline 1.
+- `i` (`designUi.detailHidden`, kept across designs by `carryUi`): the detail pane is not drawn, no row and no column of it, and the graph has its room; the legend then starts with `[i] Show details`. `e`, `n`, `g`, `?` and a click on a `[+]` show it again.
+
+**The graph's layout** (`graph-layout.ts`)
+- **Width.** `graphColumns(region)`: between `GRAPH_MIN_W` 12 and `GRAPH_MAX_W` 132; in a wider region the Client centres it (`pad`). Nothing reaches past the columns it was laid out for; there is no `panX`.
+- **Chains and stacks** (`childFlow`): the top level, `pipeline`, `loop`, `loop-until-dry` list their blocks one under the other, each as wide as the list (a container's inside is 4 columns narrower), one arrow row between two. `parallel`, `sweep`, `branch` stand their arms side by side at equal widths (`stackShare`; the last arm in view takes the cells the division leaves), every arm as tall as the tallest, the gap between two holding `armWord` on the arms' second row: `OR` (branch; gap 4) or `∥` (gap 3), in `layout.rules`.
+- **Leaf** (`leafBox`): top border with the id at the right; row 1 `nameSegs` (`TYPE / Title`, the title left out while it equals the type, `×N` after it for a leaf that fans out, `×n` with no count) and at the right the model and effort that are set (each cut to `KNOB_MAX` 14; left to the detail pane where they do not fit beside the name); row 2 the first line of `cardText` (notes, else the prompt) and at the right `votes N · output: <schema>` (`splitRow`: the right side keeps at most half the row, and is left out under 9 cells). No row 2: three rows tall.
+- **Missing but needed** (`missingOf`, `armOf`): `Instruction [not set]` (an agent with no `cardText`), `Stop [not set]` (a `loop` with no `until`; a row inside its box), `IF [not set]`; `NOT_SET` in role `error`.
+- **Open container** (`openBox`, `headSegs`): square border in the type's `ACCENT`; the header on the top border is `TYPE / Title ×4`, then what fits of `· each: <eachOf>`, `· until: …`, `· count unknown` (a fan-out with no number, in place of `×n`), and last `· 2–4 of 9` (a carousel's window: it is kept before any knob is). Right: the problem mark and the id (`topRow`). Empty: one row, `empty` (`EMPTY`), and its `[+]` on the bottom border.
+- **Selected:** heavy border in `claude`. A selected leaf shows all of `cardText` wrapped, up to `noteRows(rows)` rows (a third of the graph's rows, at most `NOTE_ROWS_MAX` 8, then `… N more lines`), then `output:` on a row of its own; and its **chips** (`chipsOf`, `quickKnobs`) in place of the model and effort: digit, then the knob's value (`2 low`, `3 votes 2`) or its name dim while unset (`1 model`). Chips that do not fit beside the whole title take the next row. A selected container with quick knobs (`sweep`, `loop-until-dry`) carries them on its top border where name and chips both fit. No chips while a run locks. Each chip's cells are in `layout.chips` for a press.
+- **Problem mark:** a bare ` ! ` (`BADGE`, role `badge`: inverse, bold, `error`), no count: on the top border directly left of the id (`topRow`), on a leaf and on a container alike; left out where the border cannot hold both. An open container is marked for its own problems; a collapsed one also when a block inside it has one (`problemsIn`). The pane shows no problem count anywhere.
+- **Arms of a branch** (`armOf`, `armSegs`): the top border's left says `IF <when>` (the `when` knob, cut), `ELSE` for the last arm with none (when there is more than one arm), `IF [not set]` otherwise. On a container arm the header keeps its least cells and the condition takes what is over.
+- **Carousel** (`stackShare`, `GUTTER_W` 3): an arm is never narrower than `ARM_MIN_W` 28. Where all arms at that width do not fit, `shown` of them are drawn between two gutters (both sides keep their 3 columns; `◀` / `▶` and under it the count out of sight, in `claude`, only on a side that has more). `layout.carousels[id] = { first, shown, count }`; `first` is what was asked (`designUi.carousels`, by container id), moved just far enough to hold the selected arm, clamped; `layout.scroll` is what it settled on and `shown()` in session.ts writes it back to state.
+- **Collapsed** (`drawnOpen(depth, width)`, `collapsedBox`): a container is drawn open only while it is at most `OPEN_DEPTH` 3 containers below the view's root (itself counted: a top-level block is 1) and its inside (`width - 4`, of its arm's share) has at least `OPEN_MIN_W` 34 columns. Collapsed it is 4 rows: `▸ TYPE / Title` and `N blocks` (all it holds, at any depth), then the titles of its blocks joined by ` → ` (chain) or ` | ` (stack), `empty` with none, and `o: open`. Blocks inside it have no card.
+- **Arrows** (`edgeKind`, unchanged): one row, centred on the list; `↓` (stream) or `⇓` with a dim `all ` on its left (barrier).
+- **Slots:** one per insertion index, and one mark for all of them, `[+]` (`SLOT`), shown with or without a pointer (there is no `slot.shown`). Between two blocks of a chain it stands on the arrow's row, two cells right of the arrow. The end of any container's list, a chain's or a stack's, is on its bottom border, centred, the `+` on the column of its arrows (`endMark`); an empty container's too, under its `empty` row. The end of the top level is on a row of its own, the `+` under the arrows. An empty design's is a bare `[+]` in the middle of the window, over `EMPTY_KEYS` (left out while the pane does not hold the keyboard, `quiet`) and `EMPTY_NOTE`. `slot.target` marks the one place the keyboard adds at: where the add list is open, else `addPlace(design, selectedId, viewRoot)` in `ops.ts`, the rule `openAdd` opens the list by. The place the add list is open for reads `[+] Add block here` (`SLOT_OPEN`), on a row of its own (`lead`) where it has none (before the first block of a chain, between two arms). Before the first block and between arms a slot otherwise only takes a drop (bar `row` or `column`).
+- **Edges of the window** (`edgeMarks`, `stickyCards`): `▲ N more above` / `▼ N more below` (blocks wholly out of view, else rows); the innermost open container whose header scrolled off keeps it on the first row. Left out where they would be written over the selected card's border.
+- **Unmapped agents:** one card of 3 rows after the design, at the root only (`UNMAPPED_ID`), `N agents no block claims`.
+
+**Paint and motion** (`graph-paint.ts`, `graph-model.ts`, `hooks/canvas.tsx`)
+- Frames: `ROUND` (leaf), `SQUARE` (container), `HEAVY` (selected), `DASHED` (in hand). A leaf's border is `RULE`, a container's its accent, the selection's `claude`; `inactive` for a block a finished run never reached and for a card in hand.
+- Colour tokens (`theme.ts`): `FADED` (= `inactive`) for words said quietly, in the graph and in the pane alike (a note, a hint, an id, a legend's word, a `[+]` at rest; it was `subtle`); `RULE` (= `subtle`) for lines that are not words (a leaf's border, the rules of the pane); `ACTIVE` (= `claude`) for the active `[+]`.
+- `[+]` (`paintGraph`): `FADED` at rest; `ACTIVE` and bold for the one whose add list is open (`slot.open`), the one under the pointer (`hoverAt`, and each mark's own `hover`), and `slot.target`, the place `n` adds at, unless `quiet` (the pane does not hold the keyboard). None is drawn while a run locks, a card is in hand or cards slide.
+- Cards slide and grow (`motionX`, `motionY`, `motionH`) when the design changed under them or a carousel slid (`shapeOf`: the blocks in their order and the carousels, within one view). A selection that moved and another view are drawn in place: the keys never wait on a tween. While cards slide, arrows, arm words, gutters and slots are left out, and a moving card is clipped to the inside of its container.
+- A drag: the card dashed where it stood, a bar on the nearest slot within `DROP_REACH` 16 (`dropTarget`; never the view's frame, never into itself), and at the pointer ` n6 title · drop into n2 ` (`dragHint`). Held on the first or last row the graph pans one row per `DRAG_SCROLL_MS` 96.
+- An edit from chat: `flashGraph` / `graphFlash`, `FLASH_MS` 800 (the first `FLASH_STRONG_MS` 400 with the name inverse), cleared in state after `FLASH_CLEAR_MS` 1200.
+- Past `WEIGHT_MAX` 70,000 (`paintWeight`) the graph is painted `plain`.
+- The pan (`panTo`, `syncGraph`): the selected card whole with a row of what is around it, or its top when it is taller than the window; another view starts from its top; the window's size is part of the `seen` key.
+
+**Views** (`designUi.viewRootId`)
+- `o` (`open`), a click on a container that is already selected, or a `view` message opens a container as the view: the frame, at full width, depth 0, so what was collapsed inside it may be open now (`canOpen`: any container but the one shown). The frame says nothing of the arm it is in the view above.
+- The breadcrumb is the graph's first rows (`crumbsFor`): ` LEVEL 2   design  ›  n4 Deep read  ›  n9 Close gaps`, and under it a rule in `RULE` as wide as the graph (`layout.top` = `CRUMB_ROWS` 2; 1, no rule, in a window under `CRUMB_RULE_ROWS` 8). `layout.level` is `LEVEL <n>`, bold, n the containers the view is down; left out where the row would keep under `CRUMB_LEAST_W` 36 columns for the crumbs. Each crumb has `CRUMB_PAD` 1 cell at each side of its words, counted in its `x` and `w` (so in `crumbAt` and under the pointer), and `CRUMB_SEP` (`  ›  `) between two. The last, the view, is inverse `claude` and bold; every other one is pressable; too long, the middle crumbs become `…`, then the first and last are cut.
+- `b` (`back`, `parentView`): one level up, the selection on the container it came out of. A crumb: up to that view, the selection on the container the way down went through.
+- The person's keys never leave the view (`navigate` stops at the frame; `moveTarget` refuses: `already at the bottom of this view: b goes up a level`). When anything else selects a block the view does not draw (`followRun`, `showEdit`, `restoreDesign`), `viewRootOf` → `viewFor` picks: the view as it is when it draws the block, else the whole design when that does, else the outermost container that does.
+
+**Navigation and moves** (`navigate`, `moveTarget`; `applyOp` calls them over `graphOf`, the layout for the region last drawn, `graphBox`)
+- `s` / `w`: reading order of the chain. Down: into an open container's first block (a stack's first arm in view), else the next sibling of the nearest chain around. Up: the block read just before (the last of the container above, followed down), or from a first block to its container. In an arm they stay in it to its end, then go on to what follows the stack.
+- `d` / `a`: inside a stack, at any depth, the next arm of the nearest stack that has one that way (the card of it nearest in height; an arm out of the carousel's window is selected and the window slides); in a stack with none that way, nothing. Elsewhere `d` goes into an open container and `a` out to the container around.
+- Nothing wraps; at an edge the selection stays and nothing is said. With nothing selected any of the four selects the view's first card.
+- `W` / `S` (`moveUp`, `moveDown`): one place in reading order: past a sibling; into an open container that comes next (as its first block; going up, as its last); out of the end of its own container (to just after it; going up, just before). A collapsed container is one place. `A` / `D`: swap with the arm beside it; outside a stack `only arms move sideways` (`ONLY_ARMS`), at the end `already the last arm` / `already the first arm`. The view's frame does not move. Each move is `moveNode` through `settle`: one undo step, announced by `movedWords` (`moved n7 into n4 · [u] Undo`, `moved n7 out of n4`, `moved n7 after n3`).
+
+**The key catcher and the ring** (`hooks/design.tsx`)
+- **Why.** A Button's `hotkey` cannot see Shift and takes one lowercase letter or digit; a focused `Input` is given every printable key with its case (API-NOTES S7). So the ring rests on one `Input`, the catcher, while no field is open.
+- **Where.** The first child of the frame (`catcher()`, drawn while `catching`), under a `Box` with `display="none"`: in the tree and not drawn. It takes no cell, and the terminal's cursor is hidden while the ring rests on it, so nothing blinks at rest (it was a 1-cell clipped `Box` on the detail pane's last row; a clipped Input still shows its cursor). Being the first child it is the mod's **first focus stop** whatever comes and goes after it (the ring is kept by place). It is left out of the tree only while the add list or the goal's field is open: their field takes its place. `autoFocus`; key `keys:<LOAD>.<catchGen>` (`catcherKey`), `LOAD` being a stamp of this load of the module: a reloaded module counts from 0 again and a key of the load before would come back with its old text.
+- **Reading it** (`catchKeys`): the engine sends the field's whole text, so the new characters are those after `caught.taken`. Up to `BURST_MAX` 8 at once are keys, applied in order; more is a paste (`PASTE_NOTICE`). `submit` is `ENTER` after them. Keys are applied one at a time on the state the one before left (`queueKeys`, `keyChain`, `runKey`).
+- **Emptying it** (`tidySoon`): answering `ui.input` with `{ value: '' }` does not empty a field; drawing it under a new key does. A key typed in the frame an Input is drawn under a new key is dropped, so the catcher is re-keyed only once it holds more than `CATCH_FULL` 40 characters and no key has come for `TIDY_MS` 600.
+- **`runKey`.** On the start screen: `startKey`. With a field asked for and the ring still on its way there (`editing`, `describing`, an open add list), what is typed into the catcher is that field's text, never a key: `e` then `x` types an x. Else `KEY_OPS[key]`; none: `unboundNotice` (`k is not a key here`). Before a key acts, `flushDrafts`. `undo` / `redo` go to `timeTravel`, `run` / `review` to `request` (fills the prompt, closes and reopens the pane without `focus`), the rest to `applyOp`; `edit`, `goal` and `add` then move the ring (`landOn`: `LAND_TRIES` 5, `FOCUS_DELAY_MS` 48 apart).
+- **The door** (`door:<LOAD>.<n>`): a second small `Input` at the right end of the detail pane's heading, the stop right after the catcher while a block's fields are shown. The person's Tab from the catcher lands on it; the `ui.focus` hook then opens the fields (`openFields`) and moves the ring to the title. Being an Input it takes what is typed meanwhile (`doorKeys`: title text). With the fields open, Shift+Tab from the title lands on it again: back to the catcher.
+- **`ui.focus` hook.** A move by the person onto anything that is not the catcher, the door, a field, a field at rest, the type picker or the add list (`isDetailStop`; in practice the engine's own stop on the pane's close mark, where Enter would close the pane) is let through and followed at once by the mod's own `$.ui.focus` back to the catcher. It cannot be rewritten in the chain: the engine refuses an element where the person's move named none. A move onto a field at rest (`design-rest:<field>`, a `Button`) opens the fields on that field. The person's move off a field flushes its draft; off the goal's field closes it.
+- **What the mod knows of the ring:** `ringOn` (the element, from the person's moves and its own), `ringTo` (where it is sending it), `ringStops` (this drawing's stops in words: when they change under a ring at rest, `settleRing` puts it on the catcher, or on the add list's filter while that is open). The pane no longer says in a word where the keyboard is (`inputWord` is gone): the keys named say it (`legendItems` is asked with `ring` = `list`, `goal`, `fields` or `graph`), and while `isFocused` is false the legend and the hints are dim and `KEYS_CUE` stands on the message row.
+- **Fields while typing** (`pins`, `fieldText`, `redrawFields`): a field's Input is keyed `design-notes@n5#<editGen>` (`fieldKey`; `editGen` counts every time the fields close, so fields opened again are new ones and show the block as it is now). An Input keeps what was typed while the `value` drawn does not change; when it changes the text is replaced but the cursor stays where it was. So an open field is drawn with the one text it opened with for as long as it is typed in; letters that reached the mod by the catcher or the door on the ring's way are kept beside it (`head`) and the field is drawn anew, with all of it, only once the typing has paused (the ring is then stepped off and on, which puts the cursor at the end).
+- **Enter on a field** (`saveField`): the ring is claimed for the catcher first (`ringOn = drawnCatcher`), so a letter typed on Enter's heels is a key (`savedField`, `afterEnter`); the block's drafts are saved as one edit; `home()`. The add list's filter does the same with `pickedField`.
+- **The Client never keeps the keyboard** (as since round 3): every release posts a message, the `ui.message` hook answers with `$.ui.open(paneArgs(true))` and a `$.ui.focus` onto the catcher (or the filter a `[+]` opened), which is also the probe for `handed`. A key the clicked Client was given in between is posted as `{ kind: 'key', key }` under the table's own name (`graphKey`: Shift+letter → the capital, `return` → `enter`, the arrows → `w a s d`) and joins the same queue.
+
+**The key table** (`KEY_OPS` in `keys.ts`; the brief's table, as built)
+
+| Key | `KeyOp` | Does |
+| --- | --- | --- |
+| `w` `a` `s` `d` | `up` `left` `down` `right` | move the selection |
+| `W` `A` `S` `D` | `moveUp` `moveLeft` `moveDown` `moveRight` | move the block |
+| `Enter` `e` | `edit` | the fields open, the ring on the title |
+| `n` `+` | `add` | the add list: after the selection; inside it when it is an empty container or the view's frame; at the end with nothing selected (`openAdd` → `addPlace`, the place the graph lights its `[+]` at) |
+| `x` | `remove` | delete; a container that holds blocks asks (`confirmId`, `x again deletes them all`); closes a help page instead while one is open |
+| `1` `2` `3` | `knob1` `knob2` `knob3` | `stepKnob` (ops.ts): `quickKnob` says which knob the type has. Model inherit → `MODEL_STEPS` haiku, sonnet, opus → inherit (a model of another name goes to inherit); effort inherit → `EFFORTS` → inherit; votes 1 … `VOTES_STEP_MAX` 5 and round again. `3` steps votes and nothing else (`QuickKnob` is `model` \| `effort` \| `votes`). Refused with the reason on a type that has none. Announced `n5 model: haiku · [u] Undo` |
+| `o` `b` | `open` `back` | the view |
+| `i` | `detail` | hide / show the detail pane |
+| `u` `y` | `undo` `redo` | `timeTravel` |
+| `g` | `goal` | the goal's field in the detail pane |
+| `q` | `review` | fills `reviewPrompt`; the keys go to the prompt |
+| `r` | `run` | fills `handoffPrompt`, says `run: <preflightLine> · finish the prompt, then Enter` |
+| `c` | `clearRun` | puts away the results of a run that is over |
+| `?` `h` | `help` | the help pages, 1 to `HELP_PAGES` 4 and round again |
+
+- `p` is no key: `nextProblem` is gone from the table, and the character says `p is not a key here`.
+- `LOCKED_OPS`: while a run locks the design the four directions, `open`, `back`, `detail`, `help` act (and `clearRun`, which answers with the lock); any other key says `LOCK_NOTICE`.
+- **Legend** (`legendItems(LegendState)` returns `{ footer, detail }`): only keys that work now, in a fixed order, each named in one place and never in both. `footer`, the graph's keys and the pane's own, at the footer's right: `[i] Show details` (first, and only while the detail pane is hidden), `[WASD] Navigate`, `[Shift+WASD] Move`, `[n] New`, `[x] Delete`, `[1] Model` `[2] Effort` `[3] Votes` (the selected block's), `[o] Open`, `[b] Back`, `[u] Undo`, `[y] Redo`, `[g] Goal`, `[q] Ask Claude`, `[r] Run`, `[c] Clear results`, `[?] Help`. `detail`, the keys of the detail pane, on its last rows: `[Enter] Edit  [i] Hide` at rest. Tab is named in neither: it still opens the fields, and the help page "Keys" says so.
+- **Legend, the ring elsewhere** (`RingPlace`): in a field, the goal's or the add list's filter the letters are text, so the footer is `[Esc] Keys to the prompt` alone and `detail` is that place's: `fields` (`[Tab] Next field  [Shift+Tab] Previous  [Enter] Save, back to the graph`), `goal` (`[Enter] Save, back to the graph`), `list` (`[w s] Choose  [n] Change place  [a-z] Filter  [Enter] Add | Set type  [x] Cancel`). A help page open: `detail` is `[? h] Next page  [x] Close help`, the footer `[WASD] Navigate`. `start`: `detail` is `[w s] Choose  [Enter] Open`, the footer `[?] Help`; with a help page open there, the footer has the list's two and `detail` the page's.
+- `legendRows` fills at most the rows it is given (the footer's `legendMost`, the detail pane's `HINT_ROWS`); what does not fit loses the entries that are not `core`, last first.
+
+**The detail pane's modes** (`detailBox`: content above, the rows of its keys below)
+- **Key hints** (`hintsOf`, `design-hints`): the pane's last rows name the keys that act on it, `legendItems(…).detail`, drawn as the footer's legend is (`legendRow`): `HINT_ROWS` 2 docked where the pane has 8 rows or more, else 1. Nothing else is pinned there: no row for the selection and the keyboard's place, no catcher, no key for the next problem. Hidden (`i`), `detailBox` is not drawn at all.
+- **The selected block** (`inspector(level)`, fitted by `fit`): the heading `TYPE / Title` and the id, a thin rule; **Meaning** (`TEACH[type].hint`, `useWhen`); per problem **Error** and **Fix** (`problemParts`: the lint's message cut at its first `: `); the fields (`texts`: title, notes, then `TEXT_KNOBS` in order `prompt`, `when`, `fanout`, `until`, `schema`, `agentType`, those `knobsOf(node, parentType)` gives); the type on a row, `Type` and `<type> ▾` (`typeLine`: a Button that opens the add list as a type list; there is no Model, Effort or Votes picker, the card's chips step those) and, on a block that carries `isolation: worktree`, a read-only `Isolation  worktree` line in `FADED` (the pane has no control for that knob: it stays in the file format and the hand-off, for Claude to set or drop); **Run** (`agentsOf`, `AGENT_ROWS_MAX` 12) while results show. While a run locks: no fields, no `Type`. Short of rows the levels give up, in order: the whole texts drawn under fields the ring is not in, the blank rows, Meaning, then the long texts cut to `CUTS` 8, 5, 3, 2, 1 rows.
+- **A field at rest** (`restField`): its label (`FIELD_LABEL`, first letter capital) on a row, then its whole value wrapped; `[not set]` dim, or in `error` where a problem names the field (`problemFields(rule)`). All of it is one `Button` (`design-rest:<fieldKey>`): a press opens the fields on that one.
+- **A field open** (`openField`): label, a one-line `Input`, and, where the text is longer than the line or letters stand beside it, the whole text wrapped under it (its end while it is being typed in; dim under the fields the ring is not in). Redrawn per keystroke (`typeIn` invalidates `ui.render`; the draft is still a module variable).
+- **The add list** (`addList`; `designUi.picker = { at, query, retypeId?, anchorId?, where?, pick? }`): heading `addHeading` (`New block after n4 Deep read`, `The first block`, `Type of n4 Deep read (now pipeline)`), the filter (`design-add:<LOAD>.<n>`), then every type on a row with its hint, in the two `PALETTE_GROUPS` while nothing is typed; the marked one (`▸`, `pick`) opens to its whole hint and `use when`. `typePicker`: while the filter is empty `w` / `s` move the mark and `n` goes round `addSides` (after, inside for a container, before; `cyclePlace`), and those characters are taken out of the filter by re-keying it; any other character starts the filter (`fuzzy`, best first); `x` closes, always (`PICKER_CLOSE`). Enter or a press on a row: `pickBlock`. The block added is selected with `editing` and `freshId`: its title field is empty over the default as placeholder.
+- **Help** (`helpPage`, `fitHelp`): page 1 the selected type's card (`TEACH[type].card`), 2 `LEGEND` (the graph's marks), 3 `KEY_HELP`, 4 `MOUSE_HELP` and the file's path; `Help n/4` at the right of its title.
+- **The goal** (`goalField`, `designUi.describing`): a label, a line of explanation, one `Input` (`design-description:<LOAD>.<n>`, a new key each time it opens), the whole text wrapped under it. No longer under the header.
+- **Nothing selected** (`idle`): the goal, then how to go on; `stray` for the unmapped card.
+
+**The start screen** (`designUi.status === 'pick'`; the template picker's replacement)
+- Same frame. The detail pane lists `startEntries`: the saved designs (`designUi.saved`, read by the command, at most `SAVED_MAX` 60; a window of `SAVED_ROWS` 8 around the mark where rows are short), then the templates and `Blank`, each a `Button` row (`start:<kind>:<id>`), the marked one (`designUi.startMark`) with `▸`. Under them, how to name a design first and how to have Claude draft one.
+- The graph's region draws the marked row's design read-only (`previewProps`: `mode: 'run'`, nothing selected; a saved one from `previews`, read again after a reload; a template made anew). The header shows its name, the agents the marked design starts (none for a blank one) and `START · …`, the goal rows its description (plain rows: no click). The detail pane's last rows name the list's keys, `[w s] Choose  [Enter] Open`, and the footer's legend `[?] Help`; no row names the marked design. The catcher is the frame's first child here too.
+- `startKey`: `w` / `s` move the mark (`moveStartMark`), Enter opens it (`openEntry` → `openSaved` | `startFrom`), `?` / `h` turn the help pages (page 1 is `START_HELP` here), `x` closes them; anything else is `not a key here`.
+- With a name given that no design has, the mark starts on the first template; with none, on the first saved design and a new one would be `freeName`.
+
+**State** (`DesignUi`, `types/index.d.ts`)
+- Added: `viewRootId`, `carousels`, `detailHidden`, `unsaved`, `startMark`; `picker` gained `anchorId`, `where`, `pick`.
+- Removed: `grabbedId` (no grab: Shift+WASD moves), `compact`.
+- `RunContext` carries `graph?: GraphBox` (the region last drawn) in place of the orientation and placement.
+- Module variables in `hooks/design.tsx` (not state, a keystroke must not redraw): `catchGen`, `doorGen`, `descGen`, `pickGen`, `editGen`, `drawnCatcher`, `ringOn`, `ringTo`, `ringStops`, `pins`, `caught`, `doored`, `picked`, `pickedField`, `savedField`, `typingSeq`, `keyChain`, `graphBox`, `graphArea`, `wheelRows`, `previews`; `drafts`, `histories`, `revisions` as before.
+
+**Between the Client and the hooks**
+- Props (`GraphProps`, from `graphProps` + the wheel): `design`, `mode`, `selectedId`, `viewRootId`, `problems` (own problems by id), `openAt`, `scroll`, `columns`, `rows`, `unmapped`, `wheel { from, rows }`, and where they apply `emptyNote`, `run`, `flash`, `hold`, `quiet`. The hooks module lays out the same props (`graphLayout`) to walk what the Client draws.
+- Messages (`GraphMessage`, one per input): `select { id }`, `move { id, to }`, `addAt { at }`, `knob { id, slot }` (a chip), `view { id | null }` (a crumb, or the selected container clicked again), `slide { id, first }` (a gutter), `touch`, `key { key }`. Gone: `remove`, `edit`, `key { op, orientation }`.
+- Pointer rules (`reducePointer`): `select` on release on the cell pressed; a `[+]`, a chip, a crumb, a gutter act on release on the same one (`press`); only the selected card is picked up, and released where it went down a container is opened; anything else pans up and down. While locked: select, view, slide and pan only.
+- A `slide` that takes the selected arm out of the window moves the selection to the stack itself (`applyMessage`): the window always holds the selected arm.
+- **The wheel.** `ui.scroll` on the pane, origin `person`, with `e.pointer` inside `graphArea` (the graph region's cells in the body, set by the drawing): `wheelRows += e.by`, the pane is invalidated, and the hook answers `{}` without `next` so the pane itself stays still. The sum reaches the Client as `wheel: { from: LOAD, rows }`; `syncGraph` moves `panY` by what was added since it last looked (a first sum, or another `from`, is where the count starts). Anywhere else, and for the scroll keys, `next(e)`.
+
+**Elsewhere for `when`**
+- `model.ts`: `Knobs.when`, a text knob (`KNOB_KEYS`). `teach.ts`: `KNOB_HELP.when`, `FIELD_LABEL.when`, and `knobsOf(node, parentType)` offers it (after the prompt) only to a block directly in a `branch`; it is in no type's `KNOBS_BY_TYPE`.
+- `lints.ts`, rule 11 `arm-no-when`: a block directly in a `branch` with no `when`, unless it is the last of several arms. The same arms read `IF [not set]`. Lints are "problems" in everything the person reads (the detail pane's Error and Fix; `preflightLine`: `problems in n3, n5`, named and not counted); the identifiers and what Claude's tool says keep "lint".
+- `chat.ts`: the tool description and the `knobs` schema say `when`; `strayWhens` answers an edit that set it on a block that is no arm. `handoff.ts`: `armWords` opens an arm's outline row with `IF <when>: ` / `ELSE: ` / `IF (no condition set): `, and rule 3 says how to implement it.
+
+**What was deleted**
+- `src/ui/board-model.ts` (the flow board's props, messages and reducer).
+- The left-to-right flow and `chooseOrientation`'s use, compact (`z`), grab (`g` is the goal now), the sideways pan, the fan-out's double bottom border, `edit` / `del` on the selected card.
+- The key rows of hotkey Buttons, the home key and the rewrite of the ring onto it, the `prompt.edit` swallow of unbound letters, the type and add pickers' own rows, the template picker's Buttons-only screen, the goal's field under the header, `overflow` under a resting field.
+- `src/ui/board-layout.ts` and `src/ui/board-paint.ts` (the flow board: the left-to-right flow, compact mode, the old card anatomy, the old `navigate`, `paintBoard`, the `edit` / `del` affordances), and `moveBy` in `ops.ts`. What the graph still used moved: `src/ui/text.ts` holds `clip`, `wrapText`, `firstLines`, `cappedLines`, `moreLines`; `graph-layout.ts` holds `Rect`, `EdgeKind`, `Flow`, `Direction`, `UNMAPPED_ID`, `samePlace`, `childFlow` and, private, `cardText`, `fanCount`, `eachOf`, `edgeKind`; `graph-paint.ts` holds `Span`, `RunOverlay`, `CardRun`, the run sums (over `layout.blocks`), `fitStatus`, `paintWeight`.
+- **Taken out after the build** (the UI pass): the worktree chip and its toggle (`3` steps votes only; the `isolation` knob stays in the model, the chat tool and the hand-off); the `Model`, `Effort`, `Isolation` and `Votes` Selects; `p` / `nextProblem` and every problem count (the badge's number, the footer's, the preflight's); `slot.shown` and the labels `[+] Add block`, `[+] Add first block`, `+ Add first block inside …` (every `[+]` is drawn, and reads `[+]`); the pinned `Selection … · Input: …` row and `inputWord`; the block count in the footer's facts; the stacked dock's legend under the facts (it had five footer rows).
+- **Closing changes.** `branch`'s accent is `warning` (it was `bashBorder`, too near the selection's `claude` and the badges' `error`). An arm of a stack grows to its neighbours' height only when within `ARM_GROW_MAX` (3) rows; otherwise it keeps its own, tops aligned. The frame has one column of margin on the right as on the left. A picker's label is a Button and opens it as its value does. A carousel's incoming arm slides in with the others, clipped at the container's border; the outgoing one goes on the first frame.
+- **`prompt.edit` is back, narrowly.** After a click on the graph the pane retakes the keyboard and asks the ring onto the catcher; the engine refuses that first ask (`the focus moved meanwhile`), so for about 20 ms a letter typed goes to the prompt box and takes the keyboard with it. A `prompt.edit` hook (matcher `{ text: '' }`), armed for at most 400 ms after such a click, takes that one letter, applies it as the key it was meant as and retakes the keyboard. Cost: one hop on the first character typed into an empty prompt box. A key typed in the same frame as the click also retakes the keyboard (the click's own post can be dropped).
+- **Enter and the catcher's count.** Enter empties the catcher's field; `catchKeys` counts from the start again after it (the count of keys already taken was once kept, and the next key was swallowed).
+
+**Findings** (engine, 2.1.296; API-NOTES S7, S8 and "Other findings" have the evidence)
+- A Button `hotkey` cannot see Shift: `Shift+j` pressed `j`'s Button, and `ui.press` carries no key.
+- A focused `Input` receives every printable key with its case, one `ui.input` `change` each, Enter as `submit`; a burst arrives as one `change` holding all the characters. A Button's hotkey does not fire while the ring is on an Input.
+- Answering `ui.input` with `{ value: '' }` does not empty the field. Drawing the Input under a new key does, and the ring stays (kept by place among the stops). A key typed in the frame an Input is drawn under a new key is dropped. A reused key brings back its old text, across reloads too. Changing `value` under a focused Input replaces the text and leaves the cursor where it was. An Input opened again under the key it last submitted from, with the same text, was drawn empty (Enter then saved an empty goal).
+- A focused Input wraps only when it has the pane's full body width; inside any narrower column it is one line cut with `…`. (This corrects "a focused field wraps its text over as many rows as it takes" under Flow board: that was the docked pane's full-width field.)
+- Stop order is tree order, and an engine stop (the pane's ✕) sits before the mod's first. Up / Down walk the ring like Shift+Tab / Tab and a hook cannot tell them apart. A person's move that names no element cannot be given one in the chain.
+- An `Input` under a `Box` with `display="none"` stays a focus stop and takes keys, and the terminal's cursor is hidden while the ring is on it. A focused Input pushed off-screen or clipped still has its cursor shown, clamped to the screen's edge.
+- The docked pane's background colour is the engine's (`composerSidebarBackground` on the Box around the dock): nothing a mod draws or asks removes it (API-NOTES S8).
+- `ui.scroll` is raised for the wheel even when the tree is exactly as tall as the body, with the pointer's cell; answering `{}` without `next` keeps the pane still. One tmux wheel tick is `by: ±3`. (No wheel reaches a Client, as before: the graph gets it through props.)
+- On `/reload-plugins` the Client module can get one frame of props in the old shape: it reads its props defensively (`props.columns > 0 ? … : surface.columns`), as the hooks read state that an older load wrote (`ui.carousels ?? {}`, `ui.help ?? 0`).
+- A clicked Client gets `{ key: 'W', shift: true }`, arrows, `tab`, `return`. Nothing can focus a Client without a click or tell when it loses the keys: it still never keeps the keyboard.
+- A tool description is cut at 4096 characters; `toolDescription()` is 4,050 (it was 4,090 before `args` and `phase`: see the last section).
+- A `Select` opened by the ring lists its options under itself: a picker's row has no fixed height.
+
+**Not exercised**
+- Anything that needs a model turn, on the new pane: an edit from chat marked on the graph (`flash`) and its `Claude added … · [u] Undo` line, `strayWhens` and `armNote` in a real answer, a real hand-off with `r` or `/conductor run` (the `IF` / `ELSE` outline, a `when` implemented), a draft landing on the `DRAFTING` graph.
+- The inline placement beyond its code path (rows, one-row detail pane, one-row legend).
+- The desktop surface.
+- No tests: none were written, and the stale ones were not run.
+
+## Blocks: args, phase, borders by flow
+
+Asked for after a review of block coverage. Built; checked with `claude plugin validate .`, `bunx tsc -p .`, `scripts/render-graph.ts` and a live pane (tmux, truecolor). No tests.
+
+- **`code` covers grouping and reducing.** No block was added for them: `TEACH.code` says so (hint `dedup, filter, group, reduce`, one card line), and the palette finds `code` by `group`, `reduce`, `merge`, `aggregate`.
+- **`phase`** (container, a chain): a titled group that only frames what it holds. `KNOBS_BY_TYPE.phase` is empty; the detail pane shows its title and type, and a notes field only for notes it already carries (`hasNotes`). It stands anywhere and holds any block. Its blocks run in order where it stands:
+  - lints read through it: `CHAINS` holds it (`hasInput`), `producer` follows its last block, `receiver` its first (rule 1 looks at the first block of a phase after a `parallel`, and leaves an empty one alone);
+  - arrows too: inside a phase `edgeKind` takes the type of the container the phase stands in (`Ctx.lanes`), and an arrow leaving a phase is drawn for its last block (`lastOf`);
+  - it adds no depth: `depthStep` is 0 for a phase (1 for the frame of a view), in `openBox` and `viewShows` alike, so a container in a phase is open as deep as without it. It still takes its four columns.
+- **`args`** (leaf): the workflow's input. Notes say what it is, `schema` its shape (the card's right side reads `input: …`, not `output: …`). With neither it reads `no input` (`NO_INPUT`, dim): that is a workflow that takes none, and no lint stands on it. It spawns nothing: 0 in `leastAgents`, no run status, no replay agents, no phase in the hand-off.
+- **`args` is permanent** (asked for right after: "always show, permanent first block"): every design has exactly one, the first block of the top level.
+  - `emptyDesign` makes it; `parseDesign` gives a design read without one an empty one (`withArgs`: a new id, put first) and refuses one that stands anywhere else (`ARGS_PLACE`); every template opens with its own.
+  - `removeNode` and `retypeNode` refuse it (`ARGS_KEPT`), `moveNode` too (`ARGS_STAY`); `addNode` refuses a second, and any block asked for before it lands after it (`placeFor`). In the tool for Claude a `write` that leaves it out keeps the one the design has, and a refused `remove` now refuses the ops (it was passed over in silence).
+  - It is not in `PALETTE`, so neither the add list nor the type list offers it; its own detail pane has no `Type` row; `n` on it adds after it only (`addSides`); the legend names neither `Shift+WASD` nor `x` while it is selected (`fixed`), and `WASD` is always named.
+  - A design with nothing but it is blank (`isBlank`): that is what "empty" means everywhere (the draft command, a run refused, `not saved yet`, the legend's `q` and `r`, the detail pane's "An empty design"), and block counts leave it out (`blockCount`). The graph of a blank design is the args card, then the `[+]` and the lines on how to start in the middle of the rows left (`GraphLayout.blank`); nothing is selected when it opens, so the detail pane says how to start.
+- **Borders say the flow** (`FRAMES` in graph-paint.ts, by `shapeOf`): a leaf `╭─╮ │`, a chain dashed `┌╌┐ ╎`, a stack dotted `┌┈┐ ┊`, each with a heavy twin for the selection (`┏━┓`, `┏╍┓ ╏`, `┏┉┓ ┋`). `SQUARE` is gone. A leaf in hand keeps `LIFTED` (`╭╌╮ ┆`); a container in hand keeps its own line, dim.
+- **A phase has no outline.** Its ring is blank cells and the whole of its box stands on `PHASE_GROUND` (`inverseText`: the darkest tone of a dark theme, the lightest of a light one). The paint keeps a second grid (`grounds`) beside the looks; `shade` clips as `put` does; a phase in a phase turns the ground back to the pane's (`shaded`). Selected, it has the plain heavy line. `Span.ground` is the Client's `backgroundColor`. Not drawn in the `plain` fallback, and the rows of `▲ / ▼ N more` and the drag chip are put back on the pane's ground.
+- **Accents:** `args` `bashBorder`, `phase` `text`. Glyphs for the plain list: `⇢`, `▭`.
+- **Hand-off:** `args` gets no entry in `meta.phases` and is not the label's example; two lines say what `args` and `phase` mean to the script. `HANDOFF_MAX_LINES` is 65 (30 fixed lines and at most 35 of outline; 60 was already passed by 2).
+- **The tool for Claude:** two more type lines took the description past 4096 characters, so what each knob means is now the description of `knobs` in the schema (on the ops; `nodes` points to it) and the description names the knobs only: 4,050 characters.
+- Refusals name a type with its article (`aType`: `an agent block cannot hold children`).
+
+**Not exercised:** a model turn (Claude filling in `args` or adding a `phase` through the tool, a hand-off of a design that has them); the light theme and the ANSI themes (in a 16-colour terminal the dock and `inverseText` are both black: a phase is then told by its header and its missing outline only); the inline placement, which has no dock background.
+
+## Persona: splash and header
+
+The pixels are in `src/ui/persona.ts`, read off `docs/redesign-v1/claude-conductor-persona-assets` (one source pixel each) and painted as half-blocks in the source's own hex colours, not theme keys.
+
+- **Splash:** once a session (`$.state` `splashed`), the pane's first drawing shows it in place of the screen for `SPLASH_MS` 1800 (6 beats of `BEAT_MS` 300) plus 150 ms of rest. The conductor goes idle, ready, conducting, ready, conducting, complete (`SCORE`); six small agents stand in an arc at each side, each half rising on its own beat and all on the last. Under it `◆ Conductor` and `designed for full screen`. `hooks/splash.tsx` counts the beats; `hooks/design.tsx` ends it with one `$.clock.after` and settles the ring. No catcher is drawn under it: keys wait. Under 77 columns or 18 rows the conductor stands alone; under 17 rows there is no splash.
+- **Header:** a 2-row persona (`smallPersona`, `SMALL_W` 10 cells) at the left of the name's row and the goal's first row, which have the rest (`headColumns`). `commit` reads what a change was (`gestureOf`): a block added is `ready`, blocks that changed place `conducting`, held `GESTURE_MS` 900 (`$.state` `persona`). With a run laid over the design and no gesture held: `conducting`/`ready` by the run clock while it runs, `complete` once done (`runPose`).

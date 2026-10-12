@@ -5,7 +5,7 @@
 
 export type ConductorDesignNode = {
   id: string
-  type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'verify' | 'judge-panel' | 'loop-until-dry' | 'sweep' | 'critic'
+  type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'verify' | 'judge-panel' | 'loop-until-dry' | 'sweep' | 'critic' | 'args' | 'phase'
   title: string
   notes?: string
   knobs?: {
@@ -18,6 +18,7 @@ export type ConductorDesignNode = {
     fanout?: string
     votes?: number
     until?: string
+    when?: string
   }
   children?: ConductorDesignNode[]
 }
@@ -31,10 +32,12 @@ export type ConductorDesignUi = {
   selectedId: string | null
   help: number
   notice: string | null
-  grabbedId: string | null
-  picker: { at: { parentId?: string; index: number }; query: string; retypeId?: string } | null
+  picker: { at: { parentId?: string; index: number }; query: string; retypeId?: string; anchorId?: string; where?: 'after' | 'inside' | 'before'; pick?: number } | null
   confirmId: string | null
-  compact: { dock: boolean; inline: boolean }
+  viewRootId: string | null
+  carousels: Record<string, number>
+  detailHidden: boolean
+  unsaved: boolean
   editing: boolean
   flash: { ids: string[]; seq: number } | null
   follow: boolean
@@ -45,6 +48,7 @@ export type ConductorDesignUi = {
   runCleared: boolean
   saved: { name: string; blocks: number; description: string }[]
   handed: boolean
+  startMark: number
 }
 
 declare module 'claude-code' {
@@ -81,6 +85,10 @@ declare module 'claude-code' {
       runTimes: { runId: string | null; startedAt: number | null; endedAt: number | null; seenAt: number | null }
       design: ConductorDesign | null
       designUi: ConductorDesignUi
+      /** Whether this session has seen the splash. */
+      splashed: boolean
+      /** The gesture the header's persona holds (Pose in src/ui/persona.ts); `idle` at rest. */
+      persona: 'idle' | 'ready' | 'conducting' | 'complete'
     }
   }
 }

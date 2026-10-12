@@ -2,7 +2,7 @@
 // structural or keyword heuristic, stated above the rule. Each one prefers
 // missing a case to raising a false alarm. Lints never block anything.
 
-import { canHoldChildren, flatten, walk } from './model'
+import { blockCount, canHoldChildren, flatten, walk } from './model'
 import type { Design, DesignNode } from './model'
 
 export type LintRule =
@@ -17,6 +17,7 @@ export type LintRule =
   | 'verify-nothing-before'
   | 'single-branch'
   | 'loop-no-decider'
+  | 'arm-no-when'
 
 export type Lint = { nodeId: string; rule: LintRule; message: string }
 
@@ -44,8 +45,15 @@ function producer(node: DesignNode): DesignNode {
   return last && node.type !== 'branch' ? producer(last) : node
 }
 
+// The block that receives what stands before `node`: the node itself, or the
+// first block of a phase (a phase only frames what it holds).
+function receiver(node: DesignNode): DesignNode {
+  const first = node.type === 'phase' ? node.children?.[0] : undefined
+  return first ? receiver(first) : node
+}
+
 /** Containers whose blocks run one after the other: a block in one receives what the block before it made. */
-const CHAINS: readonly string[] = ['pipeline', 'loop', 'loop-until-dry']
+const CHAINS: readonly string[] = ['pipeline', 'loop', 'loop-until-dry', 'phase']
 /** Leaves whose result is a model's answer: free text unless a schema is set. */
 const ANSWERS: readonly string[] = ['agent', 'verify', 'judge-panel', 'critic']
 
@@ -83,11 +91,13 @@ export function lint(design: Design): Lint[] {
     // the full set by nature) and whose title, notes and prompt carry no word
     // about working across items (dedup, merge, compare, all, rank, …).
     // A parallel with nothing after it returns its results and is left alone.
-    if (node.type === 'parallel' && next && next.type !== 'code' && next.type !== 'judge-panel' && !CROSS_ITEM.test(words(next))) {
+    // A phase after it is looked into (its first block is the sibling), and an empty one is left alone.
+    const taker = next ? receiver(next) : undefined
+    if (node.type === 'parallel' && taker && taker.type !== 'phase' && taker.type !== 'code' && taker.type !== 'judge-panel' && !CROSS_ITEM.test(words(taker))) {
       lints.push({
         nodeId: node.id,
         rule: 'barrier-not-needed',
-        message: `parallel waits for all results, but "${next.title}" does not seem to need them together: make it a pipeline so each item moves on as it finishes`,
+        message: `parallel waits for all results, but "${taker.title}" does not seem to need them together: make it a pipeline so each item moves on as it finishes`,
       })
     }
 
@@ -99,7 +109,7 @@ export function lint(design: Design): Lint[] {
       lints.push({
         nodeId: node.id,
         rule: 'worktree-read-only',
-        message: 'worktree isolation costs setup time and disk per agent and only helps agents that edit files at the same time; this one looks read-only: set isolation to none',
+        message: 'worktree isolation costs setup time and disk per agent and only helps agents that edit files at the same time; this one looks read-only: ask Claude in the prompt to drop the worktree from this block',
       })
     }
 
@@ -168,7 +178,7 @@ export function lint(design: Design): Lint[] {
       lints.push({
         nodeId: node.id,
         rule: 'verify-nothing-before',
-        message: 'verify has nothing before it to check: put it after the block whose results it should check (g grabs it, the arrows move it)',
+        message: 'verify has nothing before it to check: put it after the block whose results it should check (Shift+W / Shift+S move it)',
       })
     }
 
@@ -180,7 +190,7 @@ export function lint(design: Design): Lint[] {
       lints.push({
         nodeId: node.id,
         rule: 'single-branch',
-        message: `${node.type} holds one block, so nothing runs side by side: add the other ${node.type === 'sweep' ? 'searchers' : 'blocks'} (i adds inside), set fanout to run it once per item, or take "${only.title}" out and delete the ${node.type}`,
+        message: `${node.type} holds one block, so nothing runs side by side: add the other ${node.type === 'sweep' ? 'searchers' : 'blocks'} (n adds a block, n again: inside), set fanout to run it once per item, or take "${only.title}" out and delete the ${node.type}`,
       })
     }
 
@@ -203,6 +213,21 @@ export function lint(design: Design): Lint[] {
             : `nothing decides the next round: "${last.title}" (${last.id}) ends each round with new gaps and the loop has no until. Say when it stops (e.g. until: no gaps, or 3 rounds)`,
         })
       }
+    }
+
+    // 11. An arm nothing picks. Structural: a block directly in a `branch` with
+    // no `when`, unless it is the last of several arms (the else). The graph
+    // writes `IF [not set]` on the same arms.
+    const arms = info.parent?.type === 'branch' ? siblings.length : 0
+    if (arms > 0 && blank(node.knobs?.when) && (info.index < arms - 1 || arms === 1)) {
+      lints.push({
+        nodeId: node.id,
+        rule: 'arm-no-when',
+        message:
+          arms === 1
+            ? `the only arm of branch ${info.parent?.id ?? ''} has no condition, so nothing says when it runs: set when (e.g. "no findings"), and add the arm for when it does not hold`
+            : `this arm of branch ${info.parent?.id ?? ''} has no condition, so nothing says when it runs: set when (e.g. "no findings"); only the last arm may go without one, as the else`,
+      })
     }
   })
 
@@ -236,7 +261,7 @@ function leastAgents(node: DesignNode): number {
     if (node.type === 'parallel' || node.type === 'sweep') return Math.max(inside, times)
     return inside * times
   }
-  if (node.type === 'code' || node.type === 'subworkflow') return 0
+  if (node.type === 'code' || node.type === 'subworkflow' || node.type === 'args') return 0
   if (node.type === 'verify' || node.type === 'judge-panel') return times * (node.knobs?.votes ?? 1)
   return times
 }
@@ -255,17 +280,21 @@ function unknownsOf(design: Design): Unknowns {
   return out
 }
 
-export type Preflight = { blocks: number; agents: number; lints: number; lintIds: string[]; unknowns: Unknowns }
+export type Preflight = { blocks: number; agents: number; lintIds: string[]; unknowns: Unknowns }
 
-/** What a hand-off is about to start: how many blocks, the fewest agents they imply (and what makes the real count larger), and how many lints stand. */
+/** What a hand-off is about to start: how many blocks, the fewest agents they imply (and what makes the real count larger), and which blocks a lint stands on. */
 export function preflight(design: Design): Preflight {
-  const lints = lint(design)
-  return { blocks: flatten(design).length, agents: design.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lints: lints.length, lintIds: lintIds(lints), unknowns: unknownsOf(design) }
+  return { blocks: blockCount(design), agents: design.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lintIds: lintIds(lint(design)), unknowns: unknownsOf(design) }
+}
+
+/** The agents a design starts, as a count: `agents = 18` with every count known, `agents ≥ 12` where the number is only the fewest. */
+export function agentsCount(agents: number, unknowns: Unknowns): string {
+  return `agents ${unknowns.fanouts + unknowns.loops + unknowns.subworkflows > 0 ? '≥' : '='} ${agents}`
 }
 
 /**
- * The agents a design starts, as far as the drawing says. Every count known: `12 agents`. Otherwise the
- * floor is marked as one and the reason follows: `12+ agents (more: 2 blocks fan out over an unknown number)`.
+ * The agents a design starts, as far as the drawing says. Every count known: `agents = 12`. Otherwise the
+ * floor is marked as one and the reason follows: `agents ≥ 12 (more: 2 blocks fan out over an unknown number)`.
  */
 export function agentsText(agents: number, unknowns: Unknowns): string {
   const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`
@@ -274,8 +303,28 @@ export function agentsText(agents: number, unknowns: Unknowns): string {
     unknowns.loops > 0 ? `${plural(unknowns.loops, 'loop repeats', 'loops repeat')}` : '',
     unknowns.subworkflows > 0 ? `${plural(unknowns.subworkflows, 'subworkflow starts', 'subworkflows start')} its own` : '',
   ].filter(part => part !== '')
-  if (why.length === 0) return `${agents} ${agents === 1 ? 'agent' : 'agents'}`
-  return `${agents}+ agents (more: ${why.join(', ')})`
+  return `${agentsCount(agents, unknowns)}${why.length === 0 ? '' : ` (more: ${why.join(', ')})`}`
+}
+
+/**
+ * A lint's message as the detail pane says a problem: what is wrong (up to the first colon),
+ * and how to fix it (the rest, its first letter capital). A message with no colon is all `error`.
+ */
+export function problemParts(message: string): { error: string; fix: string } {
+  const at = message.indexOf(': ')
+  if (at < 0) return { error: message, fix: '' }
+  const fix = message.slice(at + 2).trim()
+  return { error: message.slice(0, at).trim(), fix: fix.charAt(0).toUpperCase() + fix.slice(1) }
+}
+
+/** The fields of its block a problem is about: the detail pane marks the ones that are not set. */
+export function problemFields(rule: LintRule): string[] {
+  if (rule === 'agent-no-brief') return ['notes', 'prompt']
+  if (rule === 'loop-unbounded' || rule === 'loop-no-decider') return ['until']
+  if (rule === 'code-input-no-schema') return ['schema']
+  if (rule === 'no-votes') return ['votes']
+  if (rule === 'arm-no-when') return ['when']
+  return []
 }
 
 /** The blocks that carry a lint, each once, in the order the lints were raised. */
@@ -287,13 +336,11 @@ export function lintIds(lints: readonly Lint[]): string[] {
 export const LINT_IDS_MAX = 6
 
 /**
- * `6 blocks · 14 agents · 2 lints (n3, n5)`, or `12+ agents (more: …)` where a count is not stated. It informs; nothing is blocked.
- * `blocks: false` leaves the first part out, where the count is already said.
+ * `agents = 14 · problems in n3, n5`, or `agents ≥ 12 (more: …)` where a count is not stated; the
+ * blocks that have a problem are named, and nothing is said of problems where there are none. It informs; nothing is blocked.
  */
-export function preflightLine(design: Design, options: { blocks?: boolean } = {}): string {
-  const { blocks, agents, lints, lintIds: ids, unknowns } = preflight(design)
-  const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
+export function preflightLine(design: Design): string {
+  const { agents, lintIds: ids, unknowns } = preflight(design)
   const named = `${ids.slice(0, LINT_IDS_MAX).join(', ')}${ids.length > LINT_IDS_MAX ? ', …' : ''}`
-  const parts = [agentsText(agents, unknowns), lints === 0 ? 'no lints' : `${plural(lints, 'lint')} (${named})`]
-  return (options.blocks === false ? parts : [plural(blocks, 'block'), ...parts]).join(' · ')
+  return [agentsText(agents, unknowns), ...(ids.length === 0 ? [] : [`problems in ${named}`])].join(' · ')
 }
