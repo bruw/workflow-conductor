@@ -24,6 +24,7 @@ export type ConductorDesignNode = {
     stopCondition?: string
     condition?: string
   }
+  match?: string[]
   children?: ConductorDesignNode[]
 }
 

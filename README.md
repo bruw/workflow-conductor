@@ -51,7 +51,8 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 | `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt; the pane switches to that design. With `fill`, the request is left in the box, ending `on: `, for you to say what to run it on and send. The answer says what the design implies: `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats) · problems in n3, n5`. |
 | `/conductor list` | The saved designs, each with its block count and description. |
 | `/conductor rename <old> <new>` | Renames a saved design (the file, and this session's undo history of it). Refused when `<new>` exists or starts with `replay-`, and while the design is being run. |
-| `/conductor delete <name>` | Deletes a saved design. Asks once more: it answers with what would go, and `/conductor delete <name> confirm` does it. |
+| `/conductor delete <name>` | Deletes a saved design and its script. Asks once more: it answers with what would go, and `/conductor delete <name> confirm` does it. |
+| `/conductor ask reset` | Forgets every stored `Always …` and `Never …` answer, so Conductor asks both its questions again (see "When Claude starts a workflow"). |
 | `/conductor replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
 | `/conductor replay design <template> [fast\|slow]` | Dev: replays a made-up run over a template's design (`review`, `research`, `migrate`, `judge-panel`). The design is named `replay-<template>`, lives in the session only, and is never saved or listed (the `replay-` prefix is kept for this). |
 
@@ -68,7 +69,7 @@ answers with the problems the design now has; a refused edit changes nothing. Wh
 live, edits from chat are refused, as edits in the pane are. A design file changed
 with Claude's Write or Edit tools is reloaded into the open pane too.
 
-Claude always reads the design before it reviews or edits: every answer of its design tool names a revision, a prompt sent after you changed the design by hand tells it so, and an edit made from an older revision is refused until it has read again. Adding a block "after" one that stands directly in a branch makes a new arm; the tool says so and says how to get a sequence (wrap the two in a pipeline). A `when` set on a block that is no arm of a branch is pointed out too: nothing reads it there.
+Claude works from the design as it is on the board: every answer of its design tool names a revision, and a prompt sent after you changed the design by hand carries a note with the change itself (the blocks added, changed, moved and removed, and the one selected), so Claude need not read the design again. Where the change cannot be said that way (Claude never read the whole design in this conversation, the conversation was compacted, or the change is longer than the design), the note tells it to read first. An edit made from an older revision is refused and changes nothing, and so is a whole-design write over a design Claude has not read in this conversation. The tool is loaded when Claude needs it, not sent with every turn. Adding a block "after" one that stands directly in a branch makes a new arm; the tool says so and says how to get a sequence (wrap the two in a pipeline). A `when` set on a block that is no arm of a branch is pointed out too: nothing reads it there.
 
 ## The designer
 
@@ -329,6 +330,30 @@ Conductor checks the design as you build and never blocks anything. A block that
 
 **Two blocks that do no work.** `args` is the workflow's input: what it is run on, in its logic, and its shape in its output (shown on the card as `input: …`). Every design has it, always as its first block: a new design opens with it, a design saved without one is given an empty one when it is read, and it is not in the add list. It is not deleted, does not move and becomes no other type, and nothing goes above it. Left empty it reads `no input`, which is no problem: the workflow then takes none. `phase` is a titled group: it holds any block, has no knobs, and its blocks run one after the other where it stands, as if it were not there. It costs no nesting level (a container in a phase is drawn open as deep as it would be without it).
 
+## When Claude starts a workflow
+
+Conductor asks two questions, each with four answers and the two rows Claude Code adds (typed text, which Claude gets as your words, and `Chat about this`).
+
+**Before Claude writes a workflow script: `Design this workflow in Conductor first?`**
+
+- `Conductor`: Claude drafts a design, names it and shows it on the board, which takes the keyboard. Nothing is written or run until you approve it there with `r`, or with `/conductor run <name>`. If you say "run it" in chat instead, Claude is given the same hand-off.
+- `Standard`: Claude writes the script and runs it as it would without Conductor.
+- `Always Standard`, `Always Conductor`: the same, and the answer is kept; you are not asked again.
+
+It is not asked for a design you handed off (that was your answer), from a subagent, or in a session with no screen.
+
+**When a workflow that belongs to no design has started: `Visualize this run in Conductor?`**
+
+- `Visualize`: Claude draws a design of the script that is running, under the workflow's own name, and the run shows on it. The run goes on meanwhile; the chat waits until you answer.
+- `Skip`: the run is shown in the phase view only.
+- `Always visualize`, `Never visualize`: the same, kept.
+
+A design drawn this way ties its blocks to the script with `match`: the agent labels (or phase titles) a block stands for, each exact, or a prefix when it ends in `*`. The script is kept beside the design, as `.claude/workflow-designs/<name>.workflow.js`.
+
+A run whose workflow name is a saved design's name is that design's run: it is shown on the design with no question, whatever is stored for the second one. So the next run of a script you had visualized lands on its design.
+
+`/conductor ask reset` forgets the kept answers to both questions.
+
 ## Watching a run
 
 A run started from a design is laid over it:
@@ -355,6 +380,8 @@ The one thing the hand-off adds is how the run is tied back to the board:
 - Label: every `agent()` call is labelled `<nodeId>: <short text>`, with the id of the innermost design node it belongs to.
 - Phase: each top-level node (the args block left out) is one phase titled `<nodeId> <title>`, listed in `meta.phases` in design order. A top-level `phase` block is such a node: its title names that part of the run.
 
+The script the design was run as is kept beside it, `.claude/workflow-designs/<name>.workflow.js`. Once a design has one, the hand-off tells Claude to update that file to match the design as it is now, changing only what the design changed, and to run it; blocks with `match` keep the script's own labels and phase titles. A run out of a hand-off replaces the kept script; a run that merely has the design's name gives a design its first script and never writes over one it has.
+
 Designs are stored in the project, one JSON file each: `.claude/workflow-designs/<name>.json`.
 The designer saves on every change.
 
@@ -363,7 +390,7 @@ The designer saves on every change.
 Progress is derived from hooks, not from the workflow engine's own state:
 
 - The Workflow tool call gives the run id, name and transcript folder.
-- Each workflow agent spawn gives an agent and its label; the label's node id maps it to a design node. Agents whose label names no node of the design are counted on a card of their own after the design.
+- Each workflow agent spawn gives an agent and its label. The node id the label starts with maps it to a design node; without one, the block whose `match` names the label does, then the block whose `match` names the agent's phase title (an exact string before a prefix, the longest prefix first). Agents no block takes are counted on a card of their own after the design.
 - Model requests and turn completions give tokens and the agent's end. The figure is the sum of input, output, cache-creation and cache-read tokens.
 - Phases are read from the run's `journal.jsonl`.
 
@@ -371,7 +398,7 @@ Known limits:
 
 - There is no run-end signal. A run is held finished after 8 seconds with no agent running and no new spawn; a later spawn for the same run reopens it.
 - Phases rely on the journal file, an internal format that may change.
-- A handoff claims the first Workflow run that starts within 3 minutes. A run started later, or without a handoff, is shown in the phase view only.
+- A run belongs to the saved design its workflow is named as. A handoff also claims the first run under any other name that starts within 3 minutes of it, or of your last prompt while it waits. A run neither rule takes is shown in the phase view only, unless you have it visualized.
 - One run is tracked at a time, and one graph is mounted at a time.
 - Undo history is kept for the session only. It survives `/reload-plugins`; it is lost when the mod's code is reloaded after a change.
 - Text is measured by code unit: a title with wide or combined characters misaligns its card.

@@ -66,6 +66,7 @@ type DesignNode = {
     stopCondition?: string // a loop: when it stops, in words, "2 dry rounds", "budget < 50k"
     condition?: string    // a block directly in a branch: what picks this arm
   }
+  match?: string[]        // a design of a script that exists: the script's agent labels or phase titles this block stands for; one ending in * is a prefix
   children?: DesignNode[] // stages inside pipeline/parallel/loop
 }
 type NodeType =
@@ -109,7 +110,7 @@ type NodeRun  = { total: number; running: number; done: number; failed: number; 
 ## Id convention (design ↔ run)
 
 - At handoff Claude is told: every `agent()` call sets `label: "<nodeId>: <short text>"`, e.g. `n3: verify auth`, and each top-level node maps to one `phase` titled `<nodeId> <title>`.
-- The mod parses the node id from the label with `/^(n\d+)\b/`. No match → `unmapped`.
+- The mod parses the node id from the label with `/^(n\d+)\b/`. With no id (or one the design does not have), the block whose `match` names the label takes the agent, else the one whose `match` names its phase title (`nodeOf`, `matchNode`: an exact string before any prefix, the longest prefix, the first block in design order on a tie). None → `unmapped`.
 - The label is stored as the agent's `description` (seen on disk in `agent-<id>.meta.json`; to be confirmed on the live `agent.spawn` event in P1).
 
 ## Run data sources
@@ -342,10 +343,10 @@ The tree showed containment; a workflow is flow. The designer draws the design a
 Claude drafts and changes a design; the board follows live. Pure logic in `src/design/chat.ts`, hooks in `hooks/design.tsx`.
 
 **Mechanism**
-- **A model-callable tool**, `mcp__conductor__design`, registered with `$.tool.register` in a `session.start` hook (`isDeferred: false`, so its schema is in the tool list and a plain chat message reaches it without ToolSearch) and served by a `tool.call` hook on that name. The hook edits the mod's own atoms, so the pane redraws from state and nothing unchecked is saved.
+- **A model-callable tool**, `mcp__conductor__design`, registered with `$.tool.register` in a `session.start` hook (`isDeferred: true` now: only its name is in every turn and Claude loads the schema with ToolSearch; every brief that wants it used names it in full, see "Before a workflow, a run on a design, and what Claude is sent") and served by a `tool.call` hook on that name. The hook edits the mod's own atoms, so the pane redraws from state and nothing unchecked is saved.
 - **No system-prompt section.** The tool's description carries the vocabulary; `prompt.compose` is not hooked.
-- **The description is generated** (`toolDescription()`): one line per type from `NODE_TYPES` + `TEACH[type].hint` + `canHoldChildren`, the knobs from `KNOB_HELP` (new, in `teach.ts`, typed `Record<keyof Knobs, string>` so a new knob cannot be left out). About 2,600 characters. The long cards (`TEACH[type].card`) are behind the `guide` action and in the draft's hidden context, not in every turn.
-- **`/conductor draft <name> <description…>`**: saves an empty design with that description, shows it (pane opened without `focus`, `designUi.drafting` set so the empty board says Claude is drafting), answers with `context` (`draftBrief`: what to do, plus the full guide) and submits `Draft the "<name>" workflow design: …` from `$.clock.after(SUBMIT_DELAY_MS)`, as the handoff does. Refused when a design of that name already holds blocks.
+- **The description is generated** (`toolDescription()`): one line per type from `NODE_TYPES` + `TEACH[type].hint` + `canHoldChildren`, the knobs from `KNOB_HELP` (new, in `teach.ts`, typed `Record<keyof Knobs, string>` so a new knob cannot be left out). About 2,600 characters. The long cards (`TEACH[type].card`) are behind the `guide` action only, not in every turn and not in the draft's brief.
+- **`/conductor draft <name> <description…>`**: saves an empty design with that description, shows it (pane opened without `focus`, `designUi.drafting` set so the empty board says Claude is drafting), answers with `context` (`draftBrief`: the tool's full name, one `write` call, the two `DRAFT_RULES` sentences, what to say afterwards; no guide) and submits `Draft the "<name>" workflow design: …` from `$.clock.after(SUBMIT_DELAY_MS)`, as the handoff does. Refused when a design of that name already holds blocks.
 - **Write/Edit follow-up**: a `tool.call` hook on `{ tool: ['Write', 'Edit'] }`. When `file_path` is a design file (`designOfPath`), after `next(e)` the open design of that name is re-read and re-parsed: valid, it replaces the board's; invalid, a toast and the last good design stays. Before `next(e)` the run lock denies the call.
 
 **Tool contract** (`TOOL_SCHEMA`)
@@ -437,9 +438,9 @@ Nothing done by accident may damage a design, and the screen holds still.
 
 **Claude reads the board as it is** (the cause of a review of a deleted block: the tool said "read first unless you just did", and Claude had)
 - `revisions[name]` counts every change this load (by hand, chat, undo); `seenByClaude[name]` is the count at Claude's last `read` or own edit. `readReport` / `editReport` name the revision.
-- `prompt.submit` (now matched on every prompt, `{ text: /^/ }`): when the open design's revision differs from what Claude saw, `staleNote` is attached as context, once per revision. The same hook still attaches the hand-off conventions.
-- An `apply` / `write` from an older revision is denied (`The user changed design … Call read, then send the edit again`). Not exercised live: in the one real turn Claude read first.
-- The tool description says to always read first; `reviewPrompt` says `as it is on the board now (read it first, it may have changed by hand)`.
+- `prompt.submit` (now matched on every prompt, `{ text: /^/ }`): when the open design's revision differs from what Claude saw, a note is attached as context, once per revision: `changedNote` (the change itself) where the design Claude last saw is at hand, else `staleNote` (read again). The same hook still attaches the hand-off conventions.
+- An `apply` / `write` from an older revision is denied, with the reason only (`The user changed design … so this edit was made from a board that is gone. Nothing was changed.`).
+- The tool description, every `read` / edit answer and `reviewPrompt` say the same rule: read first, unless a Conductor note with the prompt has said what changed.
 - Seen live: chat edit, then `n6` deleted by hand, `v`, send: Claude called `read` (revision 2) and answered `n6 is gone (removed by hand)`.
 
 **Pointer** (`board-model.ts`)
@@ -835,3 +836,37 @@ Asked for after "Votes in the logic": the counts and meanings that were still re
 - **Hand-off** (`buildHandoff`): the goal, the design file ("it defines the workflow"), the script to update where one exists, not to call the offer tool, to ask the user first about every flow that is ambiguous or looks unintended, and the three rules that tie a run to the board (label, phase, `meta.name`; with a script, `match`). Gone from it: what a node's fields are, the knobs paragraph, the per-kind `script` lines, the outline, the report after launching, `HANDOFF_MAX_LINES`. `outline` and `KindTeach.script` stay for the tool for Claude (chat.ts).
 - **The tool for Claude** no longer says where votes go.
 
+## Before a workflow, a run on a design, and what Claude is sent
+
+Three things added after "No field is mined", then put right in a review round. Checked with `claude plugin validate .`, `bunx tsc -p .`, a throwaway script over the tracker with a fake host, and a real session (three tiny runs). Where this section and an earlier one disagree, this one holds.
+
+**The offer** (hooks/offer.tsx, src/design/offer.ts)
+- A second tool, `mcp__conductor__before_workflow`, no input, `isDeferred: false` (API-NOTES S13, S14: Claude calls a tool before a workflow only when its description is in every turn). It asks `Design this workflow in Conductor first?` with `$.ui.ask`: `Conductor`, `Standard`, `Always Standard`, `Always Conductor`.
+- `Conductor`: the result is `offerBrief` (one `write` with the deferred design tool, named in full; stop afterwards; the person approves on the board with `r` or `/conductor run <name>`; told in chat to run it, call this tool again). The draft's board takes the keyboard. `Standard`: write the script and run it. An `Always …` answer is kept in `$.store` under `ask.workflow` and answers without a dialog from then on.
+- No dialog, answer `Standard`: a subagent's call, a session with no surface, and while a handoff waits for its run (`tracker.awaitsRun()`).
+- Esc, `Chat about this` and an empty typed answer are one result (no choice); other typed text is passed on as the person's words. Both say that what the person then answers in chat is acted on without calling the tool again.
+- **A draft that waits** (`waiting` in offer.tsx): after a `Conductor` answer's draft has landed and until that design is handed off or run, a call answers without a dialog (`waitingResult`): the design is on the board unapproved; not told to run it, Claude drafts nothing and writes no script; told in chat to run it, Claude carries out `buildHandoff`'s text, which the result holds; for a different workflow, a second call in the same turn asks. A run named as the design is the design's (below), so a chat approval needs no pending claim.
+- `/conductor ask reset` deletes every `$.store` key under `ask.`: the kept answers to both questions.
+
+**A run and its design** (src/run/tracker.ts, hooks/run.tsx)
+- **By name.** A run whose `workflowName`, through `designName`, is a saved design is that design's run: with a handoff waiting, without one, and whether or not its blocks have `match` (`RunStarted.design`, read by `designOfRun` in design.tsx before the tracker is told). The board goes to that design and follows the run; no question is asked, also with `Never visualize` kept. A toast says where the run went when no handoff led to it.
+- **By handoff.** A handoff's claim (`HANDOFF_MS`, 180 s) still takes a run under any other name. Each prompt the person sends while it waits starts the wait again (`tracker.prompted()`), so it holds while they answer what Claude asked about the design. A run named as another saved design is that design's, and the handoff goes on waiting.
+- **Out of a handoff** (`tracker.handedOff()`): the handed design's runs from the handoff until the person's next prompt once the claim is spent, so a retry in the same turn counts.
+- **The script beside the design**: `.claude/workflow-designs/<name>.workflow.js` (`scriptFile`); that the file is there is the link. A run out of a handoff copies its script there (`result.scriptPath`; a run of that very file copies nothing). A run that only has the design's name copies only when the design has no script yet: the saved one may be newer. `delete` and `rename` take the script along.
+- **A handoff of a design that has a script** (`buildHandoff` with `scriptPath`): update that file to match the design, changing only what the design changed, and run it by `scriptPath`; blocks with `match` keep the script's labels and phase titles.
+- **The Visualize question.** A run no design took (main conversation, a surface, a `scriptPath` on the result) asks `Visualize this run in Conductor?`: `Visualize`, `Skip`, `Always visualize`, `Never visualize` (kept under `ask.visualize`). The turn is held while the dialog is up (S10). On yes the Workflow result carries `visualizeBrief`: one `attach` call under the workflow's own name (`designName(workflowName)`, so the next run of the script finds the design), nodes that mirror the script, each agent label in the `match` of the innermost block only, a phase title on the top-level block of that phase.
+- **`attach`** (the design tool): a `write` for the run tracked now. Refused with no run, when the run is another design's, and when the name is a design this run did not create. It saves the design, copies the run's script beside it, and `tracker.adopt` places every agent seen so far again (`remap`); the answer lists the labels no block took (`attachNote`).
+- `runBoardOf()` in design.tsx hands run.tsx `designOfRun` and `keepScript` as closures made in the session's start hook: `claude plugin validate` refuses a `$` passed to an imported function.
+
+**What Claude is sent**
+- **The design tool is deferred** (`isDeferred: true`). Its description says: read before describing, reviewing or editing, unless a Conductor note with the prompt has said what changed. 4,026 characters (the cut is 4,096).
+- **The change note** (`changedNote`, `boardChanges`): after a change by hand the next prompt carries everything that differs from the design Claude last saw (blocks added whole, changed as they are now, moved, a container's new order, removed, the goal, the selected block), and counts as a read. Where saying it takes more than the design, or Claude holds no snapshot, `staleNote` says to read.
+- **The snapshot** (`seenDesigns`) is kept only where Claude holds the design whole: after a `read`, after a change note, and after its own edit when `knownAfterEdit` holds (every logic, knob value, `match` and the goal is a string it sent in that edit or one the block had in the last snapshot, and the outline names every block). An edit that stored text Claude never saw (a kind's filled-in logic or knobs, a block from a design it never read) drops the snapshot. A compaction drops them all (not a `precompute`); a `/clear` and a resume also forget that Claude saw any design.
+- **A `write` over a design Claude has not seen in this conversation is denied** when the design has blocks: an offered draft named as an existing design would replace it unread.
+- **A deny is a reason**, never an instruction (Claude does not take one from a refusal), plus at most that a name no design has is free to use.
+
+**Seen live** (sonnet, three runs of two haiku agents): the offer, `Standard`; the Visualize question, `Visualize`; `attach` under the workflow's name with each label on its agent block, both agents on their blocks, the script copied; the same script run again by path: no question, the run on the design, the kept script untouched; after `/clear` and a change by hand, `r`: Claude updated the kept script, ran it by `scriptPath`, no question of either kind, the run painted on the design. Without runs: a `write` to an unread saved design denied; a review after a change by hand answered from the note with no `read`; after an offered draft, `run it` in chat: one `before_workflow` call, no dialog, no second draft, Claude read the design file and was stopped before the Workflow call.
+
+**Not exercised:** a retry of a failed script and a claim that expired before its run (the tracker's rules only, under the fake host); a chat approval through to its run; `Always …` and `Never …` answers kept and reset; a typed or empty answer; a session resume; a `precompute` compaction.
+
+**Known and accepted:** a prompt queued mid-turn marks the change note as seen early; after `/clear` an `attach` is refused until the next run; a failed delete can leave `<name>.workflow.js` behind; the turn is held while the Visualize dialog is up; after a rename an `attach` to the run still shown is refused; a retry under a name that is not the design's, after the claim is spent, is not the design's run.

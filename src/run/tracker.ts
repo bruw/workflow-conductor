@@ -14,7 +14,7 @@ import { replayDue } from './replay'
 export const TICK_MS = 96
 /** No agent running and no spawn for this long: the run is held finished. */
 export const QUIET_MS = 8000
-/** A handoff waits this long for its run; a run that starts later is not the design's. */
+/** A handoff waits this long for a run under another name than its design's; a prompt from the person starts the wait again. */
 export const HANDOFF_MS = 180_000
 /** A slow replay spreads its events over this long. */
 export const REPLAY_MS = 10_000
@@ -54,7 +54,8 @@ type Claim = Mapping & { name: string; titles?: Readonly<Record<string, string>>
 
 const claimOf = (from: Handoff): Claim => ({ name: from.name, ids: new Set(from.nodeIds), titles: from.titles, match: from.match })
 
-export type RunStarted = { runId: string; name?: string; transcriptDir?: string }
+/** `design` is the saved design named as the run's workflow, when there is one: the run is that design's, handed off or not. */
+export type RunStarted = { runId: string; name?: string; transcriptDir?: string; design?: Handoff }
 export type AgentSpawned = { runId: string; agentId: string; label: string; index?: number }
 export type AgentEnded = { ok: boolean; durationMs?: number; tokens?: number }
 
@@ -79,6 +80,8 @@ export function createTracker() {
   let pending: Claim | undefined
   let active: Claim | undefined
   let expiry: Timer | undefined
+  /** The design whose handoff is being worked on: from the handoff until the person's next prompt after its claim is spent. A run of it meanwhile (the first, a retry) comes out of the handoff. */
+  let handed: string | undefined
 
   const dirs = new Map<string, string>()
   /** Agents of the tracked run still running, with their token total so far. */
@@ -239,15 +242,25 @@ export function createTracker() {
     pending = undefined
   }
 
-  /** Forgets the run held so far so that `runId` can start clean. */
-  const begin = (runId: string): void => {
+  const armExpiry = (): void => {
+    expiry?.cancel()
+    expiry = host?.after(HANDOFF_MS, dropPending)
+  }
+
+  /** Forgets the run held so far so that `runId` can start clean. `own` is the saved design the run is named as. */
+  const begin = (runId: string, own?: Handoff): void => {
     replaying?.cancel()
     replaying = undefined
     cancelQuiet()
     totals.clear()
     noPhase.clear()
-    // Another run, or the one a handoff waited for: it belongs to that design, or to none.
-    if (pending !== undefined || state.runId !== runId) {
+    if (own !== undefined) {
+      // Named as a saved design: that design's run, whatever waits. A handoff of another design goes on waiting for its own.
+      active = claimOf(own)
+      if (pending?.name === own.name) dropPending()
+      call(h => h.design?.(own.name))
+    } else if (pending !== undefined || state.runId !== runId) {
+      // Another run, or the one a handoff waited for: it belongs to that design, or to none.
       active = pending
       dropPending()
       // Said for every run, the same design's next one too: the host's copy is the session's and starts over on a /clear, this one does not.
@@ -256,6 +269,16 @@ export function createTracker() {
     }
     if (state.runId !== undefined && state.runId !== runId) superseded.add(state.runId)
     superseded.delete(runId)
+  }
+
+  /** The run tracked now is `claim`'s design's: every agent seen so far is placed again by it. */
+  const take = (claim: Handoff): void => {
+    const before = active
+    active = claimOf(claim)
+    if (pending?.name === claim.name) dropPending()
+    if (active.name !== before?.name) call(h => h.design?.(claim.name))
+    state = remap(state, active)
+    flush()
   }
 
   return {
@@ -288,7 +311,18 @@ export function createTracker() {
     handoff(next: Handoff): void {
       dropPending()
       pending = claimOf(next)
-      expiry = host?.after(HANDOFF_MS, dropPending)
+      handed = next.name
+      armExpiry()
+    },
+
+    /**
+     * The person sent a prompt in the main conversation. While a handoff waits for its run they are answering what
+     * Claude asked about the design: the wait starts again. With none waiting, the handoff's work is over: a later
+     * run of the design is one the person asked for anew.
+     */
+    prompted(): void {
+      if (pending === undefined) handed = undefined
+      else armExpiry()
     },
 
     /**
@@ -298,11 +332,7 @@ export function createTracker() {
      */
     adopt(claim: Handoff): string[] | null {
       if (state.status === 'idle') return null
-      const before = active
-      active = claimOf(claim)
-      if (active.name !== before?.name) call(h => h.design?.(claim.name))
-      state = remap(state, active)
-      flush()
+      take(claim)
       return state.unmapped.map(id => state.agents[id]?.label ?? '')
     },
 
@@ -312,6 +342,9 @@ export function createTracker() {
     /** The design the tracked run was started from, if any. */
     design: (): string | undefined => active?.name,
 
+    /** Whether the tracked run comes out of a handoff of its design (the run it waited for, or a retry of it), not only out of its name. */
+    handedOff: (): boolean => active !== undefined && active.name === handed,
+
     paneOpened(): void {
       shown = true
       syncStatus()
@@ -319,8 +352,11 @@ export function createTracker() {
 
     runStarted(run: RunStarted): void {
       if (run.transcriptDir) dirs.set(run.runId, run.transcriptDir)
-      if (state.runId !== run.runId || state.status !== 'running') begin(run.runId)
+      const isNew = state.runId !== run.runId || state.status !== 'running'
+      if (isNew) begin(run.runId, run.design)
       apply([{ kind: 'run-start', runId: run.runId, name: run.name }])
+      // Its agents were seen before the run was announced, so it began with no name: they are placed again by its design.
+      if (!isNew && run.design !== undefined && active?.name !== run.design.name) take(run.design)
     },
 
     agentSpawned(agent: AgentSpawned): void {
@@ -385,6 +421,7 @@ export function createTracker() {
 
     /** Back to no run at all. */
     clear(): void {
+      handed = undefined
       begin('')
       state = emptyRunState()
       flush()
