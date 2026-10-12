@@ -4,9 +4,9 @@ import type { EngineInterface, On } from 'claude-code'
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
 import { visualizeBrief } from '../src/design/chat'
-import { flatten, parseDesign } from '../src/design/model'
+import { parseDesign } from '../src/design/model'
 import { VISUALIZE_HEADER, VISUALIZE_KEY, VISUALIZE_OPTIONS, VISUALIZE_QUESTION, reusedToast, storedVisualize, visualizeChoice, visualizeToast, visualizeTyped } from '../src/design/offer'
-import { DESIGN_PANE_ID, bareTarget, designFile, designName, endRun, followRun, handoffOf, initialTimes, initialUi, isSaved, openDesign, scriptFile, stampTimes } from '../src/design/session'
+import { DESIGN_PANE_ID, bareTarget, designFile, designName, endRun, followRun, handoffOf, initialTimes, initialUi, isSaved, scriptFile, stampTimes } from '../src/design/session'
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
 import { USAGE_KEYS } from '../src/run/journal'
@@ -17,7 +17,8 @@ import { buildRunRows, togglePhase } from '../src/ui/rail'
 import type { Part, Row } from '../src/ui/rail'
 import { FADED, GLYPH, PANE_ID, PANE_TITLE } from '../src/ui/theme'
 
-import { paneArgs } from './design'
+import { paneArgs, runBoardOf } from './design'
+import { offerSettled } from './offer'
 
 const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
@@ -42,7 +43,7 @@ const FIXTURES: Record<string, ReplayFixture> = { 'review-41': review41, 'partia
 // file that reads it): run.tsx writes them through the tracker, design.tsx reads them.
 const runAtom = atom({ plugin: 'conductor', key: 'run' } as const, emptyRunState())
 const clockAtom = atom({ plugin: 'conductor', key: 'runClock' } as const, 0)
-/** The design the tracked run was started from (a handoff); null for any other run. */
+/** The design the tracked run belongs to (handed off, or named as it); null for any other run. */
 const runDesignAtom = atom({ plugin: 'conductor', key: 'runDesign' } as const, null)
 const uiAtom = atom({ plugin: 'conductor', key: 'runUi' } as const, { expanded: [], collapsed: [] })
 /** When the run began and ended: stamped as its state is written. */
@@ -66,47 +67,6 @@ const tokensOf = (usage: unknown): number | undefined => {
   const counts = usage as Record<string, unknown>
 
   return USAGE_KEYS.reduce((sum, key) => sum + count(counts[key]), 0)
-}
-
-/** Copies a run's script beside its design; a run of that very file copies nothing. Never a throw. */
-const keepScript = async ($: EngineInterface, from: string, to: string): Promise<void> => {
-  if (from === to) return
-  try {
-    await $.fs.write(to, await $.fs.read(from))
-  } catch {
-    // The design is whole without it: the next handoff writes a script anew.
-  }
-}
-
-/**
- * A run that started with no design, of a workflow named as a saved design that is tied to a script (a block has
- * `match`): the run is shown on that design at once, as design.tsx's `attach` shows one on a design just drawn.
- * Null when there is no such design.
- */
-const reuseDesign = async ($: EngineInterface, tracker: Tracker, workflow: string | undefined, script: string | undefined): Promise<{ name: string; placed: boolean } | null> => {
-  if (workflow === undefined) return null
-  const name = designName(workflow)
-  const root = await $.session.root()
-  const path = designFile(root, name)
-  if (!isSaved(name) || !(await $.fs.exists(path))) return null
-  const shown = await read($, designUiAtom)
-  const onBoard = shown.name === name && shown.status === 'ready' ? await read($, designAtom) : null
-  // The board's copy when it shows this design (a field typed there and not sent is not in the file yet), else the file's.
-  const opened = onBoard === null ? openDesign(name, await $.fs.read(path), shown) : null
-  const design = onBoard ?? opened?.design ?? null
-  if (design === null || !flatten(design).some(row => row.node.match !== undefined)) return null
-  if (opened !== null) {
-    await update($, designAtom, () => opened.design)
-    await update($, designUiAtom, () => opened.ui)
-  }
-  if (script !== undefined) await keepScript($, script, scriptFile(root, name))
-  // The tracker's write reads the run's design and the board: both hold this design before it places the agents.
-  await update($, designUiAtom, held => ({ ...held, follow: true, runCleared: false }))
-  await update($, runDesignAtom, () => name)
-  tracker.adopt(handoffOf(name, design))
-  const pane = await $.ui.open(paneArgs(false)).catch(() => undefined)
-
-  return { name, placed: pane?.isPlaced !== false }
 }
 
 export const registerRun = (on: On, tracker: Tracker): void => {
@@ -203,8 +163,9 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     return { text: `Replaying ${name} (${speed ?? 'fast'}); token counts are made up.` }
   })
 
-  // The run starts here. One that no design claimed is asked about, the turn held meanwhile (API-NOTES S10): whether
-  // to draw a design of it. Whatever happens after the start, the tool's result goes back: never a throw.
+  // The run starts here. One named as a saved design is that design's, handed off or not, and is shown on it; one a
+  // handoff waited for is that design's under any name. A run no design claimed is asked about, the turn held meanwhile
+  // (API-NOTES S10): whether to draw a design of it. Whatever happens after the start, the tool's result goes back: never a throw.
   on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
     const answer = await next(e)
     const result = (answer as { result?: unknown }).result
@@ -212,7 +173,11 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     const { runId, workflowName, transcriptDir, scriptPath } = result as Record<string, unknown>
     const id = text(runId)
     if (id === undefined) return answer
-    tracker.runStarted({ runId: id, name: text(workflowName), transcriptDir: text(transcriptDir) })
+    const workflow = text(workflowName)
+    // The board is on the run's design before the tracker places an agent on it. Never a throw: a run is tracked all the same.
+    const board = runBoardOf()
+    const own = (await board?.designOfRun(workflow).catch(() => null)) ?? null
+    tracker.runStarted({ runId: id, name: workflow, transcriptDir: text(transcriptDir), design: own === null ? undefined : handoffOf(own.name, own.design) })
 
     try {
       // The script is the file the result names, in every form of the call (S11). A run started again keeps its drawing.
@@ -220,8 +185,19 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       await update($, runScriptAtom, held => (script === undefined ? null : { runId: id, path: script, drawn: held !== null && held.runId === id ? held.drawn : null }))
       const claimed = tracker.design()
       if (claimed !== undefined) {
-        // A design's own run: the script it was implemented as is kept beside it, for the next handoff to update.
-        if (script !== undefined && isSaved(claimed)) await keepScript($, script, scriptFile(await $.session.root(), claimed))
+        offerSettled(claimed)
+        // The script the design was implemented as is kept beside it, for the next handoff to update. Out of a handoff it
+        // is the design's script as of now. A run that only has the design's name (the person ran a workflow they had
+        // before) gives a design its first script, and never writes over the one it has: that one may be newer.
+        if (script !== undefined && isSaved(claimed)) {
+          const beside = scriptFile(await $.session.root(), claimed)
+          if (tracker.handedOff() || !(await $.fs.exists(beside).catch(() => true))) await board?.keepScript(script, beside)
+        }
+        // The board comes up with the run. Where nobody handed the design off, it is said where the run went.
+        if (own !== null) {
+          const pane = await $.ui.open(paneArgs(false)).catch(() => undefined)
+          if (!tracker.handedOff()) $.ui.toast(reusedToast(own.name, pane?.isPlaced !== false))
+        }
 
         return answer
       }
@@ -229,13 +205,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       if (e.agentId !== undefined || answer.deny !== undefined || answer.isError === true) return answer
       const surfaces = await $.session.surfaces().catch(() => undefined)
       if (surfaces !== undefined && surfaces.length === 0) return answer
-      // The workflow has a design drawn of its script before: no question, the run is on it.
-      const reused = await reuseDesign($, tracker, text(workflowName), script)
-      if (reused !== null) {
-        $.ui.toast(reusedToast(reused.name, reused.placed))
-
-        return answer
-      }
+      // With no script file there is nothing to draw a design of.
+      if (script === undefined) return answer
       const kept = storedVisualize(await $.store.get(VISUALIZE_KEY).catch(() => undefined))
       let choice = kept
       if (choice === null) {
@@ -254,7 +225,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         choice = picked.choice
       }
 
-      return choice === 'skip' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeBrief(script, kept === null)] }
+      return choice === 'skip' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeBrief(script, kept === null, workflow === undefined ? undefined : designName(workflow))] }
     } catch {
       return answer
     }

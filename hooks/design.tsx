@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderChildren } from 'claude-code'
 
-import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, attachNote, changeWords, changedNote, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, guideText, readReport, replaceDesign, showEdit, staleNote, toolDescription, unplacedNote } from '../src/design/chat'
+import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, attachNote, changeWords, changedNote, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, knownAfterEdit, readReport, replaceDesign, showEdit, staleNote, toolDescription, unplacedNote } from '../src/design/chat'
 import { UNDO_HINT, remember, travel } from '../src/design/history'
 import type { History } from '../src/design/history'
 import { lint, preflightLine, problemFields, problemParts } from '../src/design/lints'
@@ -47,6 +47,7 @@ import {
   isDefaultName,
   isSaved,
   listWindow,
+  movePick,
   moveStartMark,
   nothingToRestore,
   noticeInforms,
@@ -87,7 +88,7 @@ import type { PersonaSpan, Pose } from '../src/ui/persona'
 import { clip, firstLines, wrapText } from '../src/ui/text'
 import { ACCENT, FADED, GLYPH, PANE_TITLE, RULE } from '../src/ui/theme'
 
-import { takeOffered } from './offer'
+import { offerDrafted, offerPrompted, offerSettled, takeOffered } from './offer'
 
 // The designer: the hooks module owns the Design and everything chosen on it
 // (selection, view, add list), applies ops, saves the file and draws the screen:
@@ -165,34 +166,24 @@ const pickerKey = (): string => `${PICKER_KEY}:${LOAD}.${pickGen}`
 const isPickerField = (element: string | undefined): boolean => (element ?? '').startsWith(`${PICKER_KEY}:`)
 /**
  * The block picker's label: `design-label:design-type`. A Button, so that a click on the word opens the list of blocks
- * as a click on its value does; it is the stop before the picker, so Shift+Tab from the picker comes to it and is passed on (`offLabel`).
+ * as a click on its value does. Neither it nor the picker keeps the ring: on a Button the Left arrow is the engine's
+ * (it opens the agents list, and the pane goes), so the ring rests on fields alone and `t` opens the list.
  */
 const LABEL_KEY = 'design-label:'
-/**
- * Where a move of the person's that lands on the picker's label goes instead: to the picker; or, coming from the
- * picker (Shift+Tab stepping back, and it is the first stop), to the catcher. Any other element stays.
- */
-const offLabel = (element: string | undefined): string | undefined => {
-  if (element === undefined || !element.startsWith(LABEL_KEY)) return element
-  const picker = element.slice(LABEL_KEY.length)
-  if (ringOn !== picker) return picker
-  return drawnCatcher !== '' ? drawnCatcher : picker
-}
 /** The field a resting field's address stands for (`design-notes`); null for any other element. */
 const restBase = (element: string | undefined): string | null => (element !== undefined && element.startsWith(REST_KEY) ? baseOf(element.slice(REST_KEY.length)) : null)
 /**
- * The door: a second small Input, the stop right after the catcher while a block's fields are shown. The person's Tab
- * from the catcher lands on it, and that opens the fields (at rest they are text, with nothing to land on); being an
- * Input, it takes what is typed until the ring is on the title, and none of it is lost. With the fields open,
- * Shift+Tab from the title lands on it again: the way back to the graph. Emptied as the catcher is.
+ * The door: a second small Input, the stop right after the catcher while a block's fields are shown. The person's
+ * Down arrow (or Tab) from the catcher lands on it, and that opens the fields (at rest they are text, with nothing to
+ * land on); being an Input, it takes what is typed until the ring is on the title, and none of it is lost. With the
+ * fields open, a step back from the first field that lands on it is the way back to the graph. Emptied as the catcher is.
  */
 const DOOR_KEY = 'door'
 let doorGen = 0
 const doorKey = (): string => `${DOOR_KEY}:${LOAD}.${doorGen}`
 const isDoor = (element: string | undefined): boolean => (element ?? '').startsWith(`${DOOR_KEY}:`)
-/** Whether an element is a field or the type picker of the detail pane: where the ring may rest besides the catcher. */
-const isDetailStop = (element: string | undefined): boolean =>
-  element !== undefined && (isField(element) || isPickerField(element) || element.startsWith('pick:') || restBase(element) !== null || element === TYPE_KEY)
+/** Whether an element is a field of the detail pane or the add list's filter: where the ring may rest besides the catcher. */
+const isDetailStop = (element: string | undefined): boolean => element !== undefined && (isField(element) || isPickerField(element) || restBase(element) !== null)
 /** How long after the command's answer the handoff prompt is submitted. */
 export const SUBMIT_DELAY_MS = 64
 /** How many times the ring is sent to an element before the field is given up. */
@@ -205,7 +196,7 @@ export const BOX_POLL_MS = 600
 export const DESIGN_VERBS = /^\s*((design|run|list|draft|delete|rename)(\s|$)|replay\s+design(\s|$)|$)/
 /** The header's rows: the persona's two, the name on the first. */
 const HEAD_ROWS = 2
-const EDIT_HINT = 'click a field of the block, or press Tab to reach the name'
+const EDIT_HINT = 'click a field of the block, or press the Down arrow to reach the name'
 /** The graph's region is never asked to be shorter than this while the detail pane, under it, has rows to give. */
 const GRAPH_LEAST_ROWS = 3
 /** Stacked, the detail pane at rest takes this share of the rows between header and footer. */
@@ -271,6 +262,11 @@ const forgetSeenDesigns = (): void => {
 }
 /** The revision the model was last told is stale, so it is told once per change and not with every prompt. */
 const warnedAt: Record<string, number> = {}
+/** Another conversation (a /clear, a resume): Claude has seen no design in it, whole or in part, and was told of no change. */
+const forgetConversation = (): void => {
+  forgetSeenDesigns()
+  for (const book of [seenByClaude, warnedAt]) for (const name of Object.keys(book)) delete book[name]
+}
 /** A change was made: it counts as a revision, and the design before it is what `u` returns to. */
 const record = (name: string, before: Design | null, what: string | undefined): void => {
   revisions[name] = (revisions[name] ?? 0) + 1
@@ -419,7 +415,7 @@ const scriptOf = async ($: EngineInterface, root: string, name: string): Promise
   return (await $.fs.exists(path).catch(() => false)) ? path : null
 }
 
-/** Copies a run's script beside its design; a run of that very file copies nothing. False when it could not be done, never a throw. (run.tsx has its own: `$` does not cross files.) */
+/** Copies a run's script beside its design; a run of that very file copies nothing. False when it could not be done, never a throw. */
 const keepScript = async ($: EngineInterface, from: string, to: string): Promise<boolean> => {
   if (from === to) return true
   try {
@@ -442,6 +438,43 @@ const showRunOn = async ($: EngineInterface, tracker: Tracker, name: string, des
 
   return tracker.adopt(handoffOf(name, design))
 }
+
+/**
+ * The saved design a run's workflow is named as (the designs' name rule), put on the board for that run: what was
+ * typed into a field and not sent is saved first, the board's own copy is taken where it shows the design, else the
+ * file is opened in its place, and the selection is set to follow the run. Null when no saved design has the name.
+ * The caller tells the tracker next (its write reads the run's design and the board, so both are set here), then
+ * opens the pane (`paneArgs`).
+ */
+const designOfRun = async ($: EngineInterface, workflow: string | undefined): Promise<{ name: string; design: Design } | null> => {
+  if (workflow === undefined) return null
+  const name = designName(workflow)
+  const path = designFile(await $.session.root(), name)
+  if (!isSaved(name) || !(await $.fs.exists(path).catch(() => false))) return null
+  await flushDrafts($)
+  const shown = await read($, uiAtom)
+  let design = shown.name === name && shown.status === 'ready' ? await read($, designAtom) : null
+  if (design === null) {
+    const opened = openDesign(name, await $.fs.read(path).catch(() => ''), shown)
+    if (opened.design === null) return null
+    design = opened.design
+    await update($, designAtom, () => opened.design)
+    await update($, uiAtom, () => opened.ui)
+  }
+  await update($, uiAtom, held => ({ ...held, follow: true, runCleared: false }))
+  await update($, runDesignAtom, () => name)
+
+  return { name, design }
+}
+
+/**
+ * What run.tsx asks of the board when a run starts. `$` does not cross files (`claude plugin validate` refuses a `$`
+ * passed to an imported function), so the session's start hook below gives these theirs, as the tracker's host gets its.
+ */
+export type RunBoard = { designOfRun: (workflow: string | undefined) => Promise<{ name: string; design: Design } | null>; keepScript: (from: string, to: string) => Promise<boolean> }
+let runBoard: RunBoard | undefined
+/** Undefined until the session has started. */
+export const runBoardOf = (): RunBoard | undefined => runBoard
 
 /** Whether a run of the design shown locks it now. */
 const lockedNow = async ($: EngineInterface): Promise<boolean> => {
@@ -585,7 +618,7 @@ const landOn = ($: EngineInterface, target: () => string, hint: string): void =>
 
 /**
  * Opens the fields of the selected block for typing, the ring on `base` (its first field when none is named): what `e`
- * does, for the ways that are not a key (Tab from the catcher, a click on a field at rest).
+ * does, for the ways that are not a key (the Down arrow from the catcher, a click on a field at rest).
  */
 const openFields = async ($: EngineInterface, base?: string): Promise<void> => {
   const ui = await read($, uiAtom)
@@ -853,7 +886,7 @@ const openEntry = async ($: EngineInterface, at?: number): Promise<void> => {
   else await startFrom($, entry.id)
 }
 
-/** One key on the start screen: `w` / `s` move the mark, Enter opens the marked row, `?` turns the help pages and `x` closes them. */
+/** One key on the start screen: `w` / `s` move the mark (the arrows do too: the `ui.focus` hook), Enter opens the marked row, `?` turns the help pages and `x` closes them. */
 const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   if (key === ENTER) {
     await openEntry($)
@@ -929,10 +962,10 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   }
   const edited = op === 'edit' && step.ui.editing && step.design && step.ui.selectedId !== null ? findNode(step.design, step.ui.selectedId) : undefined
   if (edited) landOn($, () => fieldKey(firstField(edited), edited.id), `edit: ${EDIT_HINT}`)
-  if (op === 'add' && step.ui.picker) {
+  if ((op === 'add' || op === 'retype') && step.ui.picker) {
     // A new filter, with nothing typed in it.
     pickGen++
-    landOn($, pickerKey, 'new block: press Tab to reach the filter')
+    landOn($, pickerKey, op === 'add' ? 'new block: click the filter to type in it' : 'block: click the filter to type in it')
   }
 
   return true
@@ -969,7 +1002,7 @@ const catchKeys = ($: EngineInterface, element: string, kind: 'change' | 'submit
 }
 
 /**
- * What the door was given: the person's Tab left the ring on it and the fields are opening. Whatever is typed here
+ * What the door was given: the person's Down arrow left the ring on it and the fields are opening. Whatever is typed here
  * is the title's text, as what is typed into the catcher after `e` is; Enter saves it.
  */
 const doorKeys = ($: EngineInterface, element: string, kind: 'change' | 'submit', value: string): void => {
@@ -1088,6 +1121,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       delete revisions[name]
       delete seenByClaude[name]
       delete seenDesigns[name]
+      delete warnedAt[name]
       // The pane was showing it: nothing is shown in its place but the way to open another.
       if ((await read($, uiAtom)).name === name) {
         await update($, designAtom, () => null)
@@ -1272,6 +1306,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const handoff = buildHandoff(parsed.design, path, await scriptOf($, root, name))
       // The next run to start is this design's: its agents count against these ids.
       tracker.handoff(handoffOf(name, parsed.design))
+      offerSettled(name)
       // The pane shows the design being run, whatever it showed before; the keyboard stays in the prompt.
       const shownUi = await read($, uiAtom)
       if (shownUi.name !== name || shownUi.status !== 'ready') {
@@ -1367,6 +1402,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   // The matcher is always true: run.tsx holds the unmatched session.start.
   on('session.start', { cwd: /^/ }, async ($, e, next) => {
     await $.tool.register({ name: TOOL_NAME, description: toolDescription(), inputSchema: TOOL_SCHEMA, isDeferred: true })
+    runBoard = { designOfRun: workflow => designOfRun($, workflow), keepScript: (from, to) => keepScript($, from, to) }
     // A load (the first, or a reload): the state outlives it, what it said of the moment does not. No field is open,
     // nothing waits in the prompt box under a `run: …` line, and the ring starts on the catcher.
     await update($, uiAtom, held =>
@@ -1386,7 +1422,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     await flushDrafts($)
     const shown = await read($, uiAtom)
     // A "Conductor" answer whose draft never came is over with its turn: a later edit from chat leaves the keyboard alone.
-    takeOffered()
+    offerPrompted()
+    // The person's own words in the conversation (a notice of a run that ended is not): a handoff that waits for its run waits on.
+    if ((e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk') && !e.text.trimStart().startsWith('/')) tracker.prompted()
     // A prompt was sent: whatever waited in the box for the keys is on its way, and the line that said so is spent.
     if (shown.handed || (shown.notice !== null && /^(run|ask): /.test(shown.notice))) {
       await update($, uiAtom, held => ({ ...held, handed: false, notice: held.notice === HANDED_NOTICE || (held.notice !== null && /^(run|ask): /.test(held.notice)) ? null : held.notice }))
@@ -1426,6 +1464,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const parsed = parseDesign(await $.fs.read(path).catch(() => ''))
     if (!parsed.ok || isBlank(parsed.design)) return next(pass)
     tracker.handoff(handoffOf(name, parsed.design))
+    offerSettled(name)
     await update($, uiAtom, held => ({ ...held, follow: true, runCleared: false, notice: held.notice?.startsWith('run: ') ? null : held.notice }))
     // `/conductor run` recorded the conventions with its own answer: once is enough.
     if (delivered === name) {
@@ -1437,16 +1476,17 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     return next({ ...pass, context: [...context, ...buildHandoff(parsed.design, path, await scriptOf($, root, name)).context] })
   })
 
-  // The summary that takes the conversation's place does not hold the design as Claude read it, and a cleared
-  // conversation holds nothing: a change made by hand after either is not said against it, Claude reads again.
+  // The summary that takes the conversation's place does not hold the design as Claude read it: a change made by hand
+  // after it is not said against it, Claude reads again. A `precompute` installs no summary (API-NOTES S15). A cleared
+  // conversation, and the one a resume leaves, hold nothing of any design.
   on('session.compact', async ($, e, next) => {
     const answer = await next(e)
-    if (e.agentId === undefined && answer.skip === undefined) forgetSeenDesigns()
+    if (e.trigger !== 'precompute' && e.agentId === undefined && answer.skip === undefined) forgetSeenDesigns()
 
     return answer
   })
-  on('session.end', { reason: 'clear' }, async ($, e, next) => {
-    forgetSeenDesigns()
+  on('session.end', { reason: ['clear', 'resume'] }, async ($, e, next) => {
+    forgetConversation()
 
     return next(e)
   })
@@ -1456,8 +1496,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   on('tool.call', { tool: TOOL_FULL_NAME }, async ($, e) => {
     const input = e as unknown as Record<string, unknown>
     const action = input.action
-    if (action === 'guide') return { result: guideText() }
-    if (action !== 'read' && action !== 'apply' && action !== 'write' && action !== 'attach') return { deny: 'action must be one of read, apply, write, attach, guide' }
+    if (action !== 'read' && action !== 'apply' && action !== 'write' && action !== 'attach') return { deny: 'action must be one of read, apply, write, attach' }
 
     // Text typed into a field and not sent is the person's edit: saved first, so Claude reads it, and an edit made
     // without having read it is refused as stale (below) instead of writing over it.
@@ -1469,7 +1508,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const tracked = tracker.state()
     if (action === 'attach' && (ran === null || tracked.status === 'idle' || tracked.runId !== ran.runId)) return { deny: 'No workflow run is tracked now, so there is no run to attach a design to. Nothing was changed.' }
     const name = asked ?? (action === 'attach' ? (ran?.drawn ?? null) : ui.status === 'ready' ? ui.name : null)
-    if (name === null) return { deny: action === 'attach' ? 'attach needs `name`: a short kebab-case name for the design. Nothing was changed.' : `No design is open on the board and no name was given. Pass name, or ask the user to open one with /${COMMAND} design <name>.` }
+    if (name === null) return { deny: action === 'attach' ? 'attach needs `name`: a short kebab-case name for the design. Nothing was changed.' : `No design is open on the board and no \`name\` was given, so there is no design to ${action}. Nothing was changed.` }
     const root = await $.session.root()
     const path = designFile(root, name)
     const isOpen = ui.status === 'ready' && ui.name === name
@@ -1477,8 +1516,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       // The first attach of this run under this name: the run must be nobody's yet, and the name free.
       const owner = tracker.design()
       if (owner !== undefined && owner !== name) return { deny: `This run already belongs to design ${owner}. Nothing was changed.` }
-      if (!isSaved(name)) return { deny: `Names starting with ${SCRATCH_PREFIX} are kept for replays. Nothing was changed: pick another name and call attach again.` }
-      if (owner === name || isOpen || (await $.fs.exists(path))) return { deny: `A design named ${name} exists that this run did not create. Nothing was changed: pick another name and call attach again.` }
+      if (!isSaved(name)) return { deny: `Names starting with ${SCRATCH_PREFIX} are kept for replays. Nothing was changed. A name no design has is free to use.` }
+      if (owner === name || isOpen || (await $.fs.exists(path))) return { deny: `A design named ${name} exists that this run did not create. Nothing was changed. A name no design has is free to use.` }
     }
     let design: Design | null = isOpen ? await read($, designAtom) : null
     if (design === null) {
@@ -1498,12 +1537,17 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       return { result: readReport(design, { open: isOpen, selectedId: isOpen ? ui.selectedId : null, locked, revision: revisions[name] ?? 0 }) }
     }
     // The lock the board applies to the person's own edits. An attach is past it: the design is this run's own drawing.
-    if (locked && action !== 'attach') return { deny: `Design ${name} is being run: editing is locked until the run ends, for the board and for you alike. Tell the user; do not retry.` }
+    if (locked && action !== 'attach') return { deny: `Design ${name} is being run: editing is locked until the run ends, for the board and for you alike. Nothing was changed.` }
 
     // An edit made from memory of a board that has since changed by hand would undo the person's work.
     const known = seenByClaude[name]
     if (known !== undefined && known !== (revisions[name] ?? 0)) {
-      return { deny: `The user changed design ${name} on the board by hand since you last read it (it is now revision ${revisions[name] ?? 0}, you saw ${known}). Nothing was changed. Call read, then send the edit again from what it shows.` }
+      return { deny: `The user changed design ${name} on the board by hand since you last read it (it is now revision ${revisions[name] ?? 0}, you saw ${known}), so this edit was made from a board that is gone. Nothing was changed.` }
+    }
+    // A whole tree written over a design Claude has not seen in this conversation would replace the person's work unread
+    // (a draft Claude named as a design that exists). An attach is guarded above; a design with no block yet is free.
+    if (action === 'write' && known === undefined && !isBlank(design)) {
+      return { deny: `A design named ${name} exists and you have not read it in this conversation, so a write would replace it unseen. Nothing was changed. A name no design has is free to use.` }
     }
     const edit = action === 'apply' ? applyOps(design, input.ops) : replaceDesign(design, input.nodes)
     if (!edit.ok) return { deny: edit.error }
@@ -1517,9 +1561,13 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // Undone like any edit made by hand; and Claude has seen what it just wrote.
     const said = changeWords(edit)
     if (said !== '') record(name, design, `Claude ${said}`)
-    // An apply on a design Claude does not hold whole (no read since the load, a compaction or a clear) leaves it with its own blocks only.
-    if (action !== 'apply' || seenDesigns[name] !== undefined) sawDesign(name, edit.design)
-    else seenByClaude[name] = revisions[name] ?? 0
+    // What Claude holds of it now is what it sent and what the answer says. Where the design stored has more (text a
+    // kind filled in, a block from a design it never read whole), no later change is said against it: Claude reads again.
+    if (knownAfterEdit(edit.design, seenDesigns[name], input)) sawDesign(name, edit.design)
+    else {
+      delete seenDesigns[name]
+      seenByClaude[name] = revisions[name] ?? 0
+    }
     await update($, designAtom, () => edit.design)
     await update($, uiAtom, held => showEdit(held, name, edit.design, edit))
     const seq = (await read($, uiAtom)).flash?.seq ?? 0
@@ -1531,6 +1579,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // Shown, but the keyboard stays where the person is typing. The draft the person asked for in the question before a
     // workflow is theirs to review next: its board takes the keyboard, as `/conductor design` gives it.
     const offered = action === 'write' && takeOffered()
+    if (offered) offerDrafted(name)
     const opened = await $.ui.open(paneArgs(offered)).catch(() => undefined)
     if (offered) settleRing($)
     $.clock.after(FLASH_CLEAR_MS, () => {
@@ -1625,19 +1674,28 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     return {}
   })
 
-  // Where the ring is. The person's Tab and arrows walk it over every stop: a move that lands on anything that is
-  // neither a field nor the type picker (the engine's own stop on the pane's close mark, where Enter would close the pane) is
-  // followed at once by the mod's own move back to the catcher. A move cannot be sent elsewhere in the chain: the engine
-  // refuses an element where the person's move named none. The ring on a field is "editing". The mod's own moves do
-  // not come here (they are settled where they are made).
-  on('ui.focus', { requestId: DESIGN_PANE_ID }, async ($, raised, next) => {
-    const person = raised.origin.kind === 'person'
-    // The picker's label never keeps the ring: the move is sent on to the picker.
-    const sent = person ? offLabel(raised.element) : raised.element
-    const e = sent === raised.element ? raised : { ...raised, element: sent }
+  // Where the ring is. The person's arrows (Up, Down) and Tab walk it over every stop: a move that lands on anything
+  // that is not a field (the block picker's row, the engine's own stop on the pane's close mark, where Enter would close
+  // the pane) is followed at once by the mod's own move back to the catcher. A move cannot be sent elsewhere in the
+  // chain: the engine refuses an element where the person's move named none. The ring on a field is "editing". The
+  // mod's own moves do not come here (they are settled where they are made).
+  on('ui.focus', { requestId: DESIGN_PANE_ID }, async ($, e, next) => {
+    const person = e.origin.kind === 'person'
     const before = await read($, uiAtom)
+    // The add list is open and the ring left its filter: the arrows choose. A step that lands on a row of the list
+    // was Down; any other (the stop before the filter) was Up. The ring goes back to the filter: letters stay its text.
+    if (person && before.status === 'ready' && before.picker !== null && !isPickerField(e.element)) {
+      const moved = await next(e)
+      if (moved.deny !== undefined) return moved
+      const design = await read($, designAtom)
+      await update($, uiAtom, held => movePick(design, held, (e.element ?? '').startsWith('pick:') ? 1 : -1))
+      await $.ui.focus({ requestId: DESIGN_PANE_ID, key: pickerKey() }).catch(() => settleRing($))
+      $.ui.invalidate('ui.render')
+
+      return moved
+    }
     const door = person && isDoor(e.element)
-    // On the door with the fields open, the person stepped back from the title: the way to the graph.
+    // On the door with the fields open, the person stepped back from the first field: the way to the graph.
     const leaves = door && before.editing
     const stray = person && (before.status === 'ready' || before.status === 'pick') && drawnCatcher !== '' && !isCatcher(e.element) && !isDetailStop(e.element) && !door
     const was = ringOn
@@ -1650,14 +1708,16 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       return moved
     }
     if (stray || leaves) await $.ui.focus({ requestId: DESIGN_PANE_ID, key: drawnCatcher }).catch(() => settleRing($))
-    // The ring left where it was: what was typed there is saved (Tab to the next field, a click on the type).
+    // On the start screen the arrows choose, as in the add list: a step onto a row was Down, any other Up.
+    if (stray && before.status === 'pick') await update($, uiAtom, held => ({ ...moveStartMark(held, (e.element ?? '').startsWith(START_KEY) ? 1 : -1), help: 0 }))
+    // The ring left where it was: what was typed there is saved (an arrow to the next field, a click on the block).
     const flushed = person ? await flushDrafts($) : null
-    // In the detail pane: on a field, on the type picker, or on the way to one (the door, a field at rest).
+    // In the detail pane: on a field, or on the way to one (the door, a field at rest).
     const rest = stray ? null : restBase(e.element)
-    const inDetail = !stray && !leaves && (isField(e.element) || e.element === TYPE_KEY || door || rest !== null)
+    const inDetail = !stray && !leaves && (isField(e.element) || door || rest !== null)
     const held = await read($, uiAtom)
     if (held.status === 'ready' && held.editing !== inDetail && (inDetail || person)) await update($, uiAtom, ui => ({ ...ui, editing: inDetail, freshId: inDetail ? ui.freshId : null }))
-    // The person's Tab from the catcher: the fields open, and the ring goes on to the first. (A field at rest it came to rest on: that field.)
+    // The person's Down arrow from the catcher: the fields open, and the ring goes on to the first. (A field at rest it came to rest on: that field.)
     if ((door && !leaves) || rest !== null) await openFields($, rest ?? undefined)
     await keepSaid($, flushed)
     // The legend and the detail pane's last rows name the keys of where the ring is.
@@ -2192,7 +2252,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const matches = picking && ui.picker ? pickerMatches(design, ui.picker) : []
     const marker = matches[Math.min(ui.picker?.pick ?? 0, Math.max(0, matches.length - 1))]
     const editable = node !== undefined && !locked
-    // The fields are text to read until they are opened (`e`, Enter, Tab, a click on one): only then are they drawn to type in.
+    // The fields are text to read until they are opened (`e`, Enter, the Down arrow, a click on one): only then are they drawn to type in.
     const fielding = editable && ui.editing && focused && !picking && !helping && Input !== null
     // The fields closed since the last drawing: the ones opened next are new ones.
     if (fieldsDrawn && !fielding) editGen++
@@ -2260,7 +2320,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const step = await commit($, (before, held, context) => openRetype(before, held, target.id, context))
       if (!step.ui.picker) return
       pickGen++
-      landOn($, pickerKey, 'type: press Tab to reach the filter')
+      landOn($, pickerKey, 'block: click the filter to type in it')
     }
 
     // The detail pane's parts. A thin rule stands under its heading; a blank row between two fields and two sections, while there are rows for it.
@@ -2374,8 +2434,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const typeLine = (target: DesignNode): Item => ({
       rows: 1,
       el: (
-        // The row is the first of the block's own: its label is the stop before the picker, and the picker the one before
-        // the name. Shift+Tab from the name comes to the picker; from the picker to the label, which passes it on to the graph (`offLabel`).
+        // The row is the first of the block's own. A step back from the name lands on it and is passed on to the graph
+        // (the `ui.focus` hook): it is pressed with the pointer, and `t` opens the same list.
         <Box flexDirection="row" flexShrink={0}>
           <Box width={PICKER_LABEL_W} flexShrink={0}>
             <Button key={`${LABEL_KEY}${TYPE_KEY}`} plain onPress={() => retype(target)}>

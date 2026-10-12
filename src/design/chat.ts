@@ -4,9 +4,10 @@
 // the tool answers with. Every edit goes through ops.ts and is checked by
 // parseDesign before it counts. Pure TypeScript: no `$`, no engine imports.
 
-import { outline } from './handoff'
+import { OUTLINE_MAX, outline } from './handoff'
+import { OFFER_TOOL_FULL_NAME } from './offer'
 import { lint } from './lints'
-import { CONTAINER_TYPES, EFFORTS, KINDS, NODE_TYPES, startOf, typeName, canHoldChildren, findNode, flatten, kindsOf, parseDesign, readType, serializeDesign } from './model'
+import { CONTAINER_TYPES, KINDS, NODE_TYPES, startOf, typeName, canHoldChildren, findNode, flatten, kindsOf, parseDesign, readType, serializeDesign } from './model'
 import type { Design, DesignNode, Kind, Row } from './model'
 import { addNode, moveNode, nextIdNumber, removeNode, retypeNode, updateNode } from './ops'
 import type { NodePatch, Place } from './ops'
@@ -21,7 +22,7 @@ export const TOOL_NAME = 'design'
 export const TOOL_FULL_NAME = 'mcp__conductor__design'
 export const DESIGN_DIR_HINT = `${DESIGN_DIR}/<name>.json`
 
-export const ACTIONS = ['read', 'apply', 'write', 'attach', 'guide'] as const
+export const ACTIONS = ['read', 'apply', 'write', 'attach'] as const
 export const OP_KINDS = ['add', 'update', 'move', 'remove'] as const
 
 const KNOB_NAMES = Object.keys(KNOB_HELP)
@@ -52,26 +53,26 @@ function knobLine(): string {
     .join('; ')
 }
 
-/** What the model reads once it has loaded the tool (it is deferred: only its name is in every turn). The long cards are behind `guide`. */
+/** What the model reads once it has loaded the tool (it is deferred: only its name is in every turn). */
 export function toolDescription(): string {
   return [
     `Reads and edits the user's Conductor workflow design: the board of blocks they see, saved at ${DESIGN_DIR_HINT}. Use it whenever the user asks to draft, add, change, move or remove workflow blocks or steps ("add a verify after n3", "this block"); do not edit that file by hand. A design is a spec the user reviews, not a script: never run it from here.`,
-    'Actions: read = the design JSON, the block selected on the board ("this block") and the lints. Always read before you describe, review or edit a design: the user changes the board by hand between your turns, so what you read or wrote earlier may be gone (every answer names the revision it shows). apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures): keep the id of every block that stays, leave id off new ones. attach = a write, with `match`, of a design OF the workflow run tracked now: the run shows on it. guide = the long help card of every type. `name` defaults to the design open on the board. An edit shows on the board at once and returns the lints: fix them or tell the user.',
-    "Block: { id, type, kind?, name, logic?, knobs?, match?, children? }. Ids (n1, n2…) are assigned for you and never change. name is a short label; logic is free text saying what the block should do. match only ties a block to a script that exists (see the schema). Order is execution order. Only containers hold children. Blocks directly inside a branch are its arms (one runs, picked by its `condition`), and directly inside a parallel they run side by side: to run two blocks one after the other there, put both in a pipeline. Every design starts with its start block: it is not added, moved or removed, and it alone has the knobs `goal` (the goal of the whole workflow, in a sentence: set it when drafting, keep it true) and `args` (the workflow's input, or unset for none). Update it by id; in a write, put it first, or leave it out to keep it as it is. A phase only frames its blocks: they run in order where it stands.",
+    'Actions: read = the design JSON, the block selected on the board ("this block") and the lints. Read before you describe, review or edit a design, unless a Conductor note with the prompt has told you what changed: the user changes the board by hand between your turns, so what you read or wrote earlier may be gone (every answer names the revision it shows). apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures). attach = a write, with `match`, of a design OF the workflow run tracked now: the run shows on it. An edit shows on the board at once and returns the lints: fix them or tell the user.',
+    "Block: { id, type, kind?, name, logic?, knobs?, match?, children? }. Ids (n1, n2…) are assigned for you and never change. name is a short label; logic is free text saying what the block should do. Order is execution order. Only containers hold children. Blocks directly inside a branch are its arms (one runs, picked by its `condition`), and directly inside a parallel they run side by side: to run two blocks one after the other there, put both in a pipeline. Every design starts with its start block: it is not added, moved or removed, and it alone has the knobs `goal` (the goal of the whole workflow, in a sentence: set it when drafting, keep it true) and `args` (the workflow's input, or unset for none). Update it by id; in a write, put it first, or leave it out to keep it as it is.",
     'Types:',
     ...typeLines(),
-    `Kinds: \`kind\` names the pattern a block is used for (each explained on \`kind\` in the schema); leave it out for the plain block. ${kindNames()}. A new block of a kind gets the knobs its pattern needs where you set none. The board and the lints say a key in words: oncePer is "once per", stopCondition "stop condition".`,
-    // What each knob means is said on `knobs` in the schema: a description is cut at 4096 characters, and the types take them.
+    `Kinds: \`kind\` names the pattern a block is used for (each explained on \`kind\` in the schema); leave it out for the plain block. ${kindNames()}.`,
+    // A description is cut at 4096 characters, and the types take them: what belongs to one field (what each knob and kind means, how a write keeps ids) is said on that field in the schema.
     `Knobs, all optional, explained on \`knobs\` in the schema: ${KNOB_NAMES.join(', ')}.`,
   ].join('\n')
 }
 
 const BLOCK_FIELDS = {
   type: { enum: [...NODE_TYPES] },
-  kind: { type: 'string', description: `Optional: the pattern, by type. ${kindLine()}. In an update, "" makes the block plain again.` },
+  kind: { type: 'string', description: `Optional: the pattern, by type. ${kindLine()}. A new block of a kind gets the knobs its pattern needs where you set none. In an update, "" makes the block plain again.` },
   name: { type: 'string' },
   logic: { type: 'string' },
-  knobs: { type: 'object', description: `All optional: ${knobLine()}. In an update, "" clears a knob.` },
+  knobs: { type: 'object', description: `All optional: ${knobLine()}. The board and the lints say a key in words: oncePer is "once per", stopCondition "stop condition". In an update, "" clears a knob.` },
   match: { type: 'array', items: { type: 'string' }, description: "Only on a design of a script that exists: the script's agent labels or phase titles this block stands for, each exact, or a prefix when it ends in *. In an update, [] clears it." },
   children: { type: 'array', items: { type: 'object' }, description: 'Blocks inside a container, same shape.' },
 }
@@ -94,29 +95,11 @@ export const TOOL_SCHEMA: Record<string, unknown> = {
     },
     nodes: {
       type: 'array',
-      description: 'write/attach. The whole tree, top level first.',
+      description: 'write/attach. The whole tree, top level first: keep the id of every block that stays, leave id off new ones.',
       // The knobs are explained once, on the ops.
       items: { type: 'object', required: ['type', 'name'], properties: { id: { type: 'string', description: 'Only for a block that already exists.' }, ...BLOCK_FIELDS, kind: { type: 'string', description: 'The same kinds as in `ops`.' }, knobs: { type: 'object', description: 'The same knobs as in `ops`.' }, match: { type: 'array', items: { type: 'string' }, description: 'As in `ops`.' } } },
     },
   },
-}
-
-/** Every type's long card: what `guide` answers. */
-export function guideText(): string {
-  const lines: string[] = [`Containers (the only blocks that hold children): ${CONTAINER_TYPES.join(', ')}.`, `Knobs: ${knobLine()}.`, `Effort values: ${EFFORTS.join(', ')}.`, '']
-  for (const type of NODE_TYPES) {
-    lines.push(`${type}${TEACH[type].name === type ? '' : ` — ${TEACH[type].name}`}: ${TEACH[type].hint}. Use when ${TEACH[type].when}.`)
-    for (const line of TEACH[type].card) lines.push(`  ${line}`)
-    // Its kinds but the plain one, each with what it fills in and what it is in the script.
-    for (const kind of kindsOf(type).slice(1)) {
-      const teach = KIND_TEACH[kind]
-      const fill = Object.entries(teach.fill ?? {}).map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-      lines.push(`  kind ${kind}: ${teach.hint}. Use when ${teach.when}.`)
-      for (const line of teach.card) lines.push(`    ${line}`)
-      lines.push(`    In the script: ${teach.script}.${fill.length > 0 ? ` Filled in on a new block: ${fill.join(', ')}.` : ''}`)
-    }
-  }
-  return lines.join('\n')
 }
 
 /** What a draft is, whichever way it was asked for: the two sentences every brief for one says. */
@@ -149,22 +132,25 @@ export function offerBrief(asked: boolean): string {
     `Make it with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "write", a short kebab-case name of your choosing and the nodes, the start block first with the goal of the workflow in its \`goal\` knob.`,
     ...DRAFT_RULES,
     'Afterwards stop: the user takes it from there. Say in two or three lines what the blocks do, name any lint you chose to leave, and tell the user to review and edit the design on the board and to approve it there with r (or with /conductor run <name>).',
+    `If they then tell you in chat to run it, call ${OFFER_TOOL_FULL_NAME} again before anything else: its answer says how this design is run.`,
   ].join('\n')
 }
 
 /**
  * What a "Visualize" answer adds to the Workflow tool's result: Claude draws a design of the script that is running.
- * `scriptPath` is the run's script file; `asked` is false when an "Always visualize" kept earlier answered.
+ * `scriptPath` is the run's script file; `asked` is false when an "Always visualize" kept earlier answered. `name` is
+ * the workflow's name as a design's (`designName`), undefined for a run that has none: under it the next run of the
+ * same script finds the design, and is shown on it with no question.
  */
-export function visualizeBrief(scriptPath: string | undefined, asked: boolean): string {
+export function visualizeBrief(scriptPath: string, asked: boolean, name: string | undefined): string {
   return [
     `Conductor: ${asked ? 'the user chose to see' : 'the user chose Always visualize earlier, so they see'} this workflow run as a design on the Conductor board. The run goes on meanwhile: do not change, re-run or stop the script.`,
     '',
-    `Draw the design OF the script that is running with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "attach", a short kebab-case name and the nodes, the start block first with the workflow's goal in its \`goal\` knob.`,
+    `Draw the design OF the script that is running with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "attach", ${name === undefined ? 'a short kebab-case name' : `name "${name}" (the workflow's own name as a design's: the next run of this script is then shown on this design without a question)`} and the nodes, the start block first with the workflow's goal in its \`goal\` knob.`,
     "- The nodes mirror the script's real structure: its phases, pipelines, parallels, loops, branches and agents, no more.",
     '- `match` ties the run to the blocks. It goes on the INNERMOST block an agent belongs to, and a label on one block only (never also on the container around it): the exact `label` of each agent() the block stands for, or the fixed start of the label and a * ("review *") where the script builds it at runtime.',
     "- Where the script groups its agents by `phase`, the top-level block of each phase gets that phase's exact title in `match`.",
-    ...(scriptPath === undefined ? [] : [`The script, if you do not hold its text: ${scriptPath}`]),
+    `The script, if you do not hold its text: ${scriptPath}`,
     'The answer lists the agent labels no block took: fix `match` and call attach again under the same name. Afterwards tell the user in one or two lines what the board shows.',
   ].join('\n')
 }
@@ -474,7 +460,7 @@ function lintLines(design: Design): string[] {
 export type ReadState = { open: boolean; selectedId: string | null; locked: boolean; revision?: number }
 
 function revisionWords(revision: number | undefined): string {
-  return revision === undefined ? '' : ` Revision ${revision}: the user edits the board by hand, so read again before relying on this later.`
+  return revision === undefined ? '' : ` Revision ${revision}: the user edits the board by hand, so in a later turn read again before relying on this, unless a Conductor note with that prompt says what changed.`
 }
 
 export function readReport(design: Design, state: ReadState): string {
@@ -502,6 +488,28 @@ export function editReport(design: Design, change: Change, revision?: number): s
   ].join('\n')
 }
 
+/**
+ * Whether Claude holds `stored` whole after the edit it made with `input`: the answer's outline names every block
+ * (id, type, kind, name, place), and each text the outline does not say (logic, knob values with the start block's goal among them, `match`) is one
+ * Claude sent in this edit or one the block had in the design it last saw (`seen`). False for a text that came from
+ * elsewhere: what a kind fills in, a block kept from a design Claude never read.
+ */
+export function knownAfterEdit(stored: Design, seen: Design | undefined, input: unknown): boolean {
+  const rows = flatten(stored)
+  if (rows.length > OUTLINE_MAX) return false
+  const sent = new Set<string>()
+  const collect = (value: unknown): void => {
+    if (typeof value === 'string') sent.add(value)
+    else if (Array.isArray(value)) value.forEach(collect)
+    else if (isRecord(value)) Object.values(value).forEach(collect)
+  }
+  collect(input)
+  const texts = (node: DesignNode | undefined): string[] => (node ? [`logic=${node.logic ?? ''}`, ...Object.entries(node.knobs ?? {}).map(([key, value]) => `${key}=${String(value)}`), ...(node.match ?? []).map(one => `match=${one}`)] : [])
+  const before = new Map((seen ? flatten(seen) : []).map(row => [row.node.id, new Set(texts(row.node))]))
+  const known = (id: string, text: string): boolean => text === 'logic=' || sent.has(text.slice(text.indexOf('=') + 1)) || before.get(id)?.has(text) === true
+  return rows.every(({ node }) => texts(node).every(text => known(node.id, text)))
+}
+
 /** The design a path names, when it is a design file under `root`; null for any other path. */
 export function designOfPath(root: string, cwd: string, path: string): string | null {
   if (path === '') return null
@@ -527,7 +535,7 @@ export function changeWords(change: Change): string {
 
 /** What the model is told, unseen, with a prompt sent after the board changed by hand since it last read the design, when the change itself cannot be said (`changedNote`). */
 export function staleNote(name: string, revision: number): string {
-  return `Conductor: the user changed the "${name}" workflow design on the board by hand since you last read or edited it (it is now revision ${revision}). What you know of it is out of date: call ${TOOL_FULL_NAME} with action "read" before you describe, review or edit it.`
+  return `Conductor: the user changed the "${name}" workflow design on the board by hand since you last read or edited it (it is now revision ${revision}). This note cannot say what changed, so what you know of it is out of date: call ${TOOL_FULL_NAME} with action "read" before you describe, review or edit it.`
 }
 
 // A block on one line, its fields in the file's order: its own, and with `deep` everything it holds.
@@ -605,7 +613,7 @@ export function changedNote(name: string, revision: number, seen: Design, now: D
   if (lines.join('\n').length > serializeDesign(now).length) return null
   const selected = selectedId === null ? undefined : findNode(now, selectedId)
   return [
-    `Conductor: the user changed the "${name}" workflow design on the board by hand since you last read or edited it (it is now revision ${revision}). ${lines.length > 0 ? 'What follows is everything that changed' : 'Nothing in it differs from what you last saw'}: with it you know the board as it is, so do not call read. An edit with ${TOOL_FULL_NAME} from here is accepted.`,
+    `Conductor: the user changed the "${name}" workflow design on the board by hand since you last read or edited it (it is now revision ${revision}). ${lines.length > 0 ? 'What follows is everything that changed' : 'Nothing in it differs from what you last saw'}: with it you know the board as it is, so this is the note that stands in for a read: none is needed. An edit with ${TOOL_FULL_NAME} from here is accepted.`,
     ...lines,
     `Selected block ("this block"): ${selected ? `${selected.id} (${typeName(selected)} "${selected.name}")` : 'none'}.`,
   ].join('\n')

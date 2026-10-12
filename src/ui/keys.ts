@@ -16,6 +16,7 @@ export type KeyOp =
   | 'edit'
   | 'add'
   | 'remove'
+  | 'retype'
   | 'knob1'
   | 'knob2'
   | 'open'
@@ -48,6 +49,7 @@ export const KEY_OPS: Record<string, KeyOp> = {
   n: 'add',
   '+': 'add',
   x: 'remove',
+  t: 'retype',
   '1': 'knob1',
   '2': 'knob2',
   o: 'open',
@@ -138,12 +140,12 @@ export function legendItems(state: LegendState): Legend {
   const save: LegendItem = { keys: 'Enter', word: 'Save, back to the graph', core: true }
   const pages: LegendItem[] = [{ keys: '? h', word: 'Next page', core: true }, { keys: 'x', word: 'Close help', core: true }]
   // In a field and in the add list's filter the letters are text: no key of the graph acts, and the footer names the one way out.
-  if (state.ring === 'fields') return { footer: [out], detail: [{ keys: 'Tab', word: 'Next field', core: true }, { keys: 'Shift+Tab', word: 'Previous', core: true }, save] }
+  if (state.ring === 'fields') return { footer: [out], detail: [{ keys: '↑ ↓', word: 'Field', core: true }, save] }
   if (state.ring === 'list') {
     return {
       footer: [out],
       detail: [
-        { keys: 'w s', word: 'Choose', core: true },
+        { keys: '↑ ↓', word: 'Choose', core: true },
         ...(state.placed ? [{ keys: 'n', word: 'Change place', core: true }] : []),
         ...(state.kinds ? [{ keys: 'b', word: 'Blocks', core: true }] : []),
         { keys: 'a-z', word: 'Filter', core: false },
@@ -153,7 +155,7 @@ export function legendItems(state: LegendState): Legend {
     }
   }
   if (state.ring === 'start') {
-    const choose: LegendItem[] = [{ keys: 'w s', word: 'Choose', core: true }, { keys: 'Enter', word: 'Open', core: true }]
+    const choose: LegendItem[] = [{ keys: '↑ ↓', word: 'Choose', core: true }, { keys: 'Enter', word: 'Open', core: true }]
     // A help page has the detail pane in place of the list: the keys that walk the list still act, and are the footer's.
     return state.helping ? { footer: choose, detail: pages } : { footer: [{ keys: '?', word: 'Help', core: true }], detail: choose }
   }
@@ -168,6 +170,7 @@ export function legendItems(state: LegendState): Legend {
     edits && state.selected && !state.fixed && { keys: 'Shift+WASD', word: 'Move', core: true },
     edits && { keys: 'n', word: 'New', core: true },
     edits && state.selected && !state.fixed && { keys: 'x', word: 'Delete', core: true },
+    edits && state.selected && !state.fixed && { keys: 't', word: 'Block', core: false },
     ...state.knobs.map((name, index) => edits && name !== null && { keys: String(index + 1), word: name, core: false }),
     state.container && { keys: 'o', word: 'Open', core: true },
     state.nested && { keys: 'b', word: 'Back', core: true },
@@ -178,7 +181,7 @@ export function legendItems(state: LegendState): Legend {
     state.results && !state.locked && { keys: 'c', word: 'Clear results', core: false },
     { keys: '?', word: 'Help', core: true },
   ]
-  // Enter opens the selected block's fields (Tab does too: the help page says so).
+  // Enter opens the selected block's fields (the Down arrow does too: the help page says so).
   const detail: (LegendItem | false)[] = state.hidden ? [] : [edits && state.selected && { keys: 'Enter', word: 'Edit', core: true }, { keys: 'i', word: 'Hide', core: false }]
   const kept = (items: readonly (LegendItem | false)[]): LegendItem[] => items.filter((one): one is LegendItem => one !== false)
   return { footer: kept(footer), detail: kept(detail) }

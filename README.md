@@ -16,8 +16,9 @@ implement and run, and watch the run's progress on the same design.
 - **Use a wide terminal and the docked pane.** With 100 columns or more inside the docked pane, the graph and the detail pane stand side by side. A terminal under 130 columns cannot give the pane that (it asks for the terminal's width less 30); it then gets the stacked screen: the same parts in one column. Above the prompt (inline) the screen is always stacked and short: the detail pane is one row until you open a field, the add list, the goal or a help page.
 - **A dock width you once dragged is remembered by Claude Code** and wins over the width Conductor asks for. Drag the dock's border to change it.
 - **The pane says when the keyboard is not its own.** While letters go to Claude Code's prompt, the legend and the key hints are dim and the footer says `Input: prompt · click the graph or /conductor`: do one of the two to get the keys back. While the pane has the keyboard, letters are keys on the graph and text in an open field.
-- **Escape always hands the keyboard back to the prompt.** No mod can keep it. Text you typed into a field is not lost: it is saved as an edit (the pane says `n3 changed: notes`, and `u` undoes it) on Escape and on every other way out of a field: Tab, Enter, a click on the graph, a picker's choice, a `/conductor` command, a prompt you send, an edit from chat, a resize, closing the pane. Press `u` afterwards if you did not mean it.
-- **Move with `w` `a` `s` `d`.** The arrow keys and Tab belong to Claude Code's focus ring, not to the graph: Tab from the graph opens the selected block's fields, and Tab / Shift+Tab walk them.
+- **Escape always hands the keyboard back to the prompt.** No mod can keep it. Text you typed into a field is not lost: it is saved as an edit (the pane says `n3 changed: notes`, and `u` undoes it) on Escape and on every other way out of a field: an arrow to another field, Enter, a click on the graph, a picker's choice, a `/conductor` command, a prompt you send, an edit from chat, a resize, closing the pane. Press `u` afterwards if you did not mean it.
+- **Move with `w` `a` `s` `d`; the arrows are for fields and lists.** The arrow keys belong to Claude Code's focus ring, not to the graph: `↓` from the graph opens the selected block's fields, `↑` / `↓` walk them, and in a list of blocks they choose. `←` / `→` move the cursor in a field. (Tab and Shift+Tab step the ring like `↓` and `↑`; no hint names them.)
+- **`←` is Claude Code's wherever the keyboard is not in a text field.** It opens the agents list and the pane goes (`/conductor design <name>` brings it back). So Conductor keeps the keyboard in a field at all times (a hidden one while you are on the graph), and no arrow leaves it on a button: the `Block` row is opened with `t` or a click. For a moment after `↑` past the first field or `↓` past the last, the ring is on the pane's `✕` on its way back to the graph: `←` in that instant still leaves.
 - **Letters are keys only while the pane has the keyboard and no field is open.** A character that is no key says so (`k is not a key here`) and does nothing. More than 8 characters arriving at once are taken for a paste and ignored (`pasted text is not keys: nothing was done`).
 - **The design is a spec.** Claude writes the workflow script from it; the structure follows the design, details vary between runs.
 - **A run counts as ended after 8 quiet seconds** (no agent running, no new one started). Its results stay on the graph until the first edit or `c`.
@@ -51,7 +52,8 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 | `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt; the pane switches to that design. With `fill`, the request is left in the box, ending `on: `, for you to say what to run it on and send. The answer says what the design implies: `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats) · problems in n3, n5`. |
 | `/conductor list` | The saved designs, each with its block count and goal. |
 | `/conductor rename <old> <new>` | Renames a saved design (the file, and this session's undo history of it). Refused when `<new>` exists or starts with `replay-`, and while the design is being run. |
-| `/conductor delete <name>` | Deletes a saved design. Asks once more: it answers with what would go, and `/conductor delete <name> confirm` does it. |
+| `/conductor delete <name>` | Deletes a saved design and its script. Asks once more: it answers with what would go, and `/conductor delete <name> confirm` does it. |
+| `/conductor ask reset` | Forgets every stored `Always …` and `Never …` answer, so Conductor asks both its questions again (see "When Claude starts a workflow"). |
 | `/conductor replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
 | `/conductor replay design <template> [fast\|slow]` | Dev: replays a made-up run over a template's design (`review`, `research`, `migrate`, `judge-panel`). The design is named `replay-<template>`, lives in the session only, and is never saved or listed (the `replay-` prefix is kept for this). |
 
@@ -68,7 +70,7 @@ answers with the problems the design now has; a refused edit changes nothing. Wh
 live, edits from chat are refused, as edits in the pane are. A design file changed
 with Claude's Write or Edit tools is reloaded into the open pane too.
 
-Claude always reads the design before it reviews or edits: every answer of its design tool names a revision, a prompt sent after you changed the design by hand tells it so, and an edit made from an older revision is refused until it has read again. Adding a block "after" one that stands directly in a branch makes a new arm; the tool says so and says how to get a sequence (wrap the two in a pipeline). A `when` set on a block that is no arm of a branch is pointed out too: nothing reads it there.
+Claude works from the design as it is on the board: every answer of its design tool names a revision, and a prompt sent after you changed the design by hand carries a note with the change itself (the blocks added, changed, moved and removed, and the one selected), so Claude need not read the design again. Where the change cannot be said that way (Claude never read the whole design in this conversation, the conversation was compacted, or the change is longer than the design), the note tells it to read first. An edit made from an older revision is refused and changes nothing, and so is a whole-design write over a design Claude has not read in this conversation. The tool is loaded when Claude needs it, not sent with every turn. Adding a block "after" one that stands directly in a branch makes a new arm; the tool says so and says how to get a sequence (wrap the two in a pipeline). A `when` set on a block that is no arm of a branch is pointed out too: nothing reads it there.
 
 ## The designer
 
@@ -81,7 +83,7 @@ Four parts, each in a fixed place: a **header**, the **graph** of the workflow, 
 - **Header.** Row 1: `conductor / <design name> / agents ≥ 12`, the last part in a colour of its own: one per agent block (the cheapest arm of a branch), `agents = 3` when every block runs once, `agents ≥ 12` where the design holds a block that may run its agents more than once: a pipeline or a parallel, a loop, a verify or a judge, a subworkflow. Nothing typed into a field is read for a count. At the right, the state: `EDITING · saved`, `EDITING · unsaved template` (started from a template, nothing written yet), `EDITING · not saved yet` (a new empty design), `EDITING · replay, not saved`, `DRAFTING` (Claude was asked for a draft and nothing has arrived), `RUNNING · …` / `FINISHED · …` (a run laid over the design), `START · …` (the start screen). The goal is not in the header: it is the first line of the start block. Docked, a rule across the pane stands under the header.
 - **Footer:** the legend, centred, for the keys of the graph and of the pane as a whole. Each key is in brackets with its word after it (`[WASD] Navigate  [Shift+WASD] Move  [n] New  [x] Delete …`), in a fixed order. It names only keys that work right now: no `[x] Delete` with nothing selected, no `[o] Open` on a block that holds none, and during a run only what still works. Docked it is one row where the pane is wide enough for its main keys (112 columns), and wraps onto a second in a narrower one; inline it is one row. Where the room is short the less-used entries are left out; the help page "Keys" has them all.
 - **What was last said** (a change and its way back, `Last change: n5 changed: notes · [u] Undo`; a refusal, a question, the run's lock) stands centred in the rule over the footer, on one row; inline, where there is no rule, on the row over the legend.
-- **Key hints.** The keys of the detail pane are named on its own last rows, and no key is named in both places: `[Enter] Edit  [i] Hide` at rest; in a field `[Tab] Next field  [Shift+Tab] Previous  [Enter] Save, back to the graph`, and the footer then names only `[Esc] Keys to the prompt` (so too in the add list and in the goal's field, each with its own keys on those rows); with a help page open, `[? h] Next page  [x] Close help`.
+- **Key hints.** The keys of the detail pane are named on its own last rows, and no key is named in both places: `[Enter] Edit  [i] Hide` at rest; in a field `[↑ ↓] Field  [Enter] Save, back to the graph`, and the footer then names only `[Esc] Keys to the prompt` (so too in the add list and in the goal's field, each with its own keys on those rows); with a help page open, `[? h] Next page  [x] Close help`.
 
 ### The graph
 
@@ -195,7 +197,8 @@ Letters are keys while the pane has the keyboard and no field is open. Case matt
 | `Shift+W` `Shift+S` | move the selected block one place up / down: past the block beside it, into an open container that comes next, out of the end of its own container. A collapsed container is one place (open it first to move a block into it). A block never leaves the view |
 | `Shift+A` `Shift+D` | swap an arm with the one beside it. Outside a stack they say `only arms move sideways` |
 | `Enter` or `e` | edit: the fields of the selected block open, the keyboard in its name |
-| `Tab` | the same, by the focus ring's own step |
+| `↑` `↓` | in a field: the field above / below, what was typed saved; `↓` from the graph opens the first field. Past the first or the last field: back to the graph. In a list of blocks: choose |
+| `t` | the block and its kind: the detail pane becomes the list of what the selected block may become |
 | `n` or `+` | a new block after the selection (inside it when it is an empty container, or the view's frame), where the lit `[+]` stands: the detail pane becomes the add list: pick a block, then its kind, or type either name. `n` again in the list changes the place: after, inside (a container), before |
 | `x` | delete: a single block at once, a container that holds blocks after a second `x`. Also closes the add list and the help pages |
 | `1` `2` | step a knob of the selected block, as its chips show: `1` model (inherit → haiku → sonnet → opus → inherit), `2` effort (inherit → low → medium → high → xhigh → max → inherit). Only the ones the block has |
@@ -210,7 +213,7 @@ Letters are keys while the pane has the keyboard and no field is open. Case matt
 - Every change says what it did and how to take it back: `moved n7 into n4 · [u] Undo`, `deleted n7 "verify" · [u] Undo`, `n5 model: haiku · [u] Undo`. A move that cannot be made says why (`already at the bottom`, `already the last arm`).
 - Up to 8 characters arriving at once are applied in order.
 - While a run locks the design only `w a s d`, `o`, `b`, `i`, `?` act; any other key says `run in progress · editing locked`.
-- In a field: Tab and Shift+Tab walk the fields and the type picker, Enter saves and returns to the graph, Shift+Tab from the name returns to the graph too, Escape hands the keyboard to the prompt (the text is saved).
+- In a field: `↑` / `↓` walk the fields, Enter saves and returns to the graph, `↑` from the first field and `↓` from the last return to the graph too (saved), Escape hands the keyboard to the prompt (the text is saved).
 - `q` and `r` put a request in the prompt box and the keys go there with it, so what you type next is typed into the prompt. If the prompt box already holds text when you click the graph, the keys here stay off and the pane says so (`keys are off here while the prompt box holds text · Esc returns to the prompt`).
 
 ### The detail pane
@@ -243,13 +246,13 @@ A block's fields are its type's, the same for every kind of it: a kind adds no f
 The pane's last rows name its keys: `[Enter] Edit  [i] Hide` at rest, and the keys of a field, the add list or a help page while one of those is open.
 
 - **At rest** a field is text: its whole value, wrapped, `[not set]` where it is empty (in the error colour where a problem names that field). A knob a block carries that its type does not list (set from chat, or in the file) gets its field too.
-- **While editing** (after `e`, Enter, Tab, or a click on a field) every field is an input under its label: the one you are typing in wraps over as many rows as its text takes, the others are one line, cut with `…`. Where the text is taller than the pane, the pane moves up so the row being typed stays in view. Enter saves and returns to the graph. Text typed into a field is never dropped: every other way out saves it too (Tab to the next field, a picker's choice, a click on the graph, Escape, a command, a prompt sent, an edit from chat, a resize, closing the pane), each as an edit `u` undoes.
+- **While editing** (after `e`, Enter, `↓`, or a click on a field) every field is an input under its label: the one you are typing in wraps over as many rows as its text takes, the others are one line, cut with `…`. Where the text is taller than the pane, the pane moves up so the row being typed stays in view. Enter saves and returns to the graph. Text typed into a field is never dropped: every other way out saves it too (an arrow to the next field, a picker's choice, a click on the graph, Escape, a command, a prompt sent, an edit from chat, a resize, closing the pane), each as an edit `u` undoes.
 - Where the pane is short of rows it gives up, in this order: the blank rows, the Meaning section (help page 1 says it), then the long texts are cut to fewer rows.
 - `Block` opens the add list on the block: its own kinds first, then the other blocks. The block becomes what is picked and keeps its name, its logic, what it holds and every knob that was typed; a knob still as its old kind filled it in is replaced by the new kind's; a name it never got (still the old type's or kind's) becomes the new one's; one that holds blocks can only become another container.
 
 The same pane shows, in place of the block:
 
-- **The add list** (`n`, `+`, a click on a `[+]`). Its heading says the place (`New block after n4 Deep read`), then a filter field, then the eight blocks, each on a row with what it does, in two groups (blocks that do work, blocks that hold blocks). A block that has kinds is marked `▸`, and the marked row names them; Enter on it opens its kinds (`· which loop?`), the plain one first, and `b` goes back to the blocks. Typing skips that step: the list then shows every block whose name holds what was typed, at the block's level or the kind's, each named in full (`ver`: `AGENT verify`, `LOOP converged`; `loop`: every kind of loop). Names only are searched. `w` / `s` move the mark and `n` changes the place while the filter is empty; a name that starts with one of those letters is still typed as it is spelled (`sw` is the filter `sw`). Enter adds the marked row, a click the one clicked, `x` cancels. The new block is selected and its name is typed next (Enter keeps the default).
+- **The add list** (`n`, `+`, a click on a `[+]`). Its heading says the place (`New block after n4 Deep read`), then a filter field, then the eight blocks, each on a row with what it does, in two groups (blocks that do work, blocks that hold blocks). A block that has kinds is marked `▸`, and the marked row names them; Enter on it opens its kinds (`· which loop?`), the plain one first, and `b` goes back to the blocks. Typing skips that step: the list then shows every block whose name holds what was typed, at the block's level or the kind's, each named in full (`ver`: `AGENT verify`, `LOOP converged`; `loop`: every kind of loop). Names only are searched. `↑` / `↓` move the mark, always. `w` / `s` move it too and `n` changes the place while the filter is empty; a name that starts with one of those letters is still typed as it is spelled (`sw` is the filter `sw`). Enter adds the marked row, a click the one clicked, `x` cancels. The new block is selected and its name is typed next (Enter keeps the default).
 - **Help** (`?`, `h`), four pages: the selected block's type and kind, what the graph's marks mean, the keys, the mouse and the design file's path.
 - **The goal and the args** are fields of the start block: select it (a design opens on it) and press `Enter`.
 - With nothing selected: the goal, and how to go on.
@@ -326,6 +329,30 @@ Conductor checks the design as you build and never blocks anything. A block that
 
 **Two blocks that do no work.** `start` is where the workflow starts. It carries two fields, edited in the detail pane like any other: the **goal** (what the workflow is for; required, the card's first line, `Goal [not set]` and a problem while it is empty) and the **args** (what it is run on; not shown on the card, and left empty the workflow takes no input). Every design has it, always as its first block: a new design opens with it, a design saved without one is given an empty one when it is read, and it is not in the add list. It is not deleted, does not move and becomes no other type, and nothing goes above it. `phase` is a titled group: it holds any block, has no knobs, and its blocks run one after the other where it stands, as if it were not there. It costs no nesting level (a container in a phase is drawn open as deep as it would be without it).
 
+## When Claude starts a workflow
+
+Conductor asks two questions, each with four answers and the two rows Claude Code adds (typed text, which Claude gets as your words, and `Chat about this`).
+
+**Before Claude writes a workflow script: `Design this workflow in Conductor first?`**
+
+- `Conductor`: Claude drafts a design, names it and shows it on the board, which takes the keyboard. Nothing is written or run until you approve it there with `r`, or with `/conductor run <name>`. If you say "run it" in chat instead, Claude is given the same hand-off.
+- `Standard`: Claude writes the script and runs it as it would without Conductor.
+- `Always Standard`, `Always Conductor`: the same, and the answer is kept; you are not asked again.
+
+It is not asked for a design you handed off (that was your answer), from a subagent, or in a session with no screen.
+
+**When a workflow that belongs to no design has started: `Visualize this run in Conductor?`**
+
+- `Visualize`: Claude draws a design of the script that is running, under the workflow's own name, and the run shows on it. The run goes on meanwhile; the chat waits until you answer.
+- `Skip`: the run is shown in the phase view only.
+- `Always visualize`, `Never visualize`: the same, kept.
+
+A design drawn this way ties its blocks to the script with `match`: the agent labels (or phase titles) a block stands for, each exact, or a prefix when it ends in `*`. The script is kept beside the design, as `.claude/workflow-designs/<name>.workflow.js`.
+
+A run whose workflow name is a saved design's name is that design's run: it is shown on the design with no question, whatever is stored for the second one. So the next run of a script you had visualized lands on its design.
+
+`/conductor ask reset` forgets the kept answers to both questions.
+
 ## Watching a run
 
 A run started from a design is laid over it:
@@ -352,6 +379,8 @@ The one thing the hand-off adds is how the run is tied back to the board:
 - Label: every `agent()` call is labelled `<nodeId>: <short text>`, with the id of the innermost design node it belongs to.
 - Phase: each top-level node (the start block left out) is one phase titled `<nodeId> <title>`, listed in `meta.phases` in design order. A top-level `phase` block is such a node: its title names that part of the run.
 
+The script the design was run as is kept beside it, `.claude/workflow-designs/<name>.workflow.js`. Once a design has one, the hand-off tells Claude to update that file to match the design as it is now, changing only what the design changed, and to run it; blocks with `match` keep the script's own labels and phase titles. A run out of a hand-off replaces the kept script; a run that merely has the design's name gives a design its first script and never writes over one it has.
+
 Designs are stored in the project, one JSON file each: `.claude/workflow-designs/<name>.json`.
 The designer saves on every change.
 
@@ -360,7 +389,7 @@ The designer saves on every change.
 Progress is derived from hooks, not from the workflow engine's own state:
 
 - The Workflow tool call gives the run id, name and transcript folder.
-- Each workflow agent spawn gives an agent and its label; the label's node id maps it to a design node. Agents whose label names no node of the design are counted on a card of their own after the design.
+- Each workflow agent spawn gives an agent and its label. The node id the label starts with maps it to a design node; without one, the block whose `match` names the label does, then the block whose `match` names the agent's phase title (an exact string before a prefix, the longest prefix first). Agents no block takes are counted on a card of their own after the design.
 - Model requests and turn completions give tokens and the agent's end. The figure is the sum of input, output, cache-creation and cache-read tokens.
 - Phases are read from the run's `journal.jsonl`.
 
@@ -368,7 +397,7 @@ Known limits:
 
 - There is no run-end signal. A run is held finished after 8 seconds with no agent running and no new spawn; a later spawn for the same run reopens it.
 - Phases rely on the journal file, an internal format that may change.
-- A handoff claims the first Workflow run that starts within 3 minutes. A run started later, or without a handoff, is shown in the phase view only.
+- A run belongs to the saved design its workflow is named as. A handoff also claims the first run under any other name that starts within 3 minutes of it, or of your last prompt while it waits. A run neither rule takes is shown in the phase view only, unless you have it visualized.
 - One run is tracked at a time, and one graph is mounted at a time.
 - Undo history is kept for the session only. It survives `/reload-plugins`; it is lost when the mod's code is reloaded after a change.
 - Text is measured by code unit: a title with wide or combined characters misaligns its card.

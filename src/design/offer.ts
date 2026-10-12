@@ -4,6 +4,9 @@
 // chat.ts's (`offerBrief`), beside the draft's it shares its words with.
 // Pure TypeScript: no `$`, no engine imports, no imports at all (handoff.ts names the tool).
 
+/** The tool Claude drafts a design with: chat.ts `TOOL_FULL_NAME`, spelled again because chat.ts imports this file (by way of handoff.ts). */
+const DESIGN_TOOL = 'mcp__conductor__design'
+
 /** The tool's short name; the model calls it as `mcp__conductor__before_workflow`. */
 export const OFFER_TOOL_NAME = 'before_workflow'
 export const OFFER_TOOL_FULL_NAME = 'mcp__conductor__before_workflow'
@@ -56,13 +59,31 @@ export function standardResult(why: StandardReason): string {
   return `${STANDARD_LEAD[why]} Proceed the standard way: author the Workflow script and run it as you usually would.`
 }
 
-/** Esc and the engine's "Chat about this" row arrive alike (API-NOTES S9): no choice was made either way. */
-export const DISMISSED_RESULT =
-  'The user dismissed the question without choosing. Do not author or run a Workflow script yet: ask them in chat how they want to proceed.'
+/** What the person says in chat after a question that got no choice is their answer: Claude acts on it, and the tool is not called for it again. */
+const IN_CHAT = `Once they have answered in chat, act on that answer without calling this tool again: for a design to review first, draft one with ${DESIGN_TOOL} (action "write") and stop there; for the standard way, author the Workflow script and run it.`
+
+/** Esc and the engine's "Chat about this" row arrive alike (API-NOTES S9), and so does an answer typed empty: no choice was made. */
+export const DISMISSED_RESULT = `The user dismissed the question without choosing. Do not author or run a Workflow script yet: ask them in chat how they want to proceed. ${IN_CHAT}`
 
 /** Text typed under the options is the person's answer in their own words. */
 export function typedResult(text: string): string {
-  return `The user picked none of the options and typed this instead: "${text.trim()}". Take it as what they said to you, and do not author or run a Workflow script unless it asks for one.`
+  return `The user picked none of the options and typed this instead: "${text.trim()}". Take it as what they said to you, and do not author or run a Workflow script unless it asks for one. ${IN_CHAT}`
+}
+
+/**
+ * What the tool answers, with no question, while the design its last "Conductor" answer led to waits on the board
+ * unapproved: Claude neither drafts again nor writes a script the board knows nothing of. `handoff` is what
+ * `/conductor run <name>` tells Claude (handoff.ts): an approval given in chat is carried out by it.
+ */
+export function waitingResult(name: string, handoff: string): string {
+  return [
+    `The user was not asked: design "${name}", drafted when they chose Conductor here, is on the Conductor board and they have not approved it yet. They approve it on the board with r, or with /conductor run ${name}. Which of these three is true decides what you do:`,
+    `1. The user has not told you to run it: do not draft another design and do not author or run a Workflow script. Tell them the design waits on the board for their approval.`,
+    `2. The user told you in chat to run it ("run it", "go ahead"): that is their approval of design "${name}" as it is on the board now. Do not draft again. Carry out the handoff below, which is what /conductor run ${name} would have given you.`,
+    '3. This call is for a different workflow than that design: call this tool once more, and the user is asked.',
+    '',
+    handoff,
+  ].join('\n')
 }
 
 /** What the person sees when an "Always" answer is kept. */
@@ -70,10 +91,12 @@ export function keptToast(choice: OfferChoice): string {
   return `conductor: always ${choice === 'conductor' ? 'Conductor' : 'Standard'} from now on · /conductor ask reset asks again`
 }
 
-export const ASK_USAGE = 'Usage: /conductor ask reset   (forgets every "Always" answer, so Conductor asks again)'
+export const ASK_USAGE = 'Usage: /conductor ask reset   (forgets every stored "Always" and "Never" answer, so Conductor asks both its questions again: before a workflow, and whether to visualize a run)'
 
 export function resetText(cleared: number): string {
-  return cleared === 0 ? 'No "Always" answer is stored: Conductor already asks.' : 'Stored "Always" answers cleared: Conductor asks again.'
+  return cleared === 0
+    ? 'No "Always" or "Never" answer is stored: Conductor already asks before a workflow, and whether to visualize a run.'
+    : `Stored "Always" and "Never" answers cleared (${cleared}): Conductor asks again before a workflow, and whether to visualize a run.`
 }
 
 // The second question: a workflow that started with no design is asked about once it runs (run.tsx),

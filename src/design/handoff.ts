@@ -52,7 +52,7 @@ export function handoffTarget(text: string): string | null {
 
 /** What the review key puts in the prompt box: the chat tool hands Claude the design, the selection and the lints. */
 export function reviewPrompt(name: string): string {
-  return `Review the "${name}" workflow design as it is on the board now (read it first, it may have changed by hand): is the structure right for its goal, what is missing, what is wasteful? `
+  return `Review the "${name}" workflow design as it is on the board now (it may have changed by hand: read it, unless a Conductor note with this prompt says what changed): is the structure right for its goal, what is missing, what is wasteful? `
 }
 
 /**
