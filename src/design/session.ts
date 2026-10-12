@@ -945,7 +945,7 @@ export function helpColumn(page: number): number {
 /** What the first help page says on the start screen, where no block is selected and no design is open. */
 export const START_HELP: readonly string[] = [
   'A design is a workflow drawn as a graph of blocks: agents, the code between them, and the containers that run them in a row, at once or in a loop.',
-  'w and s choose a row, Enter opens it. A saved design opens as it was left; a template starts a new design, and Blank an empty one.',
+  'The Up and Down arrows choose a row (w and s too), Enter opens it. A saved design opens as it was left; a template starts a new design, and Blank an empty one.',
   'Nothing is written until the first edit. /conductor design <name> names a new design first, /conductor rename <old> <new> names it later.',
   '/conductor draft <name> <what you want> has Claude draft a design on the board; in an open design, a plain message to Claude changes it.',
 ]

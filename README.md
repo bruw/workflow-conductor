@@ -259,7 +259,7 @@ The same pane shows, in place of the block:
 
 ### The start screen
 
-`/conductor design` with no name (or a name no design has yet) opens the start screen. The detail pane lists the saved designs (each with its block count and what it is for) above the templates (`Review`, `Research`, `Migrate`, `Judge panel`) and `Blank`; `w` / `s` move the mark, Enter or a click opens the row. The graph shows the marked design read-only, the header its name and goal. Under the list the pane says how to name a new design first (`/conductor design <name>`) and how to have Claude draft one (`/conductor draft <name> <what you want>`). `?` opens help here too.
+`/conductor design` with no name (or a name no design has yet) opens the start screen. The detail pane lists the saved designs (each with its block count and what it is for) above the templates (`Review`, `Research`, `Migrate`, `Judge panel`) and `Blank`; `↑` / `↓` (or `w` / `s`) move the mark, Enter or a click opens the row. The graph shows the marked design read-only, the header its name and goal. Under the list the pane says how to name a new design first (`/conductor design <name>`) and how to have Claude draft one (`/conductor draft <name> <what you want>`). `?` opens help here too.
 
 A design started from a template or blank is not written to disk until its first edit, or until it is run. Reopening a design brings back the block it was left on.
 
