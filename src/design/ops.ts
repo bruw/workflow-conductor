@@ -1,7 +1,7 @@
 // Immutable edits on a Design. Every operation returns a new Design, or the
 // same Design plus a reason when the edit is refused. Pure TypeScript.
 
-import { ARGS_PLACE, EFFORTS, aType, argsOf, typeName, canHoldChildren, findNode, isNodeType, knobError, matchError, nextIdNumber, readType, walk } from './model'
+import { START_PLACE, EFFORTS, aType, startOf, startOnly, typeName, canHoldChildren, findNode, isNodeType, knobError, matchError, nextIdNumber, readType, walk } from './model'
 import type { Design, DesignNode, Kind, Knobs, NodeType } from './model'
 import { defaultName, fillOf, logicOf, offers, starterOf } from './teach'
 import type { BlockRef, Starter } from './teach'
@@ -82,21 +82,21 @@ export function addPlace(design: Design, selectedId: string | null, viewRootId: 
   return parent ? { parentId: parent.id, index: index + 1 } : { index: index + 1 }
 }
 
-/** What a second `args` block is refused with. */
-function argsTaken(id: string): string {
-  return `the design already has its args block (${id}): every design has one, first, and no other`
+/** What a second `start` block is refused with. */
+function startTaken(id: string): string {
+  return `the design already has its start block (${id}): every design has one, first, and no other`
 }
 
-/** What deleting the `args` block, or making it another block, is refused with. */
-export const ARGS_KEPT = 'the args block stays: every design has it, first. Clear its logic and output for a workflow that takes no input'
+/** What deleting the `start` block, or making it another block, is refused with. */
+export const START_KEPT = 'the start block stays: every design has it, first. Clear its args for a workflow that takes no input'
 
 /**
- * The place a block of `type` really gets when `at` is asked for: `args` goes first whatever was asked,
+ * The place a block of `type` really gets when `at` is asked for: `start` goes first whatever was asked,
  * and nothing else goes before it.
  */
 export function placeFor(design: Pick<Design, 'nodes'>, type: NodeType, at: Place): Place {
-  if (type === 'args') return { index: 0 }
-  return at.parentId === undefined && argsOf(design) ? { index: Math.max(1, Number.isFinite(at.index) ? Math.trunc(at.index) : design.nodes.length) } : at
+  if (type === 'start') return { index: 0 }
+  return at.parentId === undefined && startOf(design) ? { index: Math.max(1, Number.isFinite(at.index) ? Math.trunc(at.index) : design.nodes.length) } : at
 }
 
 /** A new block of a type and kind, with what the kind fills in (its logic, and knobs under the ones it is given). */
@@ -121,7 +121,7 @@ function starters(block: BlockRef, number: number): DesignNode[] {
 }
 
 /**
- * Inserts a new node. `at.index` is clamped to the destination list; `args` goes first, and nothing goes before it.
+ * Inserts a new node. `at.index` is clamped to the destination list; `start` goes first, and nothing goes before it.
  * A block of a kind is given what the kind fills in, and a container of a kind that starts with blocks is given
  * them: all of it one edit. `bare` leaves the starting blocks out, for an edit that brings its own.
  */
@@ -129,8 +129,8 @@ export function addNode(design: Design, spec: { type: NodeType; kind?: Kind; nam
   if (!isNodeType(spec.type)) return refuse(design, `unknown type ${String(spec.type)}`)
   const block = readType(spec.type, spec.kind)
   if ('error' in block) return refuse(design, block.error)
-  const taken = spec.type === 'args' ? argsOf(design) : undefined
-  if (taken) return refuse(design, argsTaken(taken.id))
+  const taken = spec.type === 'start' ? startOf(design) : undefined
+  if (taken) return refuse(design, startTaken(taken.id))
   const at = placeFor(design, spec.type, asked)
   const error = parentError(design, at.parentId)
   if (error) return refuse(design, error)
@@ -144,26 +144,26 @@ export function addNode(design: Design, spec: { type: NodeType; kind?: Kind; nam
   return { design: { ...design, nextId: number + 1 + held.length, nodes }, id }
 }
 
-/** Removes a node and everything nested in it. The `args` block is never removed. */
+/** Removes a node and everything nested in it. The `start` block is never removed. */
 export function removeNode(design: Design, id: string): OpResult {
   const node = findNode(design, id)
   if (!node) return refuse(design, `no block ${id}`)
-  if (node.type === 'args') return refuse(design, ARGS_KEPT)
+  if (node.type === 'start') return refuse(design, START_KEPT)
   return { design: { ...design, nextId: nextIdNumber(design), nodes: without(design.nodes, id) } }
 }
 
-/** What a move of the `args` block, or of a block to before it, is refused with. */
-export const ARGS_STAY = 'args stay first: the workflow\'s input is the first block of the design'
+/** What a move of the `start` block, or of a block to before it, is refused with. */
+export const START_STAY = 'start stays first: the workflow starts at the first block of the design'
 
 /**
  * Reorders or re-nests a node. `to.index` is the position in the destination
  * list as it stands once the node has been lifted out, clamped to that list.
- * The `args` block does not move, and a block sent before it lands after it.
+ * The `start` block does not move, and a block sent before it lands after it.
  */
 export function moveNode(design: Design, id: string, to: Place): OpResult {
   const spot = locate(design, id)
   if (!spot) return refuse(design, `no block ${id}`)
-  if (spot.node.type === 'args') return refuse(design, ARGS_STAY)
+  if (spot.node.type === 'start') return refuse(design, START_STAY)
   if (to.parentId !== undefined && subtreeHas(spot.node, to.parentId)) {
     return refuse(design, to.parentId === id ? 'a block cannot be moved into itself' : 'a block cannot be moved into a block it holds')
   }
@@ -208,6 +208,8 @@ export function updateNode(design: Design, id: string, patch: NodePatch): OpResu
     }
     if (Object.keys(knobs).length > 0) next.knobs = knobs as Knobs
     else delete next.knobs
+    const stray = startOnly(next)
+    if (stray) return refuse(design, stray)
   }
   if (patch.match !== undefined) {
     const error = matchError(patch.match)
@@ -220,7 +222,7 @@ export function updateNode(design: Design, id: string, patch: NodePatch): OpResu
 
 /**
  * Changes a node's type and kind (the plain kind where none is said). A block that holds others can only
- * become another container; the `args` block stays what it is, and no block becomes one.
+ * become another container; the `start` block stays what it is, and no block becomes one.
  * Its knobs and its logic follow the kind and never lose what was typed: one still as the old kind filled it in goes,
  * and the new kind fills in the ones that are not set. A container left empty starts with its new kind's blocks.
  */
@@ -231,10 +233,10 @@ export function retypeNode(design: Design, id: string, type: NodeType, kind?: Ki
   const block = readType(type, kind)
   if ('error' in block) return refuse(design, block.error)
   if (node.type === type && node.kind === block.kind) return { design }
-  if (node.type === 'args') return refuse(design, ARGS_KEPT)
-  if (type === 'args') {
-    const taken = argsOf(design)
-    return refuse(design, taken ? argsTaken(taken.id) : `${id} cannot become args: ${ARGS_PLACE}`)
+  if (node.type === 'start') return refuse(design, START_KEPT)
+  if (type === 'start') {
+    const taken = startOf(design)
+    return refuse(design, taken ? startTaken(taken.id) : `${id} cannot become start: ${START_PLACE}`)
   }
   if ((node.children?.length ?? 0) > 0 && !canHoldChildren(type)) {
     return refuse(design, `${id} holds blocks and ${aType(type)} block cannot hold children: move or remove them first`)

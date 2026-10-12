@@ -5,7 +5,7 @@
 
 export type ConductorDesignNode = {
   id: string
-  type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'args' | 'phase'
+  type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'start' | 'phase'
   kind?:
     | 'task' | 'scout' | 'check' | 'verify' | 'judge' | 'critic' | 'synthesize' | 'classify'
     | 'custom' | 'count' | 'pass' | 'dry' | 'converged' | 'target' | 'budget'
@@ -14,6 +14,8 @@ export type ConductorDesignNode = {
   name: string
   logic?: string
   knobs?: {
+    goal?: string
+    args?: string
     prompt?: string
     output?: string
     model?: string
@@ -28,7 +30,7 @@ export type ConductorDesignNode = {
   children?: ConductorDesignNode[]
 }
 
-export type ConductorDesign = { version: 1; name: string; description: string; nextId?: number; nodes: ConductorDesignNode[] }
+export type ConductorDesign = { version: 1; name: string; nextId?: number; nodes: ConductorDesignNode[] }
 
 export type ConductorDesignUi = {
   name: string
@@ -49,9 +51,8 @@ export type ConductorDesignUi = {
   drafting: boolean
   freshId: string | null
   picks: Record<string, string>
-  describing: boolean
   runCleared: boolean
-  saved: { name: string; blocks: number; description: string }[]
+  saved: { name: string; blocks: number; goal: string }[]
   handed: boolean
   startMark: number
 }

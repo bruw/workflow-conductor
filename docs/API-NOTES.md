@@ -227,8 +227,9 @@ in a `Box` with `backgroundColor: composerSidebarBackground`, and every descenda
 - The only control is the person's: a custom theme that overrides `composerSidebarBackground` with a
   concrete colour (`"default"` is dropped).
 - Consequence: the mod draws on what the dock gives it. The one background it sets is a phase's ground on the
-  graph: `backgroundColor="inverseText"` on the `Text` of its cells. A theme key is accepted there and follows
-  the theme (seen in tmux at 256 colours: the dock `48;5;235`, the phase `48;5;16`).
+  graph: `backgroundColor="userMessageBackground"` on the `Text` of its cells. A theme key is accepted there and follows
+  the theme, one outside `ThemeKey` too (seen in tmux at 256 colours: the dock `48;5;235`, the phase `48;5;237`;
+  `inverseText` gave `48;5;16`, too hard against the dock). A cell has no alpha: a softer ground is another key.
 
 ## S9. Does `$.ui.ask` work inside the `tool.call` hook of a mod's own tool, mid-turn? Yes. A 174 s wait survives; Esc rejects.
 
@@ -448,6 +449,25 @@ Seen once, on `/compact`: `{"kind":"session.compact","trigger":"manual","message
   `classic.PreCompact` / `classic.PostCompact` (`compact_summary`). Not run.
 - Not observed: `auto` and `precompute`.
 
+## S16. Where does an `Input` wrap? Only focused, and only when its own box is as wide as the pane. A label of spaces makes that a column.
+
+Probe: `/probe-wrap` in `spikes/probe/hooks/register.tsx`, a 135-cell docked pane, a value of about 200 characters, Claude Code 2.1.296.
+
+- An `Input` without the ring is always one line cut with `…`.
+- With the ring it wraps when its box spans the pane's full width: at the root, or nested in columns without a width, or in a
+  column whose `width` is the pane's or more. It then wraps at the pane's width, also when an ancestor clips it.
+- It stays one line in anything narrower: a `width` of 130, a sibling beside it in a row (`flexGrow` or not), `padding` or
+  `margin` on its parent, a border (2 cells), an `absolute` box.
+- `label` is drawn as `Label: ` before the text, and the wrapped rows hang under the text's first cell.
+- So an Input at full width whose `label` starts with N spaces wraps natively inside the cells right of N. A sibling drawn
+  after it with `position="absolute"` paints over the label's spaces. The cursor, Home / End (of the row), the arrows and
+  Backspace work across the rows.
+- Under such a label an Input without the ring is drawn broken (the label takes a second row). It is drawn in the column
+  instead (a parent with `paddingLeft`), one line; moving it between the two parents under the same `key`, on `ui.focus`,
+  keeps its text, its cursor and the ring.
+- In a row a `Text` before an Input is squeezed to nothing by a long value: it needs a box with a `width` and `flexShrink={0}`.
+- Not tried: a `Client` (the graph) in the `absolute` box, and presses on it over the Input's label.
+
 ## Other findings
 
 - Hot reload of a `--plugin-dir` mod is not immediate when the session is idle (the watch drops to a 30 s
@@ -457,7 +477,7 @@ Seen once, on `/compact`: `{"kind":"session.compact","trigger":"manual","message
 - `scripts/dev-session.sh` takes `CONDUCTOR_EXTRA_PLUGIN_DIRS` (colon-separated, relative to the repo or absolute).
 - Redesign v1, Input:
   - A focused `Input` wraps only when it has the pane's full body width; inside any narrower column it is one
-    line cut with `…`. So a field being edited keeps one line and the mod draws the whole text wrapped under
+    line cut with `…` (S16). So a field being edited keeps one line and the mod draws the whole text wrapped under
     it, redrawn per keystroke.
   - An Input opened again under the key it last submitted from, with the same `value`, was drawn empty
     (Enter then saved an empty text). It is drawn under a new key each time it opens.

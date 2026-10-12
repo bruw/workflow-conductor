@@ -6,7 +6,7 @@ import { UNDO_HINT, remember, travel } from '../src/design/history'
 import type { History } from '../src/design/history'
 import { lint, preflightLine, problemFields, problemParts } from '../src/design/lints'
 import { buildHandoff, handoffPrompt, handoffTarget, reviewPrompt } from '../src/design/handoff'
-import { emptyDesign, findNode, flatten, isBlank, kindsOf, parseDesign, serializeDesign, typeName } from '../src/design/model'
+import { emptyDesign, findNode, flatten, goalOf, isBlank, kindsOf, parseDesign, serializeDesign, typeName, withGoal } from '../src/design/model'
 import type { Design, DesignNode, NodeType } from '../src/design/model'
 import { nextIdNumber, quickKnob } from '../src/design/ops'
 import type { NodePatch } from '../src/design/ops'
@@ -30,7 +30,6 @@ import {
   bareTarget,
   blocksWord,
   carryUi,
-  describeDesign,
   designFile,
   designName,
   detailWidth,
@@ -72,7 +71,7 @@ import {
   withoutKeys,
 } from '../src/design/session'
 import type { DesignUi, GraphBox, PickRow, RunContext, SavedDesign, Step, TextKnob } from '../src/design/session'
-import { FIELD_LABEL, PALETTE_GROUPS, TEACH, fieldWord as fieldLabel, groupOf, hasLogic, knobsOf, pickName, placeholderOf, teachOf, useWhen } from '../src/design/teach'
+import { FIELD_LABEL, PALETTE_GROUPS, TEACH, fieldWord as fieldLabel, groupOf, hasLogic, hasName, knobsOf, pickName, placeholderOf, teachOf, useWhen } from '../src/design/teach'
 import type { BlockRef } from '../src/design/teach'
 import { TEMPLATES } from '../src/design/templates'
 import { emptyRunState } from '../src/run/events'
@@ -101,8 +100,6 @@ import { offerDrafted, offerPrompted, offerSettled, takeOffered } from './offer'
 
 const COMMAND = 'conductor'
 const CANVAS_KEY = 'canvas'
-/** The goal's rows under the header (./goal.tsx): a click on them is posted from here. */
-const GOAL_KEY = 'goal'
 /** The splash's scene (./splash.tsx): it counts its own beats. */
 const SPLASH_KEY = 'splash'
 /** Under the splash's scene. */
@@ -111,18 +108,11 @@ const NAME_KEY = 'design-name'
 const LOGIC_KEY = 'design-logic'
 /** The add list's filter: `design-add:<n>`, drawn under a new `n` to empty it of the keys it took. */
 const PICKER_KEY = 'design-add'
-/**
- * The field of the design's description (its goal), in the detail pane while `g` has it open: `design-description:<n>`,
- * under a new `n` every time it opens. (Opened again under the key it was last sent from, with the same text, the
- * engine drew it empty, and Enter then saved an empty goal.)
- */
-const DESC_KEY = 'design-description'
 const TYPE_KEY = 'design-type'
 /** A field at rest, read and not typed in: `design-rest:design-notes@n5`. A press on it opens the fields on that one. */
 const REST_KEY = 'design-rest:'
 /** A row of the start screen: `start:saved:demo`, `start:template:review`. */
 const START_KEY = 'start:'
-const GOAL_PLACEHOLDER = 'what this workflow is for, in a sentence'
 /** Saved designs the start screen lists at once where it is short of rows: a window around the marked one. */
 const SAVED_ROWS = 8
 /** Design files read for a listing, at most. */
@@ -148,7 +138,9 @@ const isField = (element: string | undefined): boolean => {
   return base === NAME_KEY || base === LOGIC_KEY || base.startsWith(KNOB_KEY)
 }
 /** A field as a message names it: `logic`, `once per`. */
-const fieldWord = (base: string): string => (base === DESC_KEY ? 'goal' : fieldLabel(base === NAME_KEY ? 'name' : base === LOGIC_KEY ? 'logic' : base.slice(KNOB_KEY.length)))
+const fieldWord = (base: string): string => fieldLabel(base === NAME_KEY ? 'name' : base === LOGIC_KEY ? 'logic' : base.slice(KNOB_KEY.length))
+/** The field `e` opens a block on: its name's, and on the start block, which has none, the goal's. */
+const firstField = (node: { type: DesignNode['type'] }): string => (hasName(node) ? NAME_KEY : `${KNOB_KEY}goal`)
 /**
  * The key catcher: where the ring rests while no field is open. An Input, so it is given every printable key with its
  * case (a Button's hotkey cannot see Shift). It is the pane's first focus stop, always: the engine keeps the ring by
@@ -168,9 +160,6 @@ const catcherKey = (): string => `${CATCH_KEY}:${LOAD}.${catchGen}`
 const isCatcher = (element: string | undefined): boolean => (element ?? '').startsWith(`${CATCH_KEY}:`)
 /** The catcher's key as the last drawing drew it ('' where it drew none): what the ring is moved to. */
 let drawnCatcher = ''
-let descGen = 0
-const descKey = (): string => `${DESC_KEY}:${LOAD}.${descGen}`
-const isDescField = (element: string | undefined): boolean => (element ?? '').startsWith(`${DESC_KEY}:`)
 let pickGen = 0
 const pickerKey = (): string => `${PICKER_KEY}:${LOAD}.${pickGen}`
 const isPickerField = (element: string | undefined): boolean => (element ?? '').startsWith(`${PICKER_KEY}:`)
@@ -203,7 +192,7 @@ const doorKey = (): string => `${DOOR_KEY}:${LOAD}.${doorGen}`
 const isDoor = (element: string | undefined): boolean => (element ?? '').startsWith(`${DOOR_KEY}:`)
 /** Whether an element is a field or the type picker of the detail pane: where the ring may rest besides the catcher. */
 const isDetailStop = (element: string | undefined): boolean =>
-  element !== undefined && (isField(element) || isDescField(element) || isPickerField(element) || element.startsWith('pick:') || restBase(element) !== null || element === TYPE_KEY)
+  element !== undefined && (isField(element) || isPickerField(element) || element.startsWith('pick:') || restBase(element) !== null || element === TYPE_KEY)
 /** How long after the command's answer the handoff prompt is submitted. */
 export const SUBMIT_DELAY_MS = 64
 /** How many times the ring is sent to an element before the field is given up. */
@@ -214,9 +203,8 @@ export const FOCUS_DELAY_MS = 48
 export const BOX_POLL_MS = 600
 /** What /conductor this module answers: its verbs, `replay design`, and no argument at all (a run shown on its design); run.tsx answers the rest. */
 export const DESIGN_VERBS = /^\s*((design|run|list|draft|delete|rename)(\s|$)|replay\s+design(\s|$)|$)/
-/** The goal is said in at most this many rows under the header (inline: one). */
-const GOAL_ROWS = 2
-const GOAL_LABEL = 'Goal: '
+/** The header's rows: the persona's two, the name on the first. */
+const HEAD_ROWS = 2
 const EDIT_HINT = 'click a field of the block, or press Tab to reach the name'
 /** The graph's region is never asked to be shorter than this while the detail pane, under it, has rows to give. */
 const GRAPH_LEAST_ROWS = 3
@@ -308,14 +296,14 @@ const timeTravel = (design: Design | null, ui: DesignUi, way: 'undo' | 'redo', c
 const keyStep = (design: Design | null, ui: DesignUi, op: KeyOp, context: RunContext): Step =>
   op === 'undo' || op === 'redo' ? timeTravel(design, ui, op, context) : applyOp(design, ui, op, context)
 /**
- * What is being typed and not saved yet: into the fields of one block of one design (by field, `design-notes`),
- * and into the goal's field. Not state: a keystroke must not redraw the pane. Nothing here is ever dropped
+ * What is being typed and not saved yet: into the fields of one block of one design (by field, `design-notes`).
+ * Not state: a keystroke must not redraw the pane. Nothing here is ever dropped
  * unsaid: `flushDrafts` saves it on every way out of a field that a hook hears of, or sees a drawing later.
  */
-type Drafts = { name: string; id: string | null; values: Record<string, string>; goal: string | null }
-const noDrafts = (): Drafts => ({ name: '', id: null, values: {}, goal: null })
+type Drafts = { name: string; id: string | null; values: Record<string, string> }
+const noDrafts = (): Drafts => ({ name: '', id: null, values: {} })
 let drafts: Drafts = noDrafts()
-const hasDrafts = (): boolean => drafts.goal !== null || (drafts.id !== null && Object.keys(drafts.values).length > 0)
+const hasDrafts = (): boolean => drafts.id !== null && Object.keys(drafts.values).length > 0
 /** What one field's text changes of its block. */
 const fieldPatch = (node: { name: string }, base: string, value: string): NodePatch =>
   base === NAME_KEY ? { name: value.trim() || node.name } : base === LOGIC_KEY ? { logic: value.trim() } : ({ knobs: { [base.slice(KNOB_KEY.length)]: value.trim() } } as NodePatch)
@@ -521,7 +509,7 @@ const flushDrafts = ($: EngineInterface): Promise<string | null> => {
     const ui = await read($, uiAtom)
     let design: Design | null = await read($, designAtom)
     // The design they were typed for is no longer the one shown, or a run locks it: nothing can be saved, and it is said.
-    const lost = `unsaved text in ${pending.goal !== null ? 'goal' : Object.keys(pending.values).map(fieldWord).join(', ')} discarded`
+    const lost = `unsaved text in ${Object.keys(pending.values).map(fieldWord).join(', ')} discarded`
     if (!design || ui.status !== 'ready' || ui.name !== pending.name) {
       $.ui.toast(`conductor: ${lost} (design ${pending.name} is no longer on the board)`)
 
@@ -534,14 +522,6 @@ const flushDrafts = ($: EngineInterface): Promise<string | null> => {
     }
     const said: string[] = []
     let titled = false
-    if (pending.goal !== null) {
-      const step = describeDesign(design, ui, pending.goal)
-      if (step.changed && step.design) {
-        record(ui.name, design, step.what)
-        design = step.design
-        said.push(step.what ?? 'goal changed')
-      }
-    }
     const node = pending.id === null ? undefined : findNode(design, pending.id)
     if (node) {
       let patch: NodePatch = {}
@@ -594,7 +574,7 @@ const settleRing = ($: EngineInterface, tries = 1): void => {
   $.clock.after(FOCUS_DELAY_MS, () => {
     void (async (): Promise<void> => {
       const ui = await read($, uiAtom)
-      if ((ui.status !== 'ready' && ui.status !== 'pick') || ui.editing || ui.describing) return
+      if ((ui.status !== 'ready' && ui.status !== 'pick') || ui.editing) return
       const key = ui.status === 'ready' && ui.picker !== null && !(await lockedNow($)) ? pickerKey() : drawnCatcher
       const moved = await $.ui.focus({ requestId: DESIGN_PANE_ID, key }).catch(() => ({ deny: 'no' }))
       if (moved.deny === undefined) ringOn = key
@@ -646,16 +626,16 @@ const landOn = ($: EngineInterface, target: () => string, hint: string): void =>
 }
 
 /**
- * Opens the fields of the selected block for typing, the ring on `base` (the title when none is named): what `e`
+ * Opens the fields of the selected block for typing, the ring on `base` (its first field when none is named): what `e`
  * does, for the ways that are not a key (Tab from the catcher, a click on a field at rest).
  */
-const openFields = async ($: EngineInterface, base: string = NAME_KEY): Promise<void> => {
+const openFields = async ($: EngineInterface, base?: string): Promise<void> => {
   const ui = await read($, uiAtom)
   const design = await read($, designAtom)
   const node = design === null || ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
   if (ui.status !== 'ready' || !node || ui.handed || (await lockedNow($))) return
-  if (!ui.editing || ui.help > 0 || ui.picker !== null || ui.describing) await update($, uiAtom, held => ({ ...held, editing: true, help: 0, picker: null, describing: false, detailHidden: false, confirmId: null }))
-  landOn($, () => fieldKey(base, node.id), `edit: ${EDIT_HINT}`)
+  if (!ui.editing || ui.help > 0 || ui.picker !== null) await update($, uiAtom, held => ({ ...held, editing: true, help: 0, picker: null, detailHidden: false, confirmId: null }))
+  landOn($, () => fieldKey(base ?? firstField(node), node.id), `edit: ${EDIT_HINT}`)
 }
 
 /**
@@ -666,12 +646,6 @@ const openFields = async ($: EngineInterface, base: string = NAME_KEY): Promise<
 let landing = false
 /** `landing` is given up after this long, whatever became of the ring. */
 const LANDING_MS = 400
-/**
- * A click on the goal asked for its field and the pane is taking the keyboard for it: for that long (`LANDING_MS` at
- * most) a drawing that finds the pane without the keys, or a move of the ring, does not close the field.
- */
-let goalAsked = false
-
 /**
  * A click gave the graph the keyboard, and nothing tells a hook when the graph loses it again (Escape is the
  * engine's). So the pane takes the keys back at once, for its catcher (`picks`: for the add list's filter): from there
@@ -713,12 +687,6 @@ const retake = async ($: EngineInterface, picks: boolean): Promise<void> => {
   else await land(1)
 }
 
-/** The goal's field is drawn anew, as `redrawFields` does a block's. */
-const redrawGoal = (): void => {
-  descGen++
-  if (isDescField(ringOn)) ringOn = descKey()
-  if (isDescField(ringTo)) ringTo = descKey()
-}
 /**
  * A key was typed. Once none has been for TIDY_MS the Inputs are tidied: the catcher and the door emptied of the keys
  * they took, and a field that has letters kept beside it drawn anew with all of its text. Never while the typing goes
@@ -746,11 +714,6 @@ const tidySoon = ($: EngineInterface): void => {
         .focus({ requestId: DESIGN_PANE_ID, key: drawnCatcher })
         .then(() => landOn($, target, `edit: ${EDIT_HINT}`))
         .catch(() => undefined)
-    }
-    if (pins[descKey()]?.head) {
-      redrawGoal()
-      tidied = true
-      if (isDescField(at)) again(descKey)
     }
     if (Object.entries(pins).some(([element, pin]) => pin.head !== '' && isField(element))) {
       redrawFields()
@@ -879,16 +842,9 @@ const saveField = async ($: EngineInterface, id: string, base: string, value: st
   savedField = { element: fieldKey(base, id), value, taken: 0 }
   const ui = await read($, uiAtom)
   const mine = drafts.id === id && drafts.name === ui.name
-  drafts = { name: ui.name, id, goal: drafts.name === ui.name ? drafts.goal : null, values: { ...(mine ? drafts.values : {}), [base]: value } }
+  drafts = { name: ui.name, id, values: { ...(mine ? drafts.values : {}), [base]: value } }
   await home($)
   await flushDrafts($)
-}
-
-/** Enter in the goal's field: saved, and the detail pane is the selected block's again. */
-const saveGoal = async ($: EngineInterface, value: string): Promise<void> => {
-  drafts = { ...drafts, goal: null }
-  await commit($, (before, held, context) => describeDesign(before, held, value, context))
-  await home($)
 }
 
 /** A choice in the add list: the block is added and its title is the next thing typed; a type picked for a block sends the ring back to the catcher. */
@@ -966,31 +922,21 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   if (ui.status !== 'ready' || design === null) return false
   const { locked } = await runContext($)
   const node = ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
-  // A field was asked for (`e`, a new block, `g`, `n`) and the ring is on its way there: it moves a redraw later. What
+  // A field was asked for (`e`, a new block, `n`) and the ring is on its way there: it moves a redraw later. What
   // is typed into the catcher meanwhile is that field's text, never a key: `e` then `x` types an x, it deletes nothing.
   if (!ui.handed && !locked) {
     if (ui.editing && node) {
       const mine = drafts.id === node.id && drafts.name === ui.name
-      const text = (mine ? drafts.values[NAME_KEY] : undefined) ?? (ui.freshId === node.id ? '' : node.name)
-      if (key === ENTER) await saveField($, node.id, NAME_KEY, text)
+      // The block's first field: its name's, the goal's on the start block.
+      const first = firstField(node)
+      const text = (mine ? drafts.values[first] : undefined) ?? (first !== NAME_KEY ? (node.knobs?.goal ?? '') : ui.freshId === node.id ? '' : node.name)
+      if (key === ENTER) await saveField($, node.id, first, text)
       else {
-        // The title's field may be drawn already, without this letter: the letter is kept beside it, after the text it
+        // The field may be drawn already, without this letter: the letter is kept beside it, after the text it
         // opened with and before what was typed in the field itself since, until the typing pauses.
-        const pin = pins[fieldKey(NAME_KEY, node.id)]
+        const pin = pins[fieldKey(first, node.id)]
         if (pin) pin.head += key
-        drafts = { name: ui.name, id: node.id, goal: drafts.name === ui.name ? drafts.goal : null, values: { ...(mine ? drafts.values : {}), [NAME_KEY]: pin ? `${pin.value}${pin.head}${pin.tail}` : `${text}${key}` } }
-      }
-
-      return true
-    }
-    if (ui.describing) {
-      const text = drafts.goal !== null && drafts.name === ui.name ? drafts.goal : design.description
-      if (key === ENTER) await saveGoal($, text)
-      else {
-        const pin = pins[descKey()]
-        if (pin) pin.head += key
-        const whole = pin ? `${pin.value}${pin.head}${pin.tail}` : `${text}${key}`
-        drafts = drafts.name === ui.name ? { ...drafts, goal: whole } : { ...noDrafts(), name: ui.name, goal: whole }
+        drafts = { name: ui.name, id: node.id, values: { ...(mine ? drafts.values : {}), [first]: pin ? `${pin.value}${pin.head}${pin.tail}` : `${text}${key}` } }
       }
 
       return true
@@ -1023,12 +969,8 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
 
     return false
   }
-  const editId = op === 'edit' && step.ui.editing ? step.ui.selectedId : null
-  if (editId !== null) landOn($, () => fieldKey(NAME_KEY, editId), `edit: ${EDIT_HINT}`)
-  if (op === 'goal' && step.ui.describing) {
-    descGen++
-    landOn($, descKey, 'goal: press Tab to reach the field')
-  }
+  const edited = op === 'edit' && step.ui.editing && step.design && step.ui.selectedId !== null ? findNode(step.design, step.ui.selectedId) : undefined
+  if (edited) landOn($, () => fieldKey(firstField(edited), edited.id), `edit: ${EDIT_HINT}`)
   if (op === 'add' && step.ui.picker) {
     // A new filter, with nothing typed in it.
     pickGen++
@@ -1322,7 +1264,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
           return { text: `A design named ${name} exists (${DESIGN_DIR}/${name}.json). Open it with /${COMMAND} design ${name} and ask for changes in chat, or draft under another name.` }
         }
       }
-      const blank: Design = { ...emptyDesign(name), description: brief }
+      const blank: Design = withGoal(emptyDesign(name), brief)
       try {
         await $.fs.write(path, serializeDesign(blank))
       } catch (error) {
@@ -1423,7 +1365,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // The run's design, or the one last worked on, is often already loaded: it is shown as it stands.
     if (verb === '' && previous.name === name && previous.status === 'ready' && (await read($, designAtom)) !== null) {
       // A field left open when the keyboard went to the prompt is closed: the keys are keys again.
-      if (previous.editing || previous.describing || previous.picker !== null) await update($, uiAtom, held => ({ ...held, editing: false, describing: false, freshId: null, picker: null }))
+      if (previous.editing || previous.picker !== null) await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, picker: null }))
       await $.ui.open(paneArgs(true))
       // On the catcher, never in a field.
       settleRing($)
@@ -1473,8 +1415,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // A load (the first, or a reload): the state outlives it, what it said of the moment does not. No field is open,
     // nothing waits in the prompt box under a `run: …` line, and the ring starts on the catcher.
     await update($, uiAtom, held =>
-      held.editing || held.describing || held.picker !== null || held.handed || held.confirmId !== null || (held.notice !== null && /^(run|ask): /.test(held.notice)) || held.notice === HANDED_NOTICE
-        ? { ...held, editing: false, describing: false, freshId: null, picker: null, handed: false, confirmId: null, notice: held.notice !== null && (/^(run|ask): /.test(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice }
+      held.editing || held.picker !== null || held.handed || held.confirmId !== null || (held.notice !== null && /^(run|ask): /.test(held.notice)) || held.notice === HANDED_NOTICE
+        ? { ...held, editing: false, freshId: null, picker: null, handed: false, confirmId: null, notice: held.notice !== null && (/^(run|ask): /.test(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice }
         : held,
     )
 
@@ -1617,7 +1559,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     if (action === 'write' && known === undefined && !isBlank(design)) {
       return { deny: `A design named ${name} exists and you have not read it in this conversation, so a write would replace it unseen. Nothing was changed. A name no design has is free to use.` }
     }
-    const edit = action === 'apply' ? applyOps(design, input.ops, input.description) : replaceDesign(design, input.nodes, input.description)
+    const edit = action === 'apply' ? applyOps(design, input.ops) : replaceDesign(design, input.nodes)
     if (!edit.ok) return { deny: edit.error }
     try {
       if (isSaved(name)) await $.fs.write(path, serializeDesign(edit.design))
@@ -1628,7 +1570,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const scriptKept = ran === null || (await keepScript($, ran.path, scriptFile(root, name)))
     // Undone like any edit made by hand; and Claude has seen what it just wrote.
     const said = changeWords(edit)
-    if (said !== '' || edit.design.description !== design.description) record(name, design, `Claude ${said === '' ? 'changed the goal' : said}`)
+    if (said !== '') record(name, design, `Claude ${said}`)
     // What Claude holds of it now is what it sent and what the answer says. Where the design stored has more (text a
     // kind filled in, a block from a design it never read whole), no later change is said against it: Claude reads again.
     if (knownAfterEdit(edit.design, seenDesigns[name], input)) sawDesign(name, edit.design)
@@ -1728,32 +1670,6 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     return {}
   })
 
-  // A click on the goal under the header: what `g` does. The click gave those rows the keyboard, so the pane takes it
-  // back first, as after a click on the graph: a field opened while the pane does not hold the keys is closed again.
-  on('ui.message', { requestId: DESIGN_PANE_ID, element: GOAL_KEY }, async $ => {
-    const flushed = await flushDrafts($)
-    // A request waits in the prompt box: the click says the keys are the pane's again.
-    if ((await read($, uiAtom)).handed) await retake($, false)
-    goalAsked = true
-    $.clock.after(LANDING_MS, () => {
-      goalAsked = false
-      $.ui.invalidate('ui.render')
-    })
-    await $.ui.open(paneArgs(true)).catch(() => undefined)
-    const step = await commit($, (before, held, context) => keyStep(before, held, 'goal', context))
-    await keepSaid($, flushed)
-    if (step.ui.status === 'ready' && step.ui.describing) {
-      descGen++
-      landOn($, descKey, 'goal: press Tab to reach the field')
-    } else {
-      // Not opened (a run locks the design, the keys stay with the prompt): the ring rests where it does with no field open.
-      goalAsked = false
-      settleRing($)
-    }
-
-    return {}
-  })
-
   // The wheel. The pane's tree is as tall as its body, so the engine has nothing to scroll: over the graph's rows the
   // ticks are the graph's, which pans by them (the Client takes the sum from its props). Anywhere else, and for the
   // scroll keys, the move is the engine's.
@@ -1800,10 +1716,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const inDetail = !stray && !leaves && (isField(e.element) || e.element === TYPE_KEY || door || rest !== null)
     const held = await read($, uiAtom)
     if (held.status === 'ready' && held.editing !== inDetail && (inDetail || person)) await update($, uiAtom, ui => ({ ...ui, editing: inDetail, freshId: inDetail ? ui.freshId : null }))
-    // The person's Tab from the catcher: the fields open, and the ring goes on to the title. (A field at rest it came to rest on: that field.)
-    if ((door && !leaves) || rest !== null) await openFields($, rest ?? NAME_KEY)
-    // The goal's field closes when the person moves the ring off it.
-    if (held.status === 'ready' && held.describing && !isDescField(e.element) && person && !goalAsked) await update($, uiAtom, ui => ({ ...ui, describing: false }))
+    // The person's Tab from the catcher: the fields open, and the ring goes on to the first. (A field at rest it came to rest on: that field.)
+    if ((door && !leaves) || rest !== null) await openFields($, rest ?? undefined)
     await keepSaid($, flushed)
     // The legend and the detail pane's last rows name the keys of where the ring is.
     $.ui.invalidate('ui.render')
@@ -1845,7 +1759,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const file = `${DESIGN_DIR}/${ui.name}.json`
     const bodyColumns = e.props.bodyColumns || 80
     const columns = Math.max(20, bodyColumns - 2)
-    // The header's persona stands at its left: the name's row and the goal's have the rest.
+    // The header's persona stands at its left: the name's row has the rest.
     const headColumns = columns - SMALL_W
     // The run laid over this design, when it was started from it.
     const run = await read($, runAtom)
@@ -1973,11 +1887,11 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         {legendRows(items, columns, legendMost).map(legendRow)}
       </Box>
     )
-    // The rows. Header, goal, rules and footer keep theirs; the graph and the detail pane share the rest. Docked, a rule
+    // The rows. Header, rules and footer keep theirs; the graph and the detail pane share the rest. Docked, a rule
     // stands under the header and one above the footer, and `stacked` (the detail pane under the graph) one between the two.
     // Inline the rows are few: no rule, what is said has the row over the keys, and the pane never asks for more rows than it has (it would scroll, and the header leave).
     const footRows = dock ? legendMost : 2
-    const mainRowsFor = (goalRows: number, stacked: boolean): number => Math.max(wide ? GRAPH_LEAST_ROWS + 2 : dock ? HINT_ROWS + 1 : 2, bodyRows - 1 - goalRows - (dock ? 2 : 0) - (stacked ? 1 : 0) - footRows)
+    const mainRowsFor = (stacked: boolean): number => Math.max(wide ? GRAPH_LEAST_ROWS + 2 : dock ? HINT_ROWS + 1 : 2, bodyRows - HEAD_ROWS - (dock ? 2 : 0) - (stacked ? 1 : 0) - footRows)
     // The key catcher, the ring's place while no field is open: in the tree, where it is the pane's first stop, and not drawn.
     const catcher = () =>
       Input && (
@@ -2016,26 +1930,6 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         </Text>
       )
     }
-    const goalRow = (rows: readonly string[], dim: boolean) => (
-      <Box key="design-goal" flexDirection="column">
-        {rows.map((row, index) => (
-          <Text wrap="truncate-end">
-            <Text bold>{index === 0 ? GOAL_LABEL : ' '.repeat(GOAL_LABEL.length)}</Text>
-            <Text color={dim ? FADED : undefined}>{row}</Text>
-          </Text>
-        ))}
-      </Box>
-    )
-    // The same rows as the person can press them (./goal.tsx): a click on them opens the goal's field, as `g` does. A
-    // Client and no Button: a Button is a stop of the ring, and Tab from the graph would land on it before the title.
-    const goalPress = (rows: readonly string[], dim: boolean) =>
-      'Client' in els ? (
-        <Box key="design-goal" flexDirection="column" height={rows.length}>
-          <els.Client key={GOAL_KEY} module="./goal.tsx" width="100%" height={rows.length} props={{ label: GOAL_LABEL, rows, dim, faded: FADED } as never} />
-        </Box>
-      ) : (
-        goalRow(rows, dim)
-      )
     // The keys that act on the detail pane, for its last rows: two rows docked, one inline or where the pane is short.
     const hintsOf = (items: readonly LegendItem[], width: number, rows: number): LegendItem[][] => legendRows(items, width, dock && rows >= 8 ? HINT_ROWS : 1)
     // The detail pane: its content, and on its last rows the keys that act on it.
@@ -2055,16 +1949,15 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       </Box>
     )
     // One column of margin at each side: `columns` is the body's less the two. `detail` is null while the detail pane is hidden.
-    const frame = (catching: boolean, head: RenderChildren, goal: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, beside: boolean, mainRows: number, said: Said, legend: RenderChildren) => (
+    const frame = (catching: boolean, head: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, beside: boolean, mainRows: number, said: Said, legend: RenderChildren) => (
       <Box flexDirection="column" paddingLeft={1} paddingRight={1}>
         {catching && catcher()}
         <Box flexDirection="row">
           <Box key="design-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
             {spanRows(smallPersona(pose))}
           </Box>
-          <Box flexDirection="column" width={headColumns} flexShrink={0}>
+          <Box flexDirection="column" width={headColumns} height={HEAD_ROWS} flexShrink={0}>
             {head}
-            {goal}
           </Box>
         </Box>
         {dock && rule()}
@@ -2160,11 +2053,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         }
         shown = previews[marked.id] ?? null
       } else if (marked) shown = TEMPLATES.find(one => one.id === marked.id)?.make() ?? emptyDesign(ui.name)
-      const purpose = shown?.description.replace(/\s+/g, ' ').trim() ?? ''
-      const goalLines = firstLines(purpose !== '' ? purpose : marked?.kind === 'blank' ? 'an empty design: its goal is yours to say' : marked?.kind === 'saved' && shown === null ? 'this file does not read as a design' : 'not said yet', Math.max(12, headColumns - GOAL_LABEL.length), dock ? GOAL_ROWS : 1)
-      // Two rows whatever the marked row says, so nothing under them moves with the mark.
-      const goalRows = dock ? GOAL_ROWS : 1
-      const mainRows = mainRowsFor(goalRows, dock && !wide)
+      const mainRows = mainRowsFor(dock && !wide)
       // The keys: the list's on the detail pane's last rows, the rest in the footer.
       const keys = legendItems({ ring: 'start', placed: false, retype: false, empty: true, helping, locked: false, selected: false, container: false, nested: false, results: false, undo: false, redo: false, knobs: [], hidden: false })
       const legend = legendOf(keys.footer)
@@ -2214,8 +2103,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const box: GraphBox = { columns: graphW, rows: Math.max(1, beside ? mainRows : mainRows - detailRows) }
       const graphRows = beside ? mainRows : mainRows - detailRows
       graphBox = box
-      // Above it: the header's row, the goal's, and docked the rule under them.
-      graphArea = graphRows < 1 || !('Client' in els) ? null : { top: 1 + goalRows + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
+      // Above it: the header's rows, and docked the rule under them.
+      graphArea = graphRows < 1 || !('Client' in els) ? null : { top: HEAD_ROWS + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
       drawnCatcher = Input !== null ? catcherKey() : ''
       fieldsDrawn = false
       const stops = [ui.status, ui.name, saved.length, helping].join('|')
@@ -2224,17 +2113,10 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         if (focused) settleRing($)
       }
       const preview = graphBoxOf(graphW, graphRows, shown ? { ...previewProps(shown, box), wheel: { from: LOAD, rows: wheelRows } } : null, null)
-      const goal = (
-        <Box key="design-goal" flexDirection="column" height={goalRows}>
-          {goalRow(goalLines, purpose === '')}
-        </Box>
-      )
-
       return frame(
         true,
         // The agents the marked row's design starts, where it has blocks to count.
         headOf(shown !== null && !isBlank(shown) ? factsLine(shown) : null),
-        goal,
         shown ? preview : <Box key="design-graph" width={graphW} height={graphRows} flexShrink={0} />,
         detailBox(detailW, detailRows, hints, content),
         beside,
@@ -2245,13 +2127,12 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     }
     if (!design) return <Box />
 
-    // What takes the detail pane in place of the selected block: the add list (a block to add, or a block's type), the
-    // goal's field, a help page. The first two are the pane's only while it holds the keyboard: Escape hands the keys
+    // What takes the detail pane in place of the selected block: the add list (a block to add, or a block's type),
+    // a help page. The first is the pane's only while it holds the keyboard: Escape hands the keys
     // to the prompt and no hook hears of it, so drawn without it they are closed to the eye.
     const picking = ui.picker !== null && !locked && focused
-    const describing = ui.describing === true && !locked && focused && !picking
-    const helping = !picking && !describing && ui.help > 0
-    const hidden = ui.detailHidden === true && !picking && !describing && !helping
+    const helping = !picking && ui.help > 0
+    const hidden = ui.detailHidden === true && !picking && !helping
 
     // The widths. Beside the graph the detail pane has about a third, and one column of rule stands between them.
     const beside = wide && !hidden
@@ -2260,20 +2141,16 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // The view follows the selection where something other than the person's keys moved it out of sight.
     const viewRoot = viewRootOf(design, ui, graphW)
 
-    // Row 2, up to two docked: what the design is for.
-    const goal = design.description.replace(/\s+/g, ' ').trim()
-    const goalLines = firstLines(goal === '' ? (focused && !locked ? 'not said yet · g sets it' : 'not said yet') : goal, Math.max(12, headColumns - GOAL_LABEL.length), dock ? GOAL_ROWS : 1)
-
     // The keys that work now, in their fixed order: the graph's in the footer's right half, the detail pane's on its last rows.
     const history = histories[ui.name]
     const keys = legendItems({
-      ring: !focused ? 'graph' : ui.picker !== null && !locked ? 'list' : ui.describing && !locked ? 'goal' : ui.editing ? 'fields' : 'graph',
+      ring: !focused ? 'graph' : ui.picker !== null && !locked ? 'list' : ui.editing ? 'fields' : 'graph',
       placed: ui.picker?.anchorId !== undefined && ui.picker.retypeId === undefined,
       retype: ui.picker?.retypeId !== undefined,
       opens: picking && ui.picker ? pickerMatches(design, ui.picker)[ui.picker.pick ?? 0]?.opens === true : false,
       kinds: ui.picker?.block !== undefined && ui.picker.query === '',
       empty: isBlank(design),
-      fixed: node?.type === 'args',
+      fixed: node?.type === 'start',
       helping,
       locked,
       selected: node !== undefined,
@@ -2305,7 +2182,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
           ? `${KEYS_CUE.split(' · ')[0] ?? KEYS_CUE} · ${afterCue}`
           : KEYS_CUE
     const message: Said = focused ? said : { text: cue, color: FADED }
-    const mainRows = mainRowsFor(goalLines.length, dock && !wide && !hidden)
+    const mainRows = mainRowsFor(dock && !wide && !hidden)
 
     // The fields this block's type calls for (teach.ts says which), in the detail pane's order: the knobs typed as text.
     const parent = node ? flatten(design).find(row => row.node.id === node.id)?.parentId : undefined
@@ -2318,15 +2195,15 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // that its field can no longer be typed in: the pane lost the keyboard (Escape, which no hook hears; a chat turn),
     // the pane changed shape (a resize moves it between dock and inline and takes the keys), another block is shown.
     const shape = `${dock ? 'dock' : 'inline'}/${columns}`
-    const orphaned = hasDrafts() && (!focused || shape !== paneShape || drafts.name !== ui.name || (drafts.id !== null && drafts.id !== node?.id) || (drafts.goal !== null && ui.describing !== true))
+    const orphaned = hasDrafts() && (!focused || shape !== paneShape || drafts.name !== ui.name || (drafts.id !== null && drafts.id !== node?.id))
     paneShape = shape
     // The keyboard went with a field open: the field is closed, with what it held saved; `e` or a click opens it again.
-    const lostKeys = !focused && !goalAsked && (ui.editing || ui.describing)
+    const lostKeys = !focused && ui.editing
     if ((orphaned || lostKeys) && !flushAsked) {
       flushAsked = true
       $.clock.after(0, () => {
         flushAsked = false
-        void flushDrafts($).then(() => (lostKeys ? update($, uiAtom, held => (held.editing || held.describing ? { ...held, editing: false, describing: false, freshId: null } : held)) : undefined))
+        void flushDrafts($).then(() => (lostKeys ? update($, uiAtom, held => (held.editing ? { ...held, editing: false, freshId: null } : held)) : undefined))
       })
     }
     const ownProblems = node ? problems.filter(one => one.nodeId === node.id) : []
@@ -2334,7 +2211,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const texts: { key: string; knob: string; label: string; value: string; placeholder: string }[] = node
       ? [
           // A block just added opens with its name field empty: the default name shows dim and stays if nothing is typed.
-          { key: NAME_KEY, knob: 'name', label: FIELD_LABEL.name, value: typed(NAME_KEY, ui.freshId === node.id ? '' : node.name), placeholder: node.name },
+          // The start block is named for what it is: its fields are the goal and the args.
+          ...(hasName(node) ? [{ key: NAME_KEY, knob: 'name', label: FIELD_LABEL.name, value: typed(NAME_KEY, ui.freshId === node.id ? '' : node.name), placeholder: node.name }] : []),
           // A phase is its name and no more: it has a logic field only for logic it already carries.
           ...(hasLogic(node) ? [{ key: LOGIC_KEY, knob: 'logic', label: FIELD_LABEL.logic, value: typed(LOGIC_KEY, node.logic ?? ''), placeholder: placeholderOf(node, 'logic') }] : []),
           ...textKnobs.map((knob: TextKnob) => ({
@@ -2352,20 +2230,20 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const marker = matches[Math.min(ui.picker?.pick ?? 0, Math.max(0, matches.length - 1))]
     const editable = node !== undefined && !locked
     // The fields are text to read until they are opened (`e`, Enter, Tab, a click on one): only then are they drawn to type in.
-    const fielding = editable && ui.editing && focused && !picking && !describing && !helping && Input !== null
+    const fielding = editable && ui.editing && focused && !picking && !helping && Input !== null
     // The fields closed since the last drawing: the ones opened next are new ones.
     if (fieldsDrawn && !fielding) editGen++
     fieldsDrawn = fielding
-    if (!fielding && !describing && Object.keys(pins).length > 0) pins = {}
-    // The catcher is in the tree wherever the ring may rest on it: not with the add list or the goal's field, which take its place among the stops.
-    const catching = Input !== null && !picking && !describing
+    if (!fielding && Object.keys(pins).length > 0) pins = {}
+    // The catcher is in the tree wherever the ring may rest on it: not with the add list, which takes its place among the stops.
+    const catching = Input !== null && !picking
     drawnCatcher = catching ? catcherKey() : ''
     // The ring is kept by its place among the stops. Where this drawing's stops are not the last one's (a run ended and
     // the fields are back, the add list closed) and no field is asked for, the ring is put on the catcher.
-    const stops = [ui.status, ui.name, locked, picking, helping, describing, hidden, node?.id ?? '', knobs.join(',')].join('|')
+    const stops = [ui.status, ui.name, locked, picking, helping, hidden, node?.id ?? '', knobs.join(',')].join('|')
     if (stops !== ringStops) {
       ringStops = stops
-      if (focused && !ui.editing && !describing) settleRing($)
+      if (focused && !ui.editing) settleRing($)
     }
 
     // Enter on a field. With the ring known to be elsewhere it came to rest here unasked (it is kept by its place, and the
@@ -2410,7 +2288,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         text = `${(mine ? drafts.values[key] : undefined) ?? ''}${value.slice(known.length)}`
         redrawFields()
       }
-      drafts = { name: ui.name, id: node.id, goal: drafts.name === ui.name ? drafts.goal : null, values: { ...(mine ? drafts.values : {}), [key]: text } }
+      drafts = { name: ui.name, id: node.id, values: { ...(mine ? drafts.values : {}), [key]: text } }
       if (!ui.editing) void update($, uiAtom, held => (held.editing ? held : { ...held, editing: true }))
       $.ui.invalidate('ui.render')
     }
@@ -2443,8 +2321,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             <Box key="design-heading" flexDirection="row" justifyContent="space-between" height={1}>
               <Text wrap="truncate-end">
                 <Text color={ACCENT[node.type]} bold>{typeLabel(node)}</Text>
-                <Text color={FADED}>{' / '}</Text>
-                <Text bold>{clip(node.name, Math.max(4, detailW - typeLabel(node).length - node.id.length - 5 - DOOR_W))}</Text>
+                {hasName(node) && <Text color={FADED}>{' / '}</Text>}
+                {hasName(node) && <Text bold>{clip(node.name, Math.max(4, detailW - typeLabel(node).length - node.id.length - 5 - DOOR_W))}</Text>}
               </Text>
               <Box flexDirection="row" flexShrink={0}>
                 <Text color={FADED}>{node.id}</Text>
@@ -2542,8 +2420,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         </Box>
       ),
     })
-    // The args block has no type to pick: it becomes no other block.
-    const blockItems: Item[] = node && editable && node.type !== 'args' ? [typeLine(node)] : []
+    // The start block has no type to pick: it becomes no other block.
+    const blockItems: Item[] = node && editable && node.type !== 'start' ? [typeLine(node)] : []
     // What Claude set and the pane has no control for, read only: the worktree, the subagent it runs as.
     const setItems: Item[] = node
       ? [
@@ -2665,44 +2543,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       ]
     }
 
-    // The goal's field: one line, and all of the goal as typed so far under it.
-    const goalField = (): Item[] => {
-      const element = descKey()
-      const value = drafts.goal !== null && drafts.name === ui.name ? drafts.goal : design.description
-      const shown = pinned(element, value)
-      const under = oneLine(value).length > detailW - 4 || (pins[element]?.head ?? '') !== '' ? wrapText(value, detailW) : []
-      return [
-        label('Goal'),
-        ...lines(wrapText('What this workflow is for, in a sentence: Claude reads it as the goal.', detailW), FADED),
-        blank,
-        {
-          rows: 1,
-          el: (
-            <Box key="design-goal-field" flexDirection="column" flexShrink={0} height={1}>
-              {Input && (
-                <Input
-                  key={element}
-                  placeholder={GOAL_PLACEHOLDER}
-                  value={shown}
-                  submitLabel=""
-                  onInput={(typedNow, input) => {
-                    if (input.element !== descKey()) return
-                    tidySoon($)
-                    const whole = fieldText(input.element, typedNow)
-                    if (whole.loose) redrawGoal()
-                    drafts = drafts.name === ui.name ? { ...drafts, goal: whole.text } : { ...noDrafts(), name: ui.name, goal: whole.text }
-                    $.ui.invalidate('ui.render')
-                  }}
-                  onSubmit={(typedNow, input) => saveGoal($, fieldText(input.element, typedNow).text)}
-                />
-              )}
-            </Box>
-          ),
-        },
-        ...lines(under.map(row => row.padEnd(detailW))),
-      ]
-    }
     // Nothing selected: the design's goal, and how to go on.
+    const goal = goalOf(design)
     const idle = (): Item[] => [
       label('Goal'),
       ...lines(wrapText(goal === '' ? 'Not said yet.' : goal, detailW).slice(0, 6), goal === '' ? FADED : undefined),
@@ -2717,7 +2559,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
                 !isBlank(design)
                   ? 'Click a card to select it, or a [+] to add a block there.'
                   : focused
-                    ? 'Press n to add the first block and g to say what the workflow is for; or tell Claude in the prompt what to build.'
+                    ? 'Press n to add the first block, and say on the start block what the workflow is for; or tell Claude in the prompt what to build.'
                     : 'Click [+] on the graph to add the first block, or tell Claude in the prompt what to build.',
                 detailW,
               ),
@@ -2728,12 +2570,12 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const stray = (): Item[] => [line('UNMAPPED', undefined, true), ...lines(wrapText('Agents whose label names no block of this design.', detailW), FADED), blank, ...agentItems(AGENT_ROWS_MAX)]
 
     // The detail pane's rows. Beside the graph it has all of them. Under it, it has a fixed share at rest, so nothing
-    // shifts with the selection; while a field, the add list, the goal or a help page is open it takes what that needs.
+    // shifts with the selection; while a field, the add list or a help page is open it takes what that needs.
     // Hidden, it has none: the graph has them all.
-    const openNeed = picking ? rowsOf(addList(0)) : describing ? rowsOf(goalField()) : helping ? rowsOf(helpItems(ui.help, node, detailW, 99, false)) : rowsOf(inspector(0))
+    const openNeed = picking ? rowsOf(addList(0)) : helping ? rowsOf(helpItems(ui.help, node, detailW, 99, false)) : rowsOf(inspector(0))
     // Inline, at rest, it is its last row alone: the keys that open it.
     const restRows = dock ? Math.max(Math.min(HINT_ROWS + 1, mainRows), Math.min(mainRows - GRAPH_LEAST_ROWS, Math.floor(mainRows * DETAIL_REST_SHARE))) : 1
-    const opened = picking || describing || helping || fielding
+    const opened = picking || helping || fielding
     const detailRows = hidden ? 0 : wide ? mainRows : opened ? Math.max(restRows, Math.min(openNeed + HINT_ROWS, mainRows - (dock ? GRAPH_LEAST_ROWS : 0))) : restRows
     const hints = hintsOf(keys.detail, detailW, detailRows)
     const contentRows = Math.max(0, detailRows - hints.length)
@@ -2741,22 +2583,20 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const graphRows = Math.max(0, beside ? mainRows : mainRows - detailRows)
     const box: GraphBox = { columns: graphW, rows: Math.max(1, graphRows) }
     graphBox = box
-    // Above it: the header's row, the goal's, and docked the rule under them.
-    graphArea = graphRows < 1 || !('Client' in els) ? null : { top: 1 + goalLines.length + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
+    // Above it: the header's rows, and docked the rule under them.
+    graphArea = graphRows < 1 || !('Client' in els) ? null : { top: HEAD_ROWS + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
 
     // What the detail pane holds above the rows of its keys.
     const content: Item[] =
       picking && ui.picker
         ? fit(5, contentRows, addList)
-        : describing
-          ? goalField()
-          : helping
-            ? helpItems(ui.help, node, detailW, contentRows, false)
-            : node
-              ? fit(INSPECTOR_LEVELS, contentRows, inspector)
-              : ui.selectedId === UNMAPPED_ID && agents
-                ? stray()
-                : idle()
+        : helping
+          ? helpItems(ui.help, node, detailW, contentRows, false)
+          : node
+            ? fit(INSPECTOR_LEVELS, contentRows, inspector)
+            : ui.selectedId === UNMAPPED_ID && agents
+              ? stray()
+              : idle()
 
     // The graph's region: the one part that changes size. Inside a container opened with `o` the graph's own first row says where the view is.
     const graph = graphBoxOf(
@@ -2772,6 +2612,6 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         )),
     )
 
-    return frame(catching, headOf(factsLine(design)), locked ? goalRow(goalLines, goal === '') : goalPress(goalLines, goal === ''), graph, hidden ? null : detailBox(detailW, detailRows, hints, content), beside, mainRows, message, legend)
+    return frame(catching, headOf(factsLine(design)), graph, hidden ? null : detailBox(detailW, detailRows, hints, content), beside, mainRows, message, legend)
   })
 }

@@ -1,13 +1,15 @@
 {
   "version": 1,
   "name": "demo",
-  "description": "Answer a question from many sources: search several ways, read deeply, check for gaps, then write up",
-  "nextId": 29,
+  "nextId": 30,
   "nodes": [
     {
       "id": "n27",
-      "type": "args",
-      "name": "args"
+      "type": "start",
+      "name": "start",
+      "knobs": {
+        "goal": "Answer a question from many sources: search several ways, read deeply, check for gaps, then write up"
+      }
     },
     {
       "id": "n28",
@@ -55,7 +57,13 @@
               "knobs": {
                 "oncePer": "4 search angles: by container, by content, by entity, by time"
               },
-              "children": []
+              "children": [
+                {
+                  "id": "n29",
+                  "type": "agent",
+                  "name": "agent"
+                }
+              ]
             },
             {
               "id": "n5",

@@ -1,16 +1,15 @@
 {
   "version": 1,
   "name": "splashtest",
-  "description": "Review the current diff along several dimensions and keep only findings that survive a refutation pass",
   "nextId": 8,
   "nodes": [
     {
       "id": "n6",
-      "type": "args",
-      "name": "args",
-      "logic": "What to review: a branch, a pull request or a path. With none, the current diff.",
+      "type": "start",
+      "name": "start",
       "knobs": {
-        "output": "{ target? }"
+        "goal": "Review the current diff along several dimensions and keep only findings that survive a refutation pass",
+        "args": "{ target? }: what to review: a branch, a pull request or a path. With none, the current diff"
       }
     },
     {

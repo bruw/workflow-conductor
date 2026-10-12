@@ -15,7 +15,7 @@ import { fmtDuration, fmtTokens } from '../ui/rail'
 import { clip, wrapText } from '../ui/text'
 import { REDO_HINT, UNDO_HINT } from './history'
 import { agentsCount, lint, preflight } from './lints'
-import { NODE_TYPES, blockCount, canHoldChildren, emptyDesign, findNode, flatten, isBlank, kindsOf, parseDesign, toKebab, typeName } from './model'
+import { NODE_TYPES, blockCount, canHoldChildren, emptyDesign, findNode, flatten, goalOf, isBlank, kindsOf, parseDesign, toKebab, typeName } from './model'
 import type { Design, DesignNode, NodeType } from './model'
 import { addNode, addPlace, moveNode, placeFor, removeNode, retypeNode, stepKnob, updateNode } from './ops'
 import type { NodePatch, OpResult, Place } from './ops'
@@ -81,8 +81,6 @@ export type DesignUi = {
   freshId: string | null
   /** The block last selected in each design opened this session, by design name: reopening one goes back to it. */
   picks: Record<string, string>
-  /** The design's description (its goal) is being typed in: its field is in the detail pane. */
-  describing: boolean
   /** The results of a finished run were put away (by the first edit after it, or the key): the design is shown bare until the next run. */
   runCleared: boolean
   /** The saved designs, as read when the start screen was opened: it lists them above the templates. */
@@ -94,7 +92,7 @@ export type DesignUi = {
 }
 
 /** A saved design as the start screen and `/conductor list` name it. */
-export type SavedDesign = { name: string; blocks: number; description: string }
+export type SavedDesign = { name: string; blocks: number; goal: string }
 
 /** Names kept for replays: such a design lives in the session only, is never saved and never listed. */
 export const SCRATCH_PREFIX = 'replay-'
@@ -107,12 +105,12 @@ export function isSaved(name: string): boolean {
 /** A design file's content as a list entry; a file that does not read as a design is listed as such. */
 export function savedDesign(name: string, text: string): SavedDesign {
   const parsed = parseDesign(text)
-  return parsed.ok ? { name, blocks: blockCount(parsed.design), description: parsed.design.description.replace(/\s+/g, ' ').trim() } : { name, blocks: -1, description: 'not a valid design file' }
+  return parsed.ok ? { name, blocks: blockCount(parsed.design), goal: goalOf(parsed.design) } : { name, blocks: -1, goal: 'not a valid design file' }
 }
 
 /** `demo · 9 blocks · Review the current diff…`: one line of `/conductor list`. */
 export function savedLine(one: SavedDesign): string {
-  return `${one.name} · ${blocksWord(one.blocks)}${one.description === '' ? '' : ` · ${one.description}`}`
+  return `${one.name} · ${blocksWord(one.blocks)}${one.goal === '' ? '' : ` · ${one.goal}`}`
 }
 
 /** The name a new design gets when none was given: `untitled`, or the first `untitled-N` no saved design has. */
@@ -202,7 +200,6 @@ export function initialUi(): DesignUi {
     drafting: false,
     freshId: null,
     picks: {},
-    describing: false,
     runCleared: false,
     saved: [],
     handed: false,
@@ -291,9 +288,9 @@ export function openDesign(name: string, text: string | undefined, previous?: De
   return { design: parsed.design, ui: { ...ui, status: 'ready', selectedId }, changed: false }
 }
 
-/** The block a design opens on: its first (the args block), or none while it has no block of its own, so that the detail pane says how to start. */
+/** The block a design opens on: its first, the start block, whose goal is the first thing a new design is asked for. */
 function firstPick(design: Design): string | null {
-  return isBlank(design) ? null : (design.nodes[0]?.id ?? null)
+  return design.nodes[0]?.id ?? null
 }
 
 /** Starts the design from a template (or blank), named after the file. Only from the start screen. */
@@ -315,7 +312,7 @@ export type StartEntry = { kind: 'saved' | 'template' | 'blank'; id: string; tit
 /** The start screen's rows, in the order `w` / `s` walk them: the saved designs, the templates, Blank. */
 export function startEntries(saved: readonly SavedDesign[], templates: readonly Template[] = TEMPLATES): StartEntry[] {
   return [
-    ...saved.map(one => ({ kind: 'saved' as const, id: one.name, title: one.name, blocks: one.blocks, note: one.description })),
+    ...saved.map(one => ({ kind: 'saved' as const, id: one.name, title: one.name, blocks: one.blocks, note: one.goal })),
     ...templates.map(one => ({ kind: 'template' as const, id: one.id, title: one.title, blocks: blockCount(one.make()), note: one.blurb })),
     { kind: 'blank' as const, id: BLANK_TEMPLATE_ID, title: 'Blank', blocks: 0, note: 'An empty design' },
   ]
@@ -454,7 +451,7 @@ export function restoreDesign(design: Design | null, ui: DesignUi, target: Desig
   const back = flatten(target).find(row => !had.has(row.node.id))?.node.id
   const selectedId = back ?? (ui.selectedId !== null && findNode(target, ui.selectedId) ? ui.selectedId : (target.nodes[0]?.id ?? null))
   const notice = way === 'undo' ? `undone: ${what} · ${REDO_HINT}` : `redone: ${what} · ${UNDO_HINT}`
-  const next: DesignUi = { ...ui, selectedId, notice, confirmId: null, picker: null, editing: false, freshId: null, describing: false, runCleared: true, unsaved: false }
+  const next: DesignUi = { ...ui, selectedId, notice, confirmId: null, picker: null, editing: false, freshId: null, runCleared: true, unsaved: false }
   return { design: target, ui: shown(target, next, context), changed: true }
 }
 
@@ -481,10 +478,10 @@ export function applyMessage(design: Design | null, ui: DesignUi, message: Graph
     return op ? applyOp(design, ui, op, context) : { design, ui, changed: false }
   }
   // A press that asked for nothing: the hooks module only needed to hear of it (the click gave the graph the keyboard).
-  // It is still a click away from the add list or the goal's field: they close.
-  if (message.kind === 'touch') return { design, ui: ui.picker !== null || ui.describing ? { ...ui, picker: null, describing: false } : ui, changed: false }
+  // It is still a click away from the add list: it closes.
+  if (message.kind === 'touch') return { design, ui: ui.picker !== null ? { ...ui, picker: null } : ui, changed: false }
   // What only changes what is shown works while a run locks the design too.
-  const calm: DesignUi = { ...ui, confirmId: null, describing: false, picker: null, editing: false, freshId: null }
+  const calm: DesignUi = { ...ui, confirmId: null, picker: null, editing: false, freshId: null }
   if (message.kind === 'select') {
     const strays = message.id === UNMAPPED_ID && (context.run?.unmapped.length ?? 0) > 0
     const selectedId = message.id !== null && (strays || findNode(design, message.id)) ? message.id : null
@@ -556,19 +553,10 @@ export function retypeBlock(design: Design | null, ui: DesignUi, id: string, to:
   return settle(design, { ...ui, editing: false, freshId: null, picker: null }, renamed, ui.selectedId, `${id} is now ${typeName(to)}`, context)
 }
 
-/** The types a block may become: all of them but `args`, or only containers while it holds blocks. The args block becomes nothing else. */
+/** The types a block may become: all of them but `start`, or only containers while it holds blocks. The start block becomes nothing else. */
 export function retypeChoices(node: { type: NodeType; children?: readonly unknown[] }): NodeType[] {
-  if (node.type === 'args') return []
-  return NODE_TYPES.filter(type => type !== 'args' && ((node.children?.length ?? 0) === 0 || canHoldChildren(type)))
-}
-
-/** The design's description (its goal) as typed in its field in the detail pane. */
-export function describeDesign(design: Design | null, ui: DesignUi, text: string, context: RunContext = {}): Step {
-  if (!design || ui.status !== 'ready') return { design, ui, changed: false }
-  if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, describing: false }, changed: false }
-  const description = text.replace(/\s+/g, ' ').trim()
-  const calm: DesignUi = { ...ui, describing: false, notice: null }
-  return description === design.description ? { design, ui: calm, changed: false } : { design: { ...design, description }, ui: { ...calm, notice: `goal changed · ${UNDO_HINT}`, runCleared: true, unsaved: false }, changed: true, what: 'goal changed' }
+  if (node.type === 'start') return []
+  return NODE_TYPES.filter(type => type !== 'start' && ((node.children?.length ?? 0) === 0 || canHoldChildren(type)))
 }
 
 const FIRST_BLOCK = 'the first block'
@@ -594,9 +582,9 @@ export function placeBy(design: Design, id: string | null, where: AddWhere): Pla
   return row.parentId === undefined ? { index } : { parentId: row.parentId, index }
 }
 
-/** The sides `n` goes round for a block: after it, inside it (a container), before it. Nothing goes before the args block. */
+/** The sides `n` goes round for a block: after it, inside it (a container), before it. Nothing goes before the start block. */
 export function addSides(node: Pick<DesignNode, 'type'>): AddWhere[] {
-  if (node.type === 'args') return ['after']
+  if (node.type === 'start') return ['after']
   return canHoldChildren(node.type) ? ['after', 'inside', 'before'] : ['after', 'before']
 }
 
@@ -662,7 +650,7 @@ export function applyOp(design: Design | null, ui: DesignUi, op: KeyOp, context:
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
   // A request waits in the prompt box: a key typed now is meant for it. Nothing is done, and the way out is said.
   if (ui.handed) return { design, ui: ui.notice === HANDED_NOTICE ? ui : { ...ui, notice: HANDED_NOTICE }, changed: false }
-  const calm: DesignUi = { ...ui, confirmId: null, notice: null, editing: false, freshId: null, describing: false, picker: null, viewRootId: viewRootOf(design, ui, context.graph?.columns) }
+  const calm: DesignUi = { ...ui, confirmId: null, notice: null, editing: false, freshId: null, picker: null, viewRootId: viewRootOf(design, ui, context.graph?.columns) }
   const node = ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
   if (context.locked && !LOCKED_OPS.includes(op)) return { design, ui: { ...calm, notice: LOCK_NOTICE }, changed: false }
   switch (op) {
@@ -724,7 +712,7 @@ export function applyOp(design: Design | null, ui: DesignUi, op: KeyOp, context:
       // The hooks module holds the history: it answers these before they get here.
       return { design, ui: calm, changed: false }
     case 'edit':
-      // The hooks module moves the ring to the title's field.
+      // The hooks module moves the ring to the block's first field: its name's, the goal's on the start block.
       return { design, ui: node ? { ...calm, editing: true, help: 0, detailHidden: false } : { ...calm, notice: 'edit: select a block first' }, changed: false }
     case 'help':
       // Page by page, round again from the first: `x` closes them.
@@ -733,9 +721,6 @@ export function applyOp(design: Design | null, ui: DesignUi, op: KeyOp, context:
     case 'review':
       // The hooks module puts the request in the prompt box; nothing changes here.
       return { design, ui: calm, changed: false }
-    case 'goal':
-      // The goal's field takes the detail pane; the ring lands on it.
-      return { design, ui: { ...calm, describing: true, help: 0, detailHidden: false }, changed: false }
     case 'clearRun':
       // The results of a run that is over are put away; while it runs they stay.
       return { design, ui: context.locked ? { ...calm, notice: LOCK_NOTICE } : { ...calm, runCleared: true }, changed: false }
@@ -748,7 +733,7 @@ export function applyOp(design: Design | null, ui: DesignUi, op: KeyOp, context:
 export function openRetype(design: Design | null, ui: DesignUi, id: string, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready' || !findNode(design, id)) return { design, ui, changed: false }
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE }, changed: false }
-  return { design, ui: { ...ui, notice: null, confirmId: null, editing: false, freshId: null, describing: false, help: 0, picker: { at: { index: 0 }, query: '', retypeId: id } }, changed: false }
+  return { design, ui: { ...ui, notice: null, confirmId: null, editing: false, freshId: null, help: 0, picker: { at: { index: 0 }, query: '', retypeId: id } }, changed: false }
 }
 
 /** A row of the add list: a block to add, or (`opens`) a block type whose kinds the list shows next. */
@@ -858,7 +843,7 @@ export function pickBlock(design: Design | null, ui: DesignUi, choice: Partial<P
   const block: BlockRef = row.kind === undefined ? { type: row.type } : { type: row.type, kind: row.kind }
   if (picker.retypeId !== undefined) return retypeBlock(design, ui, picker.retypeId, block, context)
   const result = addNode(design, block, picker.at)
-  // The place is said as the block got it: args go first whatever was asked, and nothing goes before them.
+  // The place is said as the block got it: start goes first whatever was asked, and nothing goes before them.
   const at = placeFor(design, block.type, picker.at)
   const step = settle(design, ui, result, result.id ?? ui.selectedId, after => `added ${result.id ?? ''} ${typeName(block)} ${placeLabel(after, at).replace(/ \(at the end\)$/, '')}`, context)
   // The new block is selected and its title is the next thing typed.
@@ -866,7 +851,7 @@ export function pickBlock(design: Design | null, ui: DesignUi, choice: Partial<P
 }
 
 /** The knobs typed as text, each in a field of its own in the detail pane; model and effort are stepped on the card. */
-export const TEXT_KNOBS = ['prompt', 'condition', 'oncePer', 'stopCondition', 'output'] as const
+export const TEXT_KNOBS = ['goal', 'args', 'prompt', 'condition', 'oncePer', 'stopCondition', 'output'] as const
 export type TextKnob = (typeof TEXT_KNOBS)[number]
 
 /** What an empty graph says while Claude drafts the design. */
@@ -904,7 +889,7 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['w a s d', 'move the selection'],
   ['Shift+W S', 'move the block one place up / down, into and out of the containers on its way'],
   ['Shift+A D', 'swap an arm with the one beside it'],
-  ['Enter  e', 'edit: the ring goes to the name. In a field Tab walks the fields, Enter saves and returns to the graph, Esc saves and hands the keys to the prompt'],
+  ['Enter  e', 'edit: the ring goes to the name (on the start block, to the goal). In a field Tab walks the fields, Enter saves and returns to the graph, Esc saves and hands the keys to the prompt'],
   ['Tab', 'the same field, by the ring\'s own step'],
   ['n  +', 'a new block after this one: pick a block, then its kind, or type either name; n again in the list: inside, before'],
   ['x', 'delete (a container that holds blocks asks: x again); closes the add list and these pages'],
@@ -912,7 +897,6 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['o  b', 'open the selected container as the view / back up one level'],
   ['i', 'hide or show this pane'],
   ['u  y', 'undo / redo'],
-  ['g', 'the goal: what the workflow is for'],
   ['q', 'ask Claude to review the design (fills the prompt)'],
   ['r', 'run: puts the request in the prompt; add what to run it on, then Enter'],
   ['c', 'put away the results of a run that is over (the first edit does too)'],

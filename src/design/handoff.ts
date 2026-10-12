@@ -3,7 +3,7 @@
 // The one thing said here and not in the design is how a run is tied back to it (label,
 // phase, meta.name). Pure TypeScript.
 
-import { typeName, canHoldChildren, flatten } from './model'
+import { typeName, canHoldChildren, flatten, goalOf } from './model'
 import type { Design } from './model'
 import { OFFER_TOOL_FULL_NAME } from './offer'
 
@@ -62,17 +62,17 @@ export function reviewPrompt(name: string): string {
  */
 export function buildHandoff(design: Design, designPath: string, scriptPath: string | null): Handoff {
   const count = flatten(design).length
-  // The args block is the input, not a stage: it gets no phase and no agent is labelled with it.
-  const stages = design.nodes.filter(node => node.type !== 'args')
+  // The start block is the goal and the input, not a stage: it gets no phase and no agent is labelled with it.
+  const stages = design.nodes.filter(node => node.type !== 'start')
   const phases = stages.map(node => `"${node.id} ${node.name}"`)
   // The label's example names a block that spawns agents itself, where the design has one; with a script, one the label rule is for.
-  const first = flatten(design).find(row => !canHoldChildren(row.node.type) && row.node.type !== 'args' && row.node.type !== 'code' && (scriptPath === null || !row.node.match))?.node ?? stages[0]
-  const goal = design.description.replace(/\s+/g, ' ').trim()
+  const first = flatten(design).find(row => !canHoldChildren(row.node.type) && row.node.type !== 'start' && row.node.type !== 'code' && (scriptPath === null || !row.node.match))?.node ?? stages[0]
+  const goal = goalOf(design)
   const example = first ? `${first.id}: ${first.name}` : 'n1: scout diff'
 
   const lines = [
     `Conductor handoff: ${scriptPath === null ? 'implement' : 'update'} and run the workflow design "${design.name}".`,
-    goal === '' ? 'The design states no goal (its `description` is empty): take the goal from the user\'s request.' : `Goal of the workflow (the design's \`description\`): ${goal}`,
+    goal === '' ? 'The design states no goal (its start block\'s `goal` is empty): take the goal from the user\'s request.' : `Goal of the workflow (the start block's \`goal\`): ${goal}`,
     '',
     `Read the design file: ${designPath}`,
     'It defines the workflow: what each block says (its type, kind, name, logic and knobs) is what to build.',
@@ -92,7 +92,7 @@ export function buildHandoff(design: Design, designPath: string, scriptPath: str
     ...(scriptPath === null
       ? [
           `- every agent() sets label: "<nodeId>: <short text>", the id being the INNERMOST design node the agent belongs to, e.g. "${example}".`,
-          '- each top-level node (the `args` block left out) is one phase titled "<nodeId> <name>": list them in meta.phases in design',
+          '- each top-level node (the `start` block left out) is one phase titled "<nodeId> <name>": list them in meta.phases in design',
           `  order and pass the title as \`phase\` on every agent() under that node.${phases.length > 0 ? ` Here: meta.phases = [${phases.join(', ')}]` : ''}`,
         ]
       : [

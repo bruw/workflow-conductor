@@ -5,9 +5,9 @@ import type { Design, DesignNode, Kind, Knobs, NodeType } from './model'
 
 export type Template = { id: string; title: string; blurb: string; make: () => Design }
 
-// Every design opens with its args block: what the template is run on.
-function args(id: string, logic: string, output: string): DesignNode {
-  return { id, type: 'args', name: 'args', logic, knobs: { output } }
+// Every design opens with its start block: what the template is for, and what it is run on.
+function start(id: string, goal: string, args: string): DesignNode {
+  return { id, type: 'start', name: 'start', knobs: { goal, args } }
 }
 
 /** A block's type, or its type and kind: `agent`, `agent verify`. */
@@ -27,9 +27,8 @@ export function review(): Design {
   return {
     version: 1,
     name: 'review-changes',
-    description: 'Review the current diff along several dimensions and keep only findings that survive a refutation pass',
     nodes: [
-      args('n6', 'What to review: a branch, a pull request or a path. With none, the current diff.', '{ target? }'),
+      start('n6', 'Review the current diff along several dimensions and keep only findings that survive a refutation pass', '{ target? }: what to review: a branch, a pull request or a path. With none, the current diff'),
       node('n1', 'agent scout', 'scout diff', 'Cheap and mechanical. Its list of dimensions is the work-list for the pipeline.', {
         prompt: 'Read the diff and split the review into dimensions (bugs, security, performance, tests), each with the files it concerns',
         output: '{ dimensions: [{ name, focus, files[] }] }',
@@ -63,9 +62,8 @@ export function research(): Design {
   return {
     version: 1,
     name: 'research',
-    description: 'Answer a question from many sources: search several ways, read deeply, check for gaps, then write up',
     nodes: [
-      args('n9', 'The question to answer.', '{ question }'),
+      start('n9', 'Answer a question from many sources: search several ways, read deeply, check for gaps, then write up', '{ question }: the question to answer'),
       node(
         'n1',
         'parallel sweep',
@@ -113,9 +111,8 @@ export function migrate(): Design {
   return {
     version: 1,
     name: 'migrate',
-    description: 'Apply one mechanical change at every site in the codebase, each in isolation, and verify each result',
     nodes: [
-      args('n5', 'The change to make at every site, and where to look for sites.', '{ change, scope? }'),
+      start('n5', 'Apply one mechanical change at every site in the codebase, each in isolation, and verify each result', '{ change, scope? }: the change to make at every site, and where to look for sites'),
       node('n1', 'agent scout', 'discover sites', 'The sites are the work-list for the pipeline. Log anything left out of scope.', {
         prompt: 'Find every site that needs the migration and group them into units that can change independently',
         output: '{ sites: [{ id, files[], note }] }',
@@ -146,9 +143,8 @@ export function judgePanel(): Design {
   return {
     version: 1,
     name: 'judge-panel',
-    description: 'Produce several independent approaches, have judges score them, and build the answer from the winner',
     nodes: [
-      args('n5', 'The task the attempts are for.', '{ task }'),
+      start('n5', 'Produce several independent approaches, have judges score them, and build the answer from the winner', '{ task }: the task the attempts are for'),
       node(
         'n1',
         'parallel attempts',

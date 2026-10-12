@@ -13,7 +13,7 @@ The same for every kind of a block: a kind adds no field. The file's keys are in
 | agent | name (`name`) · logic (`logic`) · prompt (`prompt`) · output (`output`) | model · effort |
 | code | name · logic · output | |
 | subworkflow | name · logic · prompt · output | |
-| args | name · logic · output | |
+| start | goal (`goal`) · args (`args`) | |
 | pipeline | name · logic · once per (`oncePer`) | |
 | parallel | name · logic · once per (`oncePer`) | |
 | loop | name · logic · stop condition (`stopCondition`) | |
@@ -53,7 +53,7 @@ Prefill is written into the field when the block is added; a hint shows while th
 | | guard | one arm: run it or skip it | | condition: when it runs; otherwise nothing runs |
 | | route | the arm whose label a classify chose | | condition: the label that picks this arm |
 
-`pipeline`, `phase`, `code`, `subworkflow` and `args` have no kinds. A `code` block's logic field hints at what it is for: dedup, filter, top-K, merge.
+`pipeline`, `phase`, `code`, `subworkflow` and `start` have no kinds. A `code` block's logic field hints at what it is for: dedup, filter, top-K, merge.
 
 ## Rules
 

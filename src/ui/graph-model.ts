@@ -497,5 +497,5 @@ export const MOUSE_HELP: readonly string[] = [
   'Click a card to select it. Click the selected container again to open it as the view; click a crumb to go back to that view.',
   'Click a [+] for a new block there (the lit one is where n adds it). Click a chip to step it, ◀ or ▶ to slide the arms.',
   'Drag the selected card to move it. Drag anything else, or turn the wheel, to scroll.',
-  'In the detail pane, click a field to edit it. Under the header, click the goal to edit it.',
+  'In the detail pane, click a field to edit it: the goal and the args are on the start block.',
 ]

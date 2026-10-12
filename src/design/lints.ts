@@ -15,6 +15,7 @@ export type LintRule =
   | 'single-branch'
   | 'loop-no-decider'
   | 'arm-no-condition'
+  | 'start-no-goal'
 
 export type Lint = { nodeId: string; rule: LintRule; message: string }
 
@@ -72,6 +73,12 @@ export function lint(design: Design): Lint[] {
   walk(design, (node, info) => {
     const siblings = info.parent?.children ?? design.nodes
     const previous = siblings[info.index - 1]
+
+    // 0. A design that says no goal. Structural: the `start` block with an empty `goal`.
+    // The graph writes `Goal [not set]` on the same block.
+    if (node.type === 'start' && blank(node.knobs?.goal)) {
+      lints.push({ nodeId: node.id, rule: 'start-no-goal', message: 'the workflow has no goal: say in goal what it is for, in a sentence; Claude writes the script, and reviews the design, against it' })
+    }
 
     // 1, 2. (Barrier not needed, worktree on a reader: gone, they guessed from the words of a block.)
 
@@ -260,6 +267,7 @@ export function problemFields(rule: LintRule): string[] {
   if (rule === 'loop-unbounded' || rule === 'loop-no-decider') return ['stopCondition']
   if (rule === 'code-input-no-output') return ['output']
   if (rule === 'arm-no-condition') return ['condition']
+  if (rule === 'start-no-goal') return ['goal']
   return []
 }
 

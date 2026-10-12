@@ -10,8 +10,8 @@ export const NODE_TYPES = [
   'branch',
   'subworkflow',
   'code',
-  // frame: the workflow's input, and a group that only frames blocks
-  'args',
+  // frame: where the workflow starts (its goal and its args), and a group that only frames blocks
+  'start',
   'phase',
 ] as const
 
@@ -41,6 +41,10 @@ export type Effort = (typeof EFFORTS)[number]
 
 /** A block's knobs. The text ones are named as the pane's fields are: `oncePer` is "once per", `stopCondition` "stop condition". */
 export type Knobs = {
+  /** On the start block: what the workflow is for. */
+  goal?: string
+  /** On the start block: what the workflow is run on, in words or as a shape. */
+  args?: string
   prompt?: string
   /** What the block hands on, in words or as JSON Schema text. */
   output?: string
@@ -77,7 +81,6 @@ export type DesignNode = {
 export type Design = {
   version: 1
   name: string
-  description: string
   // SPEC deviation: a high-water mark so an id is never handed out twice, even
   // after the node with the highest number was removed. Optional: a design
   // without it derives the next id from the ids present. Maintained by ops.ts.
@@ -129,17 +132,33 @@ export function readType(type: unknown, kind?: unknown): { type: NodeType; kind?
   return found === kinds[0] ? { type } : { type, kind: found }
 }
 
-/** Where the `args` block stands, as a refusal says it: every design has one, and nothing stands before it. */
-export const ARGS_PLACE = 'the args block is the first block of the design: at the top level, before every other block'
+/** Where the `start` block stands, as a refusal says it: every design has one, and nothing stands before it. */
+export const START_PLACE = 'the start block is the first block of the design: at the top level, before every other block'
 
-/** The design's `args` block: its first block. Every design that was parsed or made here has one (`withArgs`). */
-export function argsOf(design: Pick<Design, 'nodes'>): DesignNode | undefined {
-  return design.nodes[0]?.type === 'args' ? design.nodes[0] : undefined
+/** The design's `start` block: its first block. Every design that was parsed or made here has one (`withStart`). */
+export function startOf(design: Pick<Design, 'nodes'>): DesignNode | undefined {
+  return design.nodes[0]?.type === 'start' ? design.nodes[0] : undefined
 }
 
-/** Whether a design has no block of its own yet: nothing but the args block every design has. */
+/** The goal of the workflow, on one line: the start block's `goal`, empty while it is not set. */
+export function goalOf(design: Pick<Design, 'nodes'>): string {
+  return (startOf(design)?.knobs?.goal ?? '').replace(/\s+/g, ' ').trim()
+}
+
+/** The design with `goal` on its start block (cleared by an empty one); as it is where it has no start block. */
+export function withGoal(design: Design, goal: string): Design {
+  const start = startOf(design)
+  if (!start) return design
+  const { goal: _old, ...rest } = start.knobs ?? {}
+  const said = goal.replace(/\s+/g, ' ').trim()
+  const knobs: Knobs = said === '' ? rest : { goal: said, ...rest }
+  const { knobs: _knobs, ...bare } = start
+  return { ...design, nodes: [Object.keys(knobs).length > 0 ? { ...bare, knobs } : bare, ...design.nodes.slice(1)] }
+}
+
+/** Whether a design has no block of its own yet: nothing but the start block every design has. */
 export function isBlank(design: Pick<Design, 'nodes'>): boolean {
-  return design.nodes.every(node => node.type === 'args')
+  return design.nodes.every(node => node.type === 'start')
 }
 
 /**
@@ -159,15 +178,15 @@ export function nextIdNumber(design: Pick<Design, 'nodes' | 'nextId'>): number {
   return Math.max(design.nextId ?? 1, highest + 1)
 }
 
-/** The design with its args block: as it is when it has one, else with a new, empty one put first. */
-export function withArgs(design: Design): Design {
-  if (argsOf(design)) return design
+/** The design with its start block: as it is when it has one, else with a new, empty one put first. */
+export function withStart(design: Design): Design {
+  if (startOf(design)) return design
   const number = nextIdNumber(design)
-  return { ...design, nextId: number + 1, nodes: [{ id: `n${number}`, type: 'args', name: 'args' }, ...design.nodes] }
+  return { ...design, nextId: number + 1, nodes: [{ id: `n${number}`, type: 'start', name: 'start' }, ...design.nodes] }
 }
 
-const KNOB_KEYS = ['prompt', 'output', 'model', 'effort', 'isolation', 'agentType', 'oncePer', 'stopCondition', 'condition'] as const
-const TEXT_KNOBS: readonly string[] = ['prompt', 'output', 'model', 'agentType', 'oncePer', 'stopCondition', 'condition']
+const KNOB_KEYS = ['goal', 'args', 'prompt', 'output', 'model', 'effort', 'isolation', 'agentType', 'oncePer', 'stopCondition', 'condition'] as const
+const TEXT_KNOBS: readonly string[] = ['goal', 'args', 'prompt', 'output', 'model', 'agentType', 'oncePer', 'stopCondition', 'condition']
 const ID_PATTERN = /^n(\d+)$/
 
 export function isNodeType(value: unknown): value is NodeType {
@@ -199,9 +218,18 @@ export function toKebab(name: string): string {
   return kebab || 'untitled'
 }
 
-/** A design with no block of its own: the args block and nothing else. */
+/** A design with no block of its own: the start block and nothing else. */
 export function emptyDesign(name: string): Design {
-  return withArgs({ version: 1, name: toKebab(name), description: '', nodes: [] })
+  return withStart({ version: 1, name: toKebab(name), nodes: [] })
+}
+
+/** The knobs only the start block has. */
+export const START_KNOBS: readonly (keyof Knobs)[] = ['goal', 'args']
+
+/** Why a block's knobs are not its type's to say, or undefined: the goal and the args are the start block's alone. */
+export function startOnly(node: Pick<DesignNode, 'type' | 'knobs'>): string | undefined {
+  const stray = node.type === 'start' ? undefined : START_KNOBS.find(key => node.knobs?.[key] !== undefined)
+  return stray === undefined ? undefined : `knob ${stray} is the start block's: ${aType(node.type)} block has none`
 }
 
 /** Why one knob value is not acceptable, or undefined when it is. */
@@ -280,27 +308,28 @@ function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
 }
 
 /**
- * Validates shape, version, unique ids, known types and kinds, and where `args` stands. Never throws.
- * A design read with no args block (one saved before every design had it) is given an empty one.
+ * Validates shape, version, unique ids, known types and kinds, where `start` stands and that only it
+ * says a goal and args. Never throws. A design read with no start block is given an empty one.
  */
 export function parseDesign(json: string): ParseResult {
   try {
     const raw: unknown = JSON.parse(json)
     if (!isRecord(raw)) fail('design must be an object')
     if (raw.version !== 1) fail(`unsupported version ${JSON.stringify(raw.version)}; expected 1`)
-    const { name, description, nextId } = raw
+    const { name, nextId } = raw
     if (typeof name !== 'string' || name === '') fail('name must be a non-empty string')
-    if (typeof description !== 'string') fail('description must be a string')
     if (nextId !== undefined && !(typeof nextId === 'number' && Number.isInteger(nextId) && nextId >= 1)) {
       fail('nextId must be a whole number of at least 1')
     }
     const nodes = readNodes(raw.nodes, 'nodes', new Set())
-    const design: Design = { version: 1, name, description, nodes }
+    const design: Design = { version: 1, name, nodes }
     if (typeof nextId === 'number') design.nextId = nextId
     walk(design, (node, info) => {
-      if (node.type === 'args' && (info.parent !== undefined || info.index !== 0)) fail(`${node.id}: ${ARGS_PLACE}`)
+      if (node.type === 'start' && (info.parent !== undefined || info.index !== 0)) fail(`${node.id}: ${START_PLACE}`)
+      const stray = startOnly(node)
+      if (stray) fail(`${node.id}: ${stray}`)
     })
-    return { ok: true, design: withArgs(design) }
+    return { ok: true, design: withStart(design) }
   } catch (error) {
     if (error instanceof Invalid) return { ok: false, error: error.message }
     return { ok: false, error: error instanceof SyntaxError ? `not valid JSON: ${error.message}` : 'design could not be read' }
@@ -326,7 +355,7 @@ function orderedNode(node: DesignNode): Record<string, unknown> {
 
 /** Stable key order, 2-space indent, trailing newline. */
 export function serializeDesign(design: Design): string {
-  const out: Record<string, unknown> = { version: design.version, name: design.name, description: design.description }
+  const out: Record<string, unknown> = { version: design.version, name: design.name }
   if (design.nextId !== undefined) out.nextId = design.nextId
   out.nodes = design.nodes.map(orderedNode)
   return `${JSON.stringify(out, null, 2)}\n`
@@ -351,9 +380,9 @@ export function findNode(design: Design, id: string): DesignNode | undefined {
   return found
 }
 
-/** How many blocks a design has, as a count says it: the args block, which every design has, is not one of them. */
+/** How many blocks a design has, as a count says it: the start block, which every design has, is not one of them. */
 export function blockCount(design: Design): number {
-  return flatten(design).filter(row => row.node.type !== 'args').length
+  return flatten(design).filter(row => row.node.type !== 'start').length
 }
 
 /** Every node as a row, in the order the design lists them: parents before what they hold. */
