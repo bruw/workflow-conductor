@@ -223,8 +223,7 @@ For the selected block, from the top:
 1. `TYPE kind / Name` and the id.
 1. **Block**, always the first row (`Block`, then `agent verify ▾`): a press opens the list of blocks and kinds.
 2. **Meaning**: what its kind does (its type's, on a plain block), in one line, and `use when: …`.
-3. Its problems, if any, each as **Error** (what is wrong) and **Fix** (how to fix it).
-4. Its fields, each label on a row above its value:
+3. Its fields, each label on a row above its value. One a problem names is marked on its label while it is empty, in the error colour (`Goal [Required]`):
 
 | Field | For | Shown on |
 | --- | --- | --- |
@@ -240,12 +239,12 @@ For the selected block, from the top:
 
 A block's fields are its type's, the same for every kind of it: a kind adds no field. The design file names them with the same words: `name`, `logic`, and under `knobs` `prompt`, `output`, `oncePer`, `stopCondition`, `condition`. An empty field says what it is for, in the kind's words (a loop of kind pass: `the check passes, at most 3 rounds`), and a new block of a kind has the fields its pattern needs filled in already. A container hands on what its last block makes, so it has no output of its own.
 
-5. Read only, where the file sets them: `Isolation  worktree` and `Agent type  <name>` (the pane has no control for either; Claude sets or drops them). The model and the effort have no picker here: the chips on the card step them. A block whose file sets `isolation: worktree` shows a read-only line, `Isolation  worktree`: the pane has no control for it, Claude sets or drops it when asked.
-6. **Run**, while a run's results show: the block's agents.
+4. Read only, where the file sets them: `Isolation  worktree` and `Agent type  <name>` (the pane has no control for either; Claude sets or drops them). The model and the effort have no picker here: the chips on the card step them. A block whose file sets `isolation: worktree` shows a read-only line, `Isolation  worktree`: the pane has no control for it, Claude sets or drops it when asked.
+5. **Run**, while a run's results show: the block's agents.
 
 The pane's last rows name its keys: `[Enter] Edit  [i] Hide` at rest, and the keys of a field, the add list or a help page while one of those is open.
 
-- **At rest** a field is text: its whole value, wrapped, `[not set]` where it is empty (in the error colour where a problem names that field). A knob a block carries that its type does not list (set from chat, or in the file) gets its field too.
+- **At rest** a field is text: its whole value, wrapped, `[not set]` where it is empty (in the error colour, and its label marked `[Required]`, where a problem names that field). A knob a block carries that its type does not list (set from chat, or in the file) gets its field too.
 - **While editing** (after `e`, Enter, `↓`, or a click on a field) every field is an input under its label: the one you are typing in wraps over as many rows as its text takes, the others are one line, cut with `…`. Where the text is taller than the pane, the pane moves up so the row being typed stays in view. Enter saves and returns to the graph. Text typed into a field is never dropped: every other way out saves it too (an arrow to the next field, a picker's choice, a click on the graph, Escape, a command, a prompt sent, an edit from chat, a resize, closing the pane), each as an edit `u` undoes.
 - Where the pane is short of rows it gives up, in this order: the blank rows, the Meaning section (help page 1 says it), then the long texts are cut to fewer rows.
 - `Block` opens the add list on the block: its own kinds first, then the other blocks. The block becomes what is picked and keeps its name, its logic, what it holds and every knob that was typed; a knob still as its old kind filled it in is replaced by the new kind's; a name it never got (still the old type's or kind's) becomes the new one's; one that holds blocks can only become another container.
@@ -317,7 +316,7 @@ Votes are a knob of the two voting kinds of agent (verify, judge), not a kind of
 
 ### Problems
 
-Conductor checks the design as you build and never blocks anything. A block that has a problem is marked on its card (` ! `); its problems are read in the detail pane as Error and Fix, and the blocks that have one are named before a run (`problems in n3, n5`). Problems are not counted anywhere. Every check is about what blocks there are, where they stand and which fields are empty: none reads the words or the numbers in a field. What it flags:
+Conductor checks the design as you build and never blocks anything. A block that has a problem is marked on its card (` ! `); the empty field a problem is about is marked `[Required]` on its label in the detail pane, and the blocks that have one are named before a run (`problems in n3, n5`). Problems are not counted anywhere. Every check is about what blocks there are, where they stand and which fields are empty: none reads the words or the numbers in a field. What it flags:
 
 - a loop with no stop condition
 - a code block reading an agent's output that has no output shape set

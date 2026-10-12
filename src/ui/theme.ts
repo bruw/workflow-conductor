@@ -3,6 +3,8 @@
 export const PANE_ID = 'conductor'
 export const PANE_TITLE = 'Conductor'
 
+/** Plain words: the theme's own text. A `Text` with no colour takes the terminal's, which a light theme on a dark terminal draws white on the pane's light ground. */
+export const TEXT = 'text'
 /** Words said quietly (a note, a hint, a legend's word, an id, a `[+]` at rest): the dim that still reads on any terminal background. */
 export const FADED = 'inactive'
 /** Lines that are not words: a leaf's border, the rule between two parts of the pane. */

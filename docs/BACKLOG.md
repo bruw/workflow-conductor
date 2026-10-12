@@ -11,3 +11,4 @@ One line per ticket. Opened after the entry-point work (the `before_workflow` of
 7. Bring `tests/` back to compiling and cover the tracker's claim rules and the reducer's matching, or delete it: nothing automated guards them.
 8. Give each dev session its own tmux session name and debug log by default: two sessions in one checkout kill each other and can type into each other.
 9. One ask-and-keep helper for the two questions, and one record per design for what Claude has seen (`seenByClaude`, `seenDesigns`, `warnedAt` are kept in step by hand).
+10. Text typed into an open field (the engine's `Input`) is drawn in the terminal's default colour, not the theme's `text`: white on the pane's light ground with a light theme on a dark terminal. Find a way to colour it (a prop, a wrapping `Text`) or draw the value ourselves.

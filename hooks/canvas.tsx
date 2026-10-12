@@ -5,6 +5,7 @@ import type { GraphContext, GraphInput, GraphProps, GraphState } from '../src/ui
 import { paintGraph, paintWeight } from '../src/ui/graph-paint'
 import type { GraphPaintOptions, Span } from '../src/ui/graph-paint'
 import { FRAME_MS } from '../src/ui/tween'
+import { TEXT } from '../src/ui/theme'
 
 // The graph: a surface module. It owns only transient view state (the pan, a
 // drag in flight, the slot under the pointer, cards sliding) and has no `$`:
@@ -94,7 +95,7 @@ const Graph: ClientModule<JsonValue, GraphState> = (raw, surface) => {
 
   const drawSpan = (span: Span) => (
     <Text
-      color={span.color}
+      color={span.color ?? TEXT}
       backgroundColor={span.ground}
       bold={span.bold}
       inverse={span.inverse}

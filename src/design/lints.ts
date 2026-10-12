@@ -250,17 +250,6 @@ export function agentsText(agents: number, unknowns: Unknowns): string {
   return `${agentsCount(agents, unknowns)}${why.length === 0 ? '' : ` (more: ${why.join(', ')})`}`
 }
 
-/**
- * A lint's message as the detail pane says a problem: what is wrong (up to the first colon),
- * and how to fix it (the rest, its first letter capital). A message with no colon is all `error`.
- */
-export function problemParts(message: string): { error: string; fix: string } {
-  const at = message.indexOf(': ')
-  if (at < 0) return { error: message, fix: '' }
-  const fix = message.slice(at + 2).trim()
-  return { error: message.slice(0, at).trim(), fix: fix.charAt(0).toUpperCase() + fix.slice(1) }
-}
-
 /** The fields of its block a problem is about: the detail pane marks the ones that are not set. */
 export function problemFields(rule: LintRule): string[] {
   if (rule === 'agent-no-brief') return ['logic', 'prompt']

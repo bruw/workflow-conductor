@@ -1,6 +1,7 @@
 import type { ClientModule, JsonValue } from 'claude-code'
 
 import { BEAT_MS, SPLASH_BEATS, splashScene } from '../src/ui/persona'
+import { TEXT } from '../src/ui/theme'
 
 // The splash's scene: a surface module, so that its beats are counted where
 // they are drawn. It has no `$` and posts nothing: hooks/design.tsx shows it
@@ -39,7 +40,7 @@ const Splash: ClientModule<JsonValue, SplashState> = (raw, surface) => {
       {scene.lines.map(line => (
         <Box flexDirection="row">
           {line.map(span => (
-            <Text color={span.color} backgroundColor={span.ground}>{span.text}</Text>
+            <Text color={span.color ?? TEXT} backgroundColor={span.ground}>{span.text}</Text>
           ))}
         </Box>
       ))}

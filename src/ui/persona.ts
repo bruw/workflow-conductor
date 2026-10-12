@@ -1,5 +1,6 @@
-// The Conductor persona: its four poses as pixels, the small one the header
-// shows, the ensemble of the splash, and the half-block paint all three share.
+// The Conductor persona: its four poses as pixels, the ensemble of the splash,
+// its head and arms redrawn small for the header, and the two paints:
+// half-blocks for the splash, octants for the header.
 // Pure TypeScript: no `$`, no engine imports; time is a beat handed in.
 //
 // The pixels are read off docs/redesign-v1/claude-conductor-persona-assets
@@ -14,8 +15,8 @@ export type Pose = 'idle' | 'ready' | 'conducting' | 'complete'
 /** Rows of pixels: `#` the body, `o` chalk (eyes, collar), `h` a hand, a space nothing. */
 type Sprite = readonly string[]
 
-/** The source's own colours: not theme keys, the persona looks the same on every theme. */
-const INK: Record<string, string> = { '#': '#d46944', o: '#f1ebe1', h: '#f9855e' }
+/** The theme keys nearest the source's own colours (`#d46944`, `#f1ebe1`, `#f9855e`) in the dark theme. */
+const INK: Record<string, string> = { '#': 'clawd_body', o: 'text', h: 'rainbow_orange' }
 
 export type PersonaSpan = { text: string; color?: string; ground?: string }
 
@@ -107,17 +108,58 @@ const FULL: Record<Pose, Sprite> = {
 export const FULL_W = 26
 export const FULL_H = 28
 
-/** The header's persona: four pixels tall, so two rows: the name's and the one under it. */
+/**
+ * The header's persona: the conductor from the chest up (head, neck, both
+ * arms, baton), redrawn eight pixels tall, so two rows of octants. It has
+ * three states, the arms up in each; the bow is drawn as the one at rest.
+ */
+const REST: Sprite = [
+  '      #####',
+  '      #####      #',
+  '      #o#o#     #',
+  ' h    #####    h',
+  ' ###   ###   ###',
+  '   ####ooo####',
+  '     ###o###',
+  '     ###o###',
+]
 const SMALL: Record<Pose, Sprite> = {
-  idle: [' #####', ' #o#o#', '  ###h', '  # # ##'],
-  ready: [' #####  #', ' #o#o# #', '  ###h', '  # #'],
-  conducting: [' #####', 'h#o#o#', ' ####h', '  # # ##'],
-  complete: [' #####', ' #o#o#', 'h####', '  # #  #'],
+  idle: REST,
+  ready: [
+    '      #####      #',
+    '      #o#o#     #',
+    ' h    #####    h',
+    ' ##   #####   ##',
+    '  ##   ###   ##',
+    '   ####ooo####',
+    '     ###o###',
+    '     ###o###',
+  ],
+  conducting: [
+    ' h    #####',
+    ' #    #####',
+    ' ##   #o#o#',
+    '  ##  #####',
+    '   ##  ###',
+    '    ###ooo######h',
+    '     ###o###     #',
+    '     ###o###',
+  ],
+  complete: REST,
 }
 
-/** Cells the header keeps for its persona: the sprite and a gap. */
-export const SMALL_W = 10
+/** Pixels across the header's persona; its cells with a gap after them; its rows. */
+const SMALL_PX = 18
+export const SMALL_W = SMALL_PX / 2 + 1
 export const SMALL_ROWS = 2
+
+/** The poses in the order the header's persona goes through them, a step to a key that moves the selection. */
+const POSES: readonly Pose[] = ['idle', 'ready', 'conducting']
+
+/** The pose after this one; after the last, the first. */
+export function nextPose(pose: Pose): Pose {
+  return POSES[(POSES.indexOf(pose) + 1) % POSES.length] ?? 'idle'
+}
 
 /** One of the ensemble, at rest and with its arms up. */
 const AGENT: readonly Sprite[] = [
@@ -188,11 +230,79 @@ function paint(canvas: Canvas): PersonaSpan[][] {
   return out
 }
 
+/**
+ * The block for each set of a cell's eight pixels: bit `2 * row + column` is
+ * the pixel at that place. Unicode 16's octants, in the order of their bits,
+ * less the 26 sets that had a block before them.
+ */
+const OCTANT: readonly string[] = (() => {
+  const older: Record<number, string> = {
+    0: ' ', 255: '█', 15: '▀', 240: '▄', 85: '▌', 170: '▐', 192: '▂', 252: '▆',
+    5: '▘', 10: '▝', 80: '▖', 160: '▗', 165: '▚', 90: '▞', 245: '▙', 95: '▛', 175: '▜', 250: '▟',
+    1: '\u{1cea8}', 2: '\u{1ceab}', 64: '\u{1cea3}', 128: '\u{1cea0}',
+    3: '\u{1fb82}', 63: '\u{1fb85}', 20: '\u{1fbe6}', 40: '\u{1fbe7}',
+  }
+  let next = 0x1cd00
+  return Array.from({ length: 256 }, (_, bits) => older[bits] ?? String.fromCodePoint(next++))
+})()
+
+/**
+ * The canvas as rows of spans, eight pixels to a cell. A cell has two colours
+ * at most: with a third look in it, the fewest pixels take their neighbour's.
+ */
+function paintFine(canvas: Canvas): PersonaSpan[][] {
+  const out: PersonaSpan[][] = []
+  for (let y = 0; y < canvas.length; y += 4) {
+    const line: PersonaSpan[] = []
+    for (let x = 0; x < (canvas[y]?.length ?? 0); x += 2) {
+      const inks: string[] = []
+      for (let j = 0; j < 4; j++) for (let i = 0; i < 2; i++) inks.push(canvas[y + j]?.[x + i] ?? ' ')
+      const count = (ink: string): number => inks.filter(one => one === ink).length
+      // The looks in the cell, the most pixels first; of two as many, the body last.
+      const looks = [...new Set(inks.filter(ink => ink !== ' '))].sort((a, b) => count(b) - count(a) || (a === '#' ? 1 : -1))
+      const open = inks.includes(' ')
+      // With nothing behind some pixel the ground stays the pane's; else the body is the ground.
+      const ground = open || looks.length < 2 ? undefined : looks.includes('#') ? '#' : looks[1]
+      const front = looks.find(ink => ink !== ground)
+      const bits = inks.reduce((sum, ink, at) => sum + (ink !== ' ' && ink !== ground ? 1 << at : 0), 0)
+      const cell: PersonaSpan = { text: OCTANT[bits] ?? ' ' }
+      if (front !== undefined) cell.color = INK[front]
+      if (ground !== undefined) cell.ground = INK[ground]
+      const last = line[line.length - 1]
+      if (last && last.color === cell.color && last.ground === cell.ground) last.text += cell.text
+      else line.push(cell)
+    }
+    out.push(line)
+  }
+  return out
+}
+
 /** The header's persona in a pose: `SMALL_ROWS` rows, `SMALL_W` cells each. */
 export function smallPersona(pose: Pose): PersonaSpan[][] {
-  const canvas = blankCanvas(SMALL_W, SMALL_ROWS * 2)
+  const canvas = blankCanvas(SMALL_W * 2, SMALL_ROWS * 4)
   stamp(canvas, SMALL[pose] ?? SMALL.idle, 0, 0)
-  return paint(canvas)
+  return paintFine(canvas)
+}
+
+/** CSS pixels to a pixel of the header's persona where it is drawn as a picture: two rows of text tall, narrower than its cells. */
+const SVG_SCALE = 4
+export const SMALL_SVG_W = SMALL_PX * SVG_SCALE
+export const SMALL_SVG_H = SMALL_ROWS * 4 * SVG_SCALE
+
+/** The header's persona in a pose as an SVG document, for a surface that draws one: the same pixels, a rect to each run of one look. */
+export function smallPersonaSvg(pose: Pose): string {
+  const rects: string[] = []
+  ;(SMALL[pose] ?? SMALL.idle).forEach((row, y) => {
+    for (let x = 0; x < row.length; ) {
+      const ink = row[x] ?? ' '
+      let end = x + 1
+      while (row[end] === ink) end++
+      const fill = INK[ink]
+      if (fill !== undefined) rects.push(`<rect x="${x}" y="${y}" width="${end - x}" height="1" fill="${fill}"/>`)
+      x = end
+    }
+  })
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SMALL_PX} ${SMALL_ROWS * 4}" width="${SMALL_SVG_W}" height="${SMALL_SVG_H}" shape-rendering="crispEdges">${rects.join('')}</svg>`
 }
 
 /** The conductor alone in a pose, feet on the last row: `SOLO_ROWS` rows, `FULL_W` cells each. */

@@ -4,7 +4,7 @@ import type { EngineInterface, On, RenderChildren } from 'claude-code'
 import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, attachNote, changeWords, changedNote, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, knownAfterEdit, readReport, replaceDesign, showEdit, staleNote, toolDescription, unplacedNote } from '../src/design/chat'
 import { UNDO_HINT, remember, travel } from '../src/design/history'
 import type { History } from '../src/design/history'
-import { lint, preflightLine, problemFields, problemParts } from '../src/design/lints'
+import { lint, preflightLine, problemFields } from '../src/design/lints'
 import { buildHandoff, handoffPrompt, handoffTarget, reviewPrompt } from '../src/design/handoff'
 import { emptyDesign, findNode, flatten, goalOf, isBlank, kindsOf, parseDesign, serializeDesign, typeName, withGoal } from '../src/design/model'
 import type { Design, DesignNode, NodeType } from '../src/design/model'
@@ -83,10 +83,10 @@ import { parseGraphMessage } from '../src/ui/graph-model'
 import { ENTER, KEY_OPS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_CORE_W, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendItem } from '../src/ui/keys'
 import { FAILED, fmtTokens } from '../src/ui/rail'
-import { GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_W, SOLO_ROWS, SPLASH_MS, gestureOf, runPose, smallPersona, splashScene } from '../src/ui/persona'
+import { GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene } from '../src/ui/persona'
 import type { PersonaSpan, Pose } from '../src/ui/persona'
 import { clip, firstLines, wrapText } from '../src/ui/text'
-import { ACCENT, FADED, GLYPH, PANE_TITLE, RULE } from '../src/ui/theme'
+import { ACCENT, FADED, GLYPH, PANE_TITLE, RULE, TEXT } from '../src/ui/theme'
 
 import { offerDrafted, offerPrompted, offerSettled, takeOffered } from './offer'
 
@@ -746,6 +746,13 @@ const gesture = ($: EngineInterface, pose: Pose): void => {
   })
 }
 
+/** The header's persona goes to its next pose and holds it: a step for each key that moves the selection. */
+const beat = ($: EngineInterface): void => {
+  restPersona?.cancel()
+  restPersona = null
+  void update($, personaAtom, pose => nextPose(pose))
+}
+
 /**
  * The splash is on: it is over after its time, and the ring is then put where the designer has it. Started by the
  * drawing that shows it; a reload in the middle of it starts it again.
@@ -894,6 +901,7 @@ const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
     return false
   }
   const op = KEY_OPS[key]
+  if (op === 'up' || op === 'down') beat($)
   if (op === 'up' || op === 'down') await update($, uiAtom, held => ({ ...moveStartMark(held, op === 'up' ? -1 : 1), help: 0 }))
   else if (op === 'help') await update($, uiAtom, held => ({ ...held, notice: null, help: ((held.help ?? 0) % HELP_PAGES) + 1 }))
   else if (op === 'remove' && ((await read($, uiAtom)).help ?? 0) > 0) await update($, uiAtom, held => ({ ...held, help: 0 }))
@@ -949,6 +957,7 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
 
     return true
   }
+  if (op === 'up' || op === 'down' || op === 'left' || op === 'right') beat($)
   // What was typed into a field and not sent is saved before the key acts.
   const flushed = await flushDrafts($)
   const step = await commit($, (before, held, context) => keyStep(before, held, op, context))
@@ -1755,6 +1764,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const Input = 'Input' in els ? els.Input : null
+    // The terminal draws no picture (its table's `Svg` is a fragment: nothing): there the header's persona is blocks of a font, elsewhere one picture.
+    const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
     const ui = await read($, uiAtom)
     const design = await read($, designAtom)
     const file = `${DESIGN_DIR}/${ui.name}.json`
@@ -1811,7 +1822,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
           <Box flexDirection="row" flexShrink={0}>
             <Text bold color="claude">{COMMAND}</Text>
             <Text color={FADED}>{' / '}</Text>
-            <Text bold>{clip(shownName, Math.max(8, room - (count === null ? 0 : count.length + 3)))}</Text>
+            <Text bold color={TEXT}>{clip(shownName, Math.max(8, room - (count === null ? 0 : count.length + 3)))}</Text>
             {count !== null && <Text color={FADED}>{' / '}</Text>}
             {count !== null && <Text key="design-facts" color="suggestion">{count}</Text>}
           </Box>
@@ -1825,7 +1836,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     if (ui.status === 'closed') {
       return (
         <Box flexDirection="column">
-          <Text bold>{`${GLYPH.diamond} ${DESIGN_PANE_TITLE}`}</Text>
+          <Text bold color={TEXT}>{`${GLYPH.diamond} ${DESIGN_PANE_TITLE}`}</Text>
           <Text color={FADED}>{`${GLYPH.railEnd} /${COMMAND} design <name> opens a design`}</Text>
         </Box>
       )
@@ -1849,22 +1860,22 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
      */
     type Item = { rows: number; el: RenderChildren; wide?: true; keep?: true }
     type Tint = typeof FADED | 'error' | 'warning' | 'suggestion'
-    const blank: Item = { rows: 1, el: <Text> </Text> }
-    // The persona's pixels: half-blocks in its own colours, a row of spans to a row of cells.
+    const blank: Item = { rows: 1, el: <Text color={TEXT}> </Text> }
+    // The persona's pixels: blocks in its own colours, a row of spans to a row of cells.
     const spanRows = (rows: readonly (readonly PersonaSpan[])[]) =>
       rows.map(row => (
         <Box flexDirection="row" height={1} flexShrink={0}>
           {row.map(span => (
-            <Text color={span.color} backgroundColor={span.ground}>{span.text}</Text>
+            <Text color={span.color ?? TEXT} backgroundColor={span.ground}>{span.text}</Text>
           ))}
         </Box>
       ))
     const rowsOf = (items: readonly Item[]): number => items.reduce((sum, item) => sum + item.rows, 0)
     const cap = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1)
-    const line = (text: string, color?: Tint, bold?: true): Item => ({ rows: 1, el: <Text color={color} bold={bold} wrap="truncate-end">{text}</Text> })
+    const line = (text: string, color?: Tint, bold?: true): Item => ({ rows: 1, el: <Text color={color ?? TEXT} bold={bold} wrap="truncate-end">{text}</Text> })
     const lines = (rows: readonly string[], color?: Tint): Item[] => rows.map(row => line(row, color))
     // A label is quiet: `claude` is kept for what can be pressed and for the selection.
-    const label = (text: string, color: 'suggestion' | 'error' = 'suggestion'): Item => line(text, color)
+    const label = (text: string): Item => line(text, 'suggestion')
     /** The first of `levels` plans that fits `rows`; the last one where none does. */
     const fit = (levels: number, rows: number, plan: (level: number) => Item[]): Item[] => {
       for (let level = 0; level < levels - 1; level++) {
@@ -1877,7 +1888,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const rule = () => <Text color={RULE}>{'─'.repeat(columns)}</Text>
     // One row of keys, in the footer's legend and on the detail pane's last rows: each key in brackets in the accent colour, its word dim; all of it dim while the keys are in the prompt.
     const legendRow = (row: readonly LegendItem[]) => (
-      <Text wrap="truncate-end" dimColor={focused ? undefined : true}>
+      <Text wrap="truncate-end">
         {row.flatMap((item, index) => [
           <Text color={focused ? 'claude' : FADED}>{`${index > 0 ? ' '.repeat(LEGEND_GAP) : ''}[${item.keys}]`}</Text>,
           <Text color={FADED}>{` ${item.word}`}</Text>,
@@ -1921,7 +1932,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       if (!dock) {
         return (
           <Box key="design-message" flexDirection="column" alignItems="center" height={1}>
-            <Text color={said?.color} wrap="truncate-end">{text === '' ? ' ' : text}</Text>
+            <Text color={said?.color ?? TEXT} wrap="truncate-end">{text === '' ? ' ' : text}</Text>
           </Box>
         )
       }
@@ -1930,7 +1941,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       return (
         <Text key="design-message" wrap="truncate-end">
           <Text color={RULE}>{'─'.repeat(left)}</Text>
-          <Text color={said?.color}>{` ${text} `}</Text>
+          <Text color={said?.color ?? TEXT}>{` ${text} `}</Text>
           <Text color={RULE}>{'─'.repeat(Math.max(0, columns - text.length - 2 - left))}</Text>
         </Text>
       )
@@ -1970,7 +1981,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         {catching && catcher()}
         <Box flexDirection="row" paddingLeft={1} paddingRight={1}>
           <Box key="design-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
-            {spanRows(smallPersona(pose))}
+            {Svg ? <Svg source={smallPersonaSvg(pose)} alt={`the conductor, ${pose}`} width={SMALL_SVG_W} height={SMALL_SVG_H} /> : spanRows(smallPersona(pose))}
           </Box>
           <Box flexDirection="column" width={headColumns} height={HEAD_ROWS} flexShrink={0}>
             {head}
@@ -2008,7 +2019,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
               rows: 1,
               el: (
                 <Box flexDirection="row" justifyContent="space-between" height={1}>
-                  <Text bold wrap="truncate-end">{row.text}</Text>
+                  <Text bold color={TEXT} wrap="truncate-end">{row.text}</Text>
                   <Box flexShrink={0}>
                     <Text color={FADED}>{`Help ${page}/${HELP_PAGES}`}</Text>
                   </Box>
@@ -2020,8 +2031,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
                 rows: 1,
                 el: (
                   <Text wrap="truncate-end">
-                    <Text color={page === 3 ? 'claude' : undefined} bold={page === 3 ? undefined : true}>{row.key.padEnd(column)}</Text>
-                    <Text>{row.text}</Text>
+                    <Text color={page === 3 ? 'claude' : TEXT} bold={page === 3 ? undefined : true}>{row.key.padEnd(column)}</Text>
+                    <Text color={TEXT}>{row.text}</Text>
                   </Text>
                 ),
               }
@@ -2047,7 +2058,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             <Box key="design-splash" flexDirection="column" alignItems="center" height={sceneRows} flexShrink={0}>
               {'Client' in els ? <els.Client key={SPLASH_KEY} module="./splash.tsx" width="100%" height={sceneRows} props={{ rows: sceneRows } as never} /> : spanRows(splashScene(2, columns, sceneRows).lines)}
             </Box>
-            <Text> </Text>
+            <Text color={TEXT}> </Text>
             <Box flexDirection="column" alignItems="center" flexShrink={0}>
               <Text bold color="claude">{`${GLYPH.diamond} ${PANE_TITLE}`}</Text>
               <Text color={FADED}>{SPLASH_NOTE}</Text>
@@ -2090,7 +2101,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             <Box flexDirection="row" height={1}>
               <Button key={`${START_KEY}${entry.kind}:${entry.id}`} plain onPress={() => openEntry($, at)}>
                 <Text color="claude" bold>{lit ? '▸ ' : '  '}</Text>
-                <Text color={lit ? 'claude' : undefined} bold>{clip(entry.title, nameW).padEnd(nameW)}</Text>
+                <Text color={lit ? 'claude' : TEXT} bold>{clip(entry.title, nameW).padEnd(nameW)}</Text>
                 <Text color={FADED}>{`  ${(entry.kind === 'blank' ? '' : blocksWord(entry.blocks)).padEnd(countW)}`}</Text>
                 <Text color={FADED}>{note === '' ? '' : `  ${note}`}</Text>
               </Button>
@@ -2341,7 +2352,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
               <Text wrap="truncate-end">
                 <Text color={ACCENT[node.type]} bold>{typeLabel(node)}</Text>
                 {hasName(node) && <Text color={FADED}>{' / '}</Text>}
-                {hasName(node) && <Text bold>{clip(node.name, Math.max(4, detailW - typeLabel(node).length - node.id.length - 5 - DOOR_W))}</Text>}
+                {hasName(node) && <Text bold color={TEXT}>{clip(node.name, Math.max(4, detailW - typeLabel(node).length - node.id.length - 5 - DOOR_W))}</Text>}
               </Text>
               <Box flexDirection="row" flexShrink={0}>
                 <Text color={FADED}>{node.id}</Text>
@@ -2362,10 +2373,12 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
           ),
         }
       : null
+    // A field a problem is about, while it is empty, is marked on its label: the pane says no more of the problem.
+    const required = (one: (typeof texts)[number]) => (one.value.trim() === '' && named.has(one.knob) ? [<Text color="error">{' [Required]'}</Text>] : [])
     const fieldLabel = (one: (typeof texts)[number]) => (
       <Text wrap="truncate-end">
         <Text color="suggestion">{cap(one.label)}</Text>
-        {one.value.trim() === '' && named.has(one.knob) ? <Text color="error">{' [not set]'}</Text> : null}
+        {required(one)}
       </Text>
     )
     // A field at rest: its label, then all of its value, wrapped. One press anywhere on it opens the fields on this one.
@@ -2373,13 +2386,13 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const value = oneLine(one.value)
       const rows = value === '' ? [] : capped(wrapText(value, detailW), most)
       const lost = value === '' && named.has(one.knob)
-      const body = value === '' ? [<Text color={lost ? 'error' : FADED}>{NOT_SET}</Text>] : rows.flatMap((row, index) => (index === 0 ? [<Text>{row}</Text>] : ['\n', <Text>{row}</Text>]))
+      const body = value === '' ? [<Text color={lost ? 'error' : FADED}>{NOT_SET}</Text>] : rows.flatMap((row, index) => (index === 0 ? [<Text color={TEXT}>{row}</Text>] : ['\n', <Text color={TEXT}>{row}</Text>]))
       return {
         rows: 1 + Math.max(1, rows.length),
         el: (
           <Box flexDirection="column" flexShrink={0}>
             <Button key={`${REST_KEY}${fieldKey(one.key, node?.id ?? '')}`} plain onPress={() => openFields($, one.key)}>
-              {[<Text color="suggestion">{cap(one.label)}</Text>, '\n', ...body]}
+              {[<Text color="suggestion">{cap(one.label)}</Text>, ...required(one), '\n', ...body]}
             </Button>
           </Box>
         ),
@@ -2466,7 +2479,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         ...shown.map(agent => ({
           rows: 1,
           el: (
-            <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : undefined}>
+            <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : TEXT}>
               {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${agent.title}  ${agent.status} · ${fmtTokens(agent.tokens)}`}
             </Text>
           ),
@@ -2485,10 +2498,6 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const sections: Item[][] = blockItems.length > 0 ? [blockItems] : []
       if (level < 3) {
         sections.push([label('Meaning'), ...lines(capped(wrapText(`${cap(teachOf(node).hint)}.`, detailW), most)), ...lines(capped(wrapText(`${cap(useWhen(node))}.`, detailW), most), FADED)])
-      }
-      for (const one of ownProblems) {
-        const parts = problemParts(one.message)
-        sections.push([label('Error', 'error'), ...lines(capped(wrapText(parts.error, detailW), most)), ...(parts.fix === '' ? [] : [label('Fix'), ...lines(capped(wrapText(parts.fix, detailW), most))])])
       }
       if (editable) for (const one of texts) sections.push([fielding ? openField(one) : restField(one, most)])
       if (setItems.length > 0) sections.push(setItems)
@@ -2522,7 +2531,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
                 <Text color={ACCENT[row.type]} bold={lit ? true : undefined}>{(type ?? '').toUpperCase()}</Text>,
                 <Text color={row.opens ? FADED : ACCENT[row.type]} bold={lit && !row.opens ? true : undefined}>{`${rest.length > 0 ? ` ${rest.join(' ')}` : ''}`.padEnd(NAME_W - (type ?? '').length)}</Text>,
                 ...(more.length > 0 ? [] : [<Text color={FADED}>{clip(hint, Math.max(0, detailW - 2 - NAME_W))}</Text>]),
-                ...more.flatMap((line, index) => ['\n', <Text color={index < split ? undefined : FADED}>{`  ${line}`}</Text>]),
+                ...more.flatMap((line, index) => ['\n', <Text color={index < split ? TEXT : FADED}>{`  ${line}`}</Text>]),
               ]}
             </Button>
           </Box>
@@ -2544,7 +2553,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             <Box flexDirection="row" height={1}>
               <Box flexShrink={0}>
                 {/* The letters taken as keys before they turned out to start a name: said here, they are not in the field. */}
-                <Text>
+                <Text color={TEXT}>
                   <Text color="suggestion">{'Filter '}</Text>
                   {ui.picker.lead ?? ''}
                 </Text>
@@ -2632,7 +2641,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       flatten(design)
         .slice(0, graphRows)
         .map(row => (
-          <Text color={row.node.id === ui.selectedId ? 'claude' : undefined} bold={row.node.id === ui.selectedId ? true : undefined} wrap="truncate-end">
+          <Text color={row.node.id === ui.selectedId ? 'claude' : TEXT} bold={row.node.id === ui.selectedId ? true : undefined} wrap="truncate-end">
             {`${row.node.id === ui.selectedId ? GLYPH.diamond : ' '} ${'  '.repeat(row.depth)}${TEACH[row.node.type].glyph} ${row.node.id}  ${row.node.name}`}
           </Text>
         )),
