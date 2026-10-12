@@ -63,7 +63,6 @@ type DesignNode = {
     isolation?: 'worktree'
     agentType?: string
     oncePer?: string      // a pipeline or parallel: what it fans out over, "changed files", "×4 dimensions"
-    votes?: number        // an agent of kind verify or judge
     stopCondition?: string // a loop: when it stops, in words, "2 dry rounds", "budget < 50k"
     condition?: string    // a block directly in a branch: what picks this arm
   }
@@ -643,7 +642,7 @@ The designer is a workspace of four fixed parts: a graph of the workflow (top to
 | `Enter` `e` | `edit` | the fields open, the ring on the title |
 | `n` `+` | `add` | the add list: after the selection; inside it when it is an empty container or the view's frame; at the end with nothing selected (`openAdd` → `addPlace`, the place the graph lights its `[+]` at) |
 | `x` | `remove` | delete; a container that holds blocks asks (`confirmId`, `x again deletes them all`); closes a help page instead while one is open |
-| `1` `2` `3` | `knob1` `knob2` `knob3` | `stepKnob` (ops.ts): `quickKnob` says which knob the type has. Model inherit → `MODEL_STEPS` haiku, sonnet, opus → inherit (a model of another name goes to inherit); effort inherit → `EFFORTS` → inherit; votes 1 … `VOTES_STEP_MAX` 5 and round again. `3` steps votes and nothing else (`QuickKnob` is `model` \| `effort` \| `votes`). Refused with the reason on a type that has none. Announced `n5 model: haiku · [u] Undo` |
+| `1` `2` | `knob1` `knob2` | `stepKnob` (ops.ts): `quickKnob` says which knob the type has. Model inherit → `MODEL_STEPS` haiku, sonnet, opus → inherit (a model of another name goes to inherit); effort inherit → `EFFORTS` → inherit (`QuickKnob` is `model` \| `effort`). Refused with the reason on a type that has none. Announced `n5 model: haiku · [u] Undo` |
 | `o` `b` | `open` `back` | the view |
 | `i` | `detail` | hide / show the detail pane |
 | `u` `y` | `undo` `redo` | `timeTravel` |
@@ -738,7 +737,7 @@ Asked for after a review of block coverage. Built; checked with `claude plugin v
   - `removeNode` and `retypeNode` refuse it (`ARGS_KEPT`), `moveNode` too (`ARGS_STAY`); `addNode` refuses a second, and any block asked for before it lands after it (`placeFor`). In the tool for Claude a `write` that leaves it out keeps the one the design has, and a refused `remove` now refuses the ops (it was passed over in silence).
   - It is not in `PALETTE`, so neither the add list nor the type list offers it; its own detail pane has no `Type` row; `n` on it adds after it only (`addSides`); the legend names neither `Shift+WASD` nor `x` while it is selected (`fixed`), and `WASD` is always named.
   - A design with nothing but it is blank (`isBlank`): that is what "empty" means everywhere (the draft command, a run refused, `not saved yet`, the legend's `q` and `r`, the detail pane's "An empty design"), and block counts leave it out (`blockCount`). The graph of a blank design is the args card, then the `[+]` and the lines on how to start in the middle of the rows left (`GraphLayout.blank`); nothing is selected when it opens, so the detail pane says how to start.
-- **Borders say the flow** (`FRAMES` in graph-paint.ts, by `shapeOf`): a leaf `╭─╮ │`, a chain dashed `┌╌┐ ╎`, a stack dotted `┌┈┐ ┊`, each with a heavy twin for the selection (`┏━┓`, `┏╍┓ ╏`, `┏┉┓ ┋`). `SQUARE` is gone. A leaf in hand keeps `LIFTED` (`╭╌╮ ┆`); a container in hand keeps its own line, dim.
+- **Borders say the flow** (`FRAMES` in graph-paint.ts, by `shapeOf`): a leaf `╭─╮ │`, a chain dashed `┌╴┐ ╎`, a stack dotted `┌╌┐ ┊`, each with a heavy twin for the selection (`┏━┓`, `┏╸┓ ╏`, `┏╍┓ ┋`). `SQUARE` is gone. A leaf in hand keeps `LIFTED` (`╭╴╮ ╎`); a container in hand keeps its own line, dim.
 - **A phase has no outline.** Its ring is blank cells and the whole of its box stands on `PHASE_GROUND` (`inverseText`: the darkest tone of a dark theme, the lightest of a light one). The paint keeps a second grid (`grounds`) beside the looks; `shade` clips as `put` does; a phase in a phase turns the ground back to the pane's (`shaded`). Selected, it has the plain heavy line. `Span.ground` is the Client's `backgroundColor`. Not drawn in the `plain` fallback, and the rows of `▲ / ▼ N more` and the drag chip are put back on the pane's ground.
 - **Accents:** `args` `bashBorder`, `phase` `text`. Glyphs for the plain list: `⇢`, `▭`.
 - **Hand-off:** `args` gets no entry in `meta.phases` and is not the label's example; two lines say what `args` and `phase` mean to the script. `HANDOFF_MAX_LINES` is 65 (30 fixed lines and at most 35 of outline; 60 was already passed by 2).
@@ -767,7 +766,7 @@ Asked for: "a block subtype system that encapsulates key patterns as presets", p
 | parallel | what differs between its arms? | arms, each, sweep, attempts |
 | branch | how is its arm picked? | if-else, guard, route |
 
-`pipeline`, `phase`, `code`, `subworkflow`, `args` have none. A pattern that spans several blocks (judge panel: attempts, judge, synthesize) is a template, not a kind: `judge` is the scoring vote alone. Voting is the `votes` knob of the two voting kinds, not a kind.
+`pipeline`, `phase`, `code`, `subworkflow`, `args` have none. A pattern that spans several blocks (judge panel: attempts, judge, synthesize) is a template, not a kind: `judge` is the scoring vote alone. Voting is not a kind and not a knob: the two voting kinds say their votes in their logic (see "Votes in the logic").
 
 **The model.** `DesignNode.kind?`, validated against its type (`readType`: a kind the type does not have is refused with the ones it has); the plain kind is never stored (`plainKind`, `kindOf`). The five old pattern types are gone: a file or a tool call that names one is refused as an unknown type. `typeName` is a block in words (`agent verify`, `loop` for a plain one); `types/index.d.ts` mirrors `kind`.
 
@@ -775,7 +774,7 @@ Asked for: "a block subtype system that encapsulates key patterns as presets", p
 
 | Block | Text fields | Chips |
 | --- | --- | --- |
-| agent | name, logic, prompt, output, agent type | model, effort; votes on verify and judge only (`offers`, `VOTING_KINDS`) |
+| agent | name, logic, prompt, output, agent type | model, effort |
 | code | name, logic, output | |
 | subworkflow | name, logic, prompt, output | |
 | args | name, logic, output | |
@@ -790,7 +789,7 @@ Asked for: "a block subtype system that encapsulates key patterns as presets", p
 
 **What a kind is** (`KIND_TEACH: Record<Kind, KindTeach>`): `hint`, `when`, `card` (teaching), `script` (one line in the script's terms, for the hand-off and `guide`), and three presets:
 
-- `fill`: knobs a new block of the kind gets (`fillOf`): verify `votes 3` and `{ refuted: boolean, reason }`; judge `votes 3` and a scores shape; scout and classify a shape and `effort low`; check `{ ok, failures }`; critic `{ gaps }`; every loop kind but custom its stop condition; sweep and attempts their `oncePer`.
+- `fill`: knobs a new block of the kind gets (`fillOf`): verify `{ refuted: boolean, reason }`; judge a scores shape (both also get their logic, `logicOf`); scout and classify a shape and `effort low`; check `{ ok, failures }`; critic `{ gaps }`; every loop kind but custom its stop condition; sweep and attempts their `oncePer`.
 - `hints`: what the empty fields are for (`placeholderOf(block, field, parent)`: the kind's, else the type's (`TYPE_HINTS`: the code block's logic names dedup, filter, top-K, merge, which replaced the code kinds first proposed), else `FIELD_PLACEHOLDER`). A branch's `condition` hint is shown on its arms.
 - `starter`: the blocks a new, empty container starts with: loop pass (an attempt, a check), loop dry (a finder with an output shape, a dedup `code`).
 
@@ -809,3 +808,30 @@ Asked for: "a block subtype system that encapsulates key patterns as presets", p
 **Hand-off and the tool for Claude:** the outline says `n6 agent verify "…"`; the instructions list each kind the design uses with its `script` line (`HANDOFF_MAX_LINES` 80). The tool's block has `kind`; its description names the kinds per type, and what each kind means is on `kind` in the schema, as the knobs are on `knobs`: the description is 3,801 characters (it was 4,401, past the engine's cut at 4,096). `update` takes `type` and `kind` (a type said again leaves the kind; `kind: ""` makes the block plain); a new block from `add` or `write` gets its kind's fill under the knobs it came with; `guide` has every kind's card.
 
 **Not exercised:** a model turn (Claude adding or changing kinds through the tool, a hand-off of a design that has them); the stacked and inline layouts of the add list's two steps.
+
+**After the build: the Block row, and no agent type field.** `Type` and `Agent type` read as one thing twice. The row that picks a block's type and kind is labelled `Block` and is the first row under the heading, before Meaning (`blockItems`); its label is now the stop before the picker (the row no longer runs backward), so Shift+Tab from the name reaches it and `offLabel` passes a further step back to the graph. `agentType` has no field any more (out of `TEXT_KNOBS`, `TextField`, `FIELD_LABEL`): like `isolation` it is Claude's to set, and shows as a read-only `Agent type  <name>` line when set (`setItems`). The add list's heading on a retype reads `Block n4 Deep read (now agent verify)`, the legend `[Enter] Set block`.
+
+## Votes in the logic
+
+Asked for: no votes chip on the graph; votes are said in the block's logic, typed or filled in by the kind. Checked with `claude plugin validate .`, `bunx tsc -p .` and a real paint.
+
+- **The `votes` knob is gone** (a clean break): out of `Knobs`, `KNOB_KEYS` and `knobError` (the parser refuses it as an unknown knob), `KNOB_HELP` (so the tool's schema), the hand-off's outline, `types/index.d.ts`. The saved designs and the templates say it in their logic.
+- **A kind may fill in the logic** (`KindTeach.logic`, `logicOf`): verify `3 votes: each voter tries to refute the result; it is kept when a majority fail to refute it`, judge `3 votes: each judge scores every candidate; the highest total wins`. `made` writes it on a new block, the tool's `write` on a new block that came with no logic, and `retypeNode` treats it as it does a filled knob: logic still as the old kind filled it in goes, logic that was typed stays, an empty one takes the new kind's.
+- **The count is read from the logic** (`votesOf` in teach.ts): the first `N votes`, `N voters` or `N judges` of a verify or a judge, 1 where it says none and for any other block. `leastAgents` multiplies by it and `edgeKind` draws a barrier after more than one.
+- **The card:** no `3` chip, no `votes N` at the right of row 2. `QuickKnob` is `model` | `effort`; the key `3`, `knob3` and `VOTES_STEP_MAX` are gone, and a `knob` message takes slot 1 or 2.
+- **Lint 7 (`no-votes`) is gone**; the other rules keep their numbers.
+- **The hand-off** tells Claude to run as many voters as the logic says, 3 where it says none (the kinds' `script` lines say the same).
+- `replayAgents` read a `fanout` knob that no longer exists; it reads `oncePer`.
+
+## No field is mined; a short hand-off
+
+Asked for after "Votes in the logic": the counts and meanings that were still read out of typed text are gone, and the hand-off says the design and little else. Checked with `claude plugin validate .`, `bunx tsc -p .` and a real paint. Where this section and an earlier one disagree, this one holds.
+
+- **What was read out of text, and is no more:** `votesOf` (votes in a logic); `statedCount` and the test in `unknownsOf` (a leading number in `oncePer`); `fanCount`, `fanMark` and `eachOf` in graph-layout.ts (the `×4` / `×n` mark, `count unknown`, the count and a leading `each` stripped from the header); lint 5 `fanout-over-cap` (a number above `CONCURRENCY_CAP` in `oncePer`); lints 1 `barrier-not-needed` and 2 `worktree-read-only` and the let-off of lint 3 (the word lists `CROSS_ITEM`, `READS`, `WRITES`, `BOUNDED` over a block's name, logic and prompt); `replayAgents` reading `oncePer` (a replay of a design gives a leaf 2 to 4 agents by its id).
+- **What still reads text, as wiring:** the run view takes `n3` from the start of an agent's label (`reducer.ts`), and `handoffTarget` knows the hand-off sentence. `hasInput` and lint 9 test whether `oncePer` is empty, not what it says.
+- **Agents** (`leastAgents`): one per agent block, the cheapest arm of a branch, nothing for the rest. `unknownsOf` goes by type and kind alone: a pipeline or a parallel (`fanouts`), a loop, a verify or a judge (`votes`), a subworkflow; any of them makes it `agents ≥ N (more: 2 blocks may fan out, 1 loop repeats, 1 block votes)`.
+- **Lints:** 1, 2 and 5 are gone and the rest keep their numbers. Lint 3 is structural: any loop with an empty stop condition but the kind dry (`needsStop`).
+- **The graph:** a header says `· once per: <as typed> · stop: <as typed>`; no `×` mark anywhere (the `fan` role and the legend's `×N` row are gone). `edgeKind`: a barrier after a pipeline or a parallel, by type.
+- **Hand-off** (`buildHandoff`): the goal, the design file ("it defines the workflow"), the script to update where one exists, not to call the offer tool, to ask the user first about every flow that is ambiguous or looks unintended, and the three rules that tie a run to the board (label, phase, `meta.name`; with a script, `match`). Gone from it: what a node's fields are, the knobs paragraph, the per-kind `script` lines, the outline, the report after launching, `HANDOFF_MAX_LINES`. `outline` and `KindTeach.script` stay for the tool for Claude (chat.ts).
+- **The tool for Claude** no longer says where votes go.
+

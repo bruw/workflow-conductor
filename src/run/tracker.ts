@@ -3,7 +3,8 @@ import { endText, statusText } from '../ui/rail'
 import { emptyRunState } from './events'
 import type { RunEvent, RunState } from './events'
 import { journalPhases } from './journal'
-import { reduce } from './reducer'
+import { reduce, remap } from './reducer'
+import type { Mapping } from './reducer'
 import { replayDue } from './replay'
 
 // Decides WHEN things happen for a live run: which agents count, when the state is
@@ -43,8 +44,15 @@ export type TrackerHost = {
   design?: (name: string | null) => unknown
 }
 
-/** A design handed off to be run: the next run that starts is its run. */
-export type Handoff = { name: string; nodeIds: readonly string[]; titles?: Readonly<Record<string, string>> }
+/**
+ * A design's claim on a run: handed off, the next run that starts is its run; adopted, the run already tracked is.
+ * `match` is each block's own, by id in design order, for a run whose labels carry no block id.
+ */
+export type Handoff = { name: string; nodeIds: readonly string[]; titles?: Readonly<Record<string, string>>; match?: Readonly<Record<string, readonly string[]>> }
+
+type Claim = Mapping & { name: string; titles?: Readonly<Record<string, string>> }
+
+const claimOf = (from: Handoff): Claim => ({ name: from.name, ids: new Set(from.nodeIds), titles: from.titles, match: from.match })
 
 export type RunStarted = { runId: string; name?: string; transcriptDir?: string }
 export type AgentSpawned = { runId: string; agentId: string; label: string; index?: number }
@@ -68,8 +76,8 @@ export function createTracker() {
   let shown = false
   let lastStatus: string | undefined
   /** The handoff waiting for its run, and the one the tracked run came from. */
-  let pending: { name: string; ids: ReadonlySet<string>; titles?: Readonly<Record<string, string>> } | undefined
-  let active: { name: string; ids: ReadonlySet<string>; titles?: Readonly<Record<string, string>> } | undefined
+  let pending: Claim | undefined
+  let active: Claim | undefined
   let expiry: Timer | undefined
 
   const dirs = new Map<string, string>()
@@ -208,7 +216,7 @@ export function createTracker() {
     const before = state
     let wasRunning = state.status === 'running'
     for (const event of events) {
-      const next = reduce(state, event, active?.ids)
+      const next = reduce(state, event, active)
       if (next === state) continue
       state = next
       wasRunning ||= state.status === 'running'
@@ -240,13 +248,11 @@ export function createTracker() {
     noPhase.clear()
     // Another run, or the one a handoff waited for: it belongs to that design, or to none.
     if (pending !== undefined || state.runId !== runId) {
-      const before = active
       active = pending
       dropPending()
-      if (active?.name !== before?.name) {
-        const name = active?.name ?? null
-        call(h => h.design?.(name))
-      }
+      // Said for every run, the same design's next one too: the host's copy is the session's and starts over on a /clear, this one does not.
+      const name = active?.name ?? null
+      call(h => h.design?.(name))
     }
     if (state.runId !== undefined && state.runId !== runId) superseded.add(state.runId)
     superseded.delete(runId)
@@ -265,7 +271,7 @@ export function createTracker() {
       host = next
       if (stored && state.status === 'idle' && Object.keys(state.agents).length === 0) {
         state = stored
-        if (claim && state.status !== 'idle') active = { name: claim.name, ids: new Set(claim.nodeIds), titles: claim.titles }
+        if (claim && state.status !== 'idle') active = claimOf(claim)
         for (const agent of Object.values(state.agents)) {
           if (agent.status === 'running') totals.set(agent.agentId, agent.tokens)
         }
@@ -281,9 +287,27 @@ export function createTracker() {
      */
     handoff(next: Handoff): void {
       dropPending()
-      pending = { name: next.name, ids: new Set(next.nodeIds), titles: next.titles }
+      pending = claimOf(next)
       expiry = host?.after(HANDOFF_MS, dropPending)
     },
+
+    /**
+     * Gives the run tracked now, running or over and still shown, a design after the fact: a design drawn of the
+     * script it runs. Every agent seen so far is placed again by the claim, and the ones still to come are placed
+     * by it. Returns the labels of the agents no block claims, one per agent; null when there is no run to give it to.
+     */
+    adopt(claim: Handoff): string[] | null {
+      if (state.status === 'idle') return null
+      const before = active
+      active = claimOf(claim)
+      if (active.name !== before?.name) call(h => h.design?.(claim.name))
+      state = remap(state, active)
+      flush()
+      return state.unmapped.map(id => state.agents[id]?.label ?? '')
+    },
+
+    /** Whether a design was handed off and its run has not started yet: Claude is writing the script for it. */
+    awaitsRun: (): boolean => pending !== undefined,
 
     /** The design the tracked run was started from, if any. */
     design: (): string | undefined => active?.name,

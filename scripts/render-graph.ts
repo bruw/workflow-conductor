@@ -62,7 +62,7 @@ export const STRESS: Record<string, () => Design> = {
         'Every lens runs at once; the writer needs all nine.',
         {},
         ['correctness', 'security', 'performance', 'tests', 'docs', 'api shape', 'migrations', 'observability', 'cost'].map((lens, i) =>
-          node(`n${i + 3}`, i === 4 ? 'agent verify' : 'agent', lens, `Review the change for ${lens} only.`, { ...(i % 3 === 0 ? { model: 'sonnet' } : {}), ...(i === 4 ? { votes: 3 } : {}), output: '{ findings: [{ file, claim }] }' }),
+          node(`n${i + 3}`, i === 4 ? 'agent verify' : 'agent', lens, `${i === 4 ? '3 votes: review' : 'Review'} the change for ${lens} only.`, { ...(i % 3 === 0 ? { model: 'sonnet' } : {}), output: '{ findings: [{ file, claim }] }' }),
         ),
       ),
       node('n12', 'agent', 'write up', 'One review from all nine lenses.', { model: 'opus', effort: 'high' }),
@@ -77,7 +77,7 @@ export const STRESS: Record<string, () => Design> = {
             node('n5', 'pipeline', 'find and check', '', { oncePer: 'candidate files' }, [
               node('n6', 'agent', 'find', 'Look for the defect in this file.', { effort: 'low' }),
               node('n7', 'loop dry', 'dig', '', { stopCondition: '1 dry round' }, [
-                node('n8', 'parallel sweep', 'angles', '', { oncePer: '3 angles' }, [node('n9', 'agent', 'probe', 'Try one way to trigger it.', {}), node('n10', 'agent verify', 'confirm', 'Refute the trigger.', { votes: 2 })]),
+                node('n8', 'parallel sweep', 'angles', '', { oncePer: '3 angles' }, [node('n9', 'agent', 'probe', 'Try one way to trigger it.', {}), node('n10', 'agent verify', 'confirm', '2 votes: refute the trigger.', {})]),
                 node('n11', 'code', 'dedupe', 'Drop repeats.', {}),
               ]),
             ]),
@@ -93,7 +93,7 @@ export const STRESS: Record<string, () => Design> = {
     design('research-answer', 'Answer a question from many sources: search, read, check gaps, write up.', [
       node('n1', 'pipeline', 'Deep read', '', { oncePer: 'deduped sources' }, [
         node('n2', 'agent', 'Search', 'Find relevant sources.', { model: 'haiku', effort: 'low', output: 'sources' }),
-        node('n3', 'agent verify', 'Check claims', 'Try to refute the claims.', { model: 'sonnet', effort: 'high', votes: 2, output: 'verdict + reason' }),
+        node('n3', 'agent verify', 'Check claims', '2 votes: try to refute the claims.', { model: 'sonnet', effort: 'high', output: 'verdict + reason' }),
         node('n4', 'agent', 'Read source', 'Extract claims with evidence.', { model: 'sonnet', effort: 'high', output: 'claims + quotes + confidence' }),
         node('n5', 'parallel sweep', 'Multi-modal sweep', '', { oncePer: '4 search directions' }, []),
       ]),
@@ -115,7 +115,7 @@ export const STRESS: Record<string, () => Design> = {
     design('a-design-whose-name-is-much-longer-than-a-design-name-has-any-business-being', LONG, [
       node('n1', 'agent', 'Read every single source from the first page to the last and extract all of the claims', LONG, { model: 'claude-opus-with-a-very-long-custom-model-name', effort: 'xhigh', output: '{ claims: [{ claim, quote, page, line, confidence, why, agrees_with[], disagrees_with[] }] }', oncePer: 'each of the deduped sources that survived the first two filters' }),
       node('n2', 'pipeline', 'A pipeline with a title that goes on and on well past the width of its own border', LONG, { oncePer: '×12 of the sources that the reader before it marked as worth a second and slower look', output: '{ verdicts[] }' }, [
-        node('n3', 'agent verify', 'Refute each and every claim against the quoted source text, defaulting to refuted', `${LONG}\n\nSecond paragraph: ${LONG}`, { votes: 5, model: 'sonnet', output: '{ refuted: boolean, reason: string, quote: string }' }),
+        node('n3', 'agent verify', 'Refute each and every claim against the quoted source text, defaulting to refuted', `5 votes. ${LONG}\n\nSecond paragraph: ${LONG}`, { model: 'sonnet', output: '{ refuted: boolean, reason: string, quote: string }' }),
         node('n4', 'branch', 'Decide what happens to the claim next, by its verdict', '', {}, [
           node('n5', 'agent', 'Keep', 'Supercalifragilisticexpialidocious-and-then-some-unbroken-word-that-cannot-wrap-anywhere-at-all', { condition: 'at least two of the three checkers failed to refute it and the quote is verbatim in the source' }),
           node('n6', 'code', 'Drop it and log why it was dropped', '', {}),

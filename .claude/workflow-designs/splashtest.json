@@ -53,11 +53,10 @@
           "type": "agent",
           "kind": "verify",
           "name": "verify findings",
-          "logic": "Each skeptic tries to refute a finding and defaults to refuted when unsure. Keep a finding only if at least 2 of 3 fail to refute it.",
+          "logic": "3 votes: each skeptic tries to refute a finding and defaults to refuted when unsure. Keep a finding only if at least 2 of 3 fail to refute it.",
           "knobs": {
             "prompt": "Try to refute this finding against the actual code",
-            "output": "{ refuted: boolean, reason }",
-            "votes": 3
+            "output": "{ refuted: boolean, reason }"
           }
         }
       ]

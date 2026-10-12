@@ -1,10 +1,12 @@
 import { atom, read, update } from 'claude-code'
-import type { On } from 'claude-code'
+import type { EngineInterface, On } from 'claude-code'
 
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
-import { parseDesign } from '../src/design/model'
-import { DESIGN_PANE_ID, bareTarget, designFile, endRun, followRun, handoffOf, initialTimes, initialUi, stampTimes } from '../src/design/session'
+import { visualizeBrief } from '../src/design/chat'
+import { flatten, parseDesign } from '../src/design/model'
+import { VISUALIZE_HEADER, VISUALIZE_KEY, VISUALIZE_OPTIONS, VISUALIZE_QUESTION, reusedToast, storedVisualize, visualizeChoice, visualizeToast, visualizeTyped } from '../src/design/offer'
+import { DESIGN_PANE_ID, bareTarget, designFile, designName, endRun, followRun, handoffOf, initialTimes, initialUi, isSaved, openDesign, scriptFile, stampTimes } from '../src/design/session'
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
 import { USAGE_KEYS } from '../src/run/journal'
@@ -15,11 +17,13 @@ import { buildRunRows, togglePhase } from '../src/ui/rail'
 import type { Part, Row } from '../src/ui/rail'
 import { FADED, GLYPH, PANE_ID, PANE_TITLE } from '../src/ui/theme'
 
+import { paneArgs } from './design'
+
 const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
 const MAX_ROWS = 400
 const HELP = [
-  'Usage: /conductor [design [name] | draft <name> <description> | run <name> | list | rename <old> <new> | delete <name> | replay <fixture>]',
+  'Usage: /conductor [design [name] | draft <name> <description> | run <name> | list | rename <old> <new> | delete <name> | ask reset | replay <fixture>]',
   '  /conductor                  open the run (on its design, when it came from one); with no run, the design last opened',
   '  /conductor design [name]    open a design; with no name, pick a saved design or start one from a template',
   '  /conductor draft <name> <description>   have Claude draft a design for the description, on the board',
@@ -27,6 +31,7 @@ const HELP = [
   '  /conductor list             the saved designs, each with its block count and what it is for',
   '  /conductor rename <old> <new>   give a saved design another name',
   '  /conductor delete <name>    delete a saved design (asks once more before it does)',
+  '  /conductor ask reset        forget every "Always" and "Never" answer, so Conductor asks again',
   '  /conductor replay <fixture|clear> [fast|slow]   replay a recorded run (dev)',
   '  /conductor replay design <template> [fast|slow]   replay a made-up run over a design (dev)',
 ].join('\n')
@@ -42,6 +47,8 @@ const runDesignAtom = atom({ plugin: 'conductor', key: 'runDesign' } as const, n
 const uiAtom = atom({ plugin: 'conductor', key: 'runUi' } as const, { expanded: [], collapsed: [] })
 /** When the run began and ended: stamped as its state is written. */
 const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initialTimes())
+/** The tracked run's script file, and the design drawn of that run after it started (design.tsx `attach` sets it). */
+const runScriptAtom = atom({ plugin: 'conductor', key: 'runScript' } as const, null)
 // The designer's state (design.tsx owns it): read and written here only so the selection can follow the run.
 const designAtom = atom({ plugin: 'conductor', key: 'design' } as const, null)
 const designUiAtom = atom({ plugin: 'conductor', key: 'designUi' } as const, initialUi())
@@ -61,12 +68,53 @@ const tokensOf = (usage: unknown): number | undefined => {
   return USAGE_KEYS.reduce((sum, key) => sum + count(counts[key]), 0)
 }
 
+/** Copies a run's script beside its design; a run of that very file copies nothing. Never a throw. */
+const keepScript = async ($: EngineInterface, from: string, to: string): Promise<void> => {
+  if (from === to) return
+  try {
+    await $.fs.write(to, await $.fs.read(from))
+  } catch {
+    // The design is whole without it: the next handoff writes a script anew.
+  }
+}
+
+/**
+ * A run that started with no design, of a workflow named as a saved design that is tied to a script (a block has
+ * `match`): the run is shown on that design at once, as design.tsx's `attach` shows one on a design just drawn.
+ * Null when there is no such design.
+ */
+const reuseDesign = async ($: EngineInterface, tracker: Tracker, workflow: string | undefined, script: string | undefined): Promise<{ name: string; placed: boolean } | null> => {
+  if (workflow === undefined) return null
+  const name = designName(workflow)
+  const root = await $.session.root()
+  const path = designFile(root, name)
+  if (!isSaved(name) || !(await $.fs.exists(path))) return null
+  const shown = await read($, designUiAtom)
+  const onBoard = shown.name === name && shown.status === 'ready' ? await read($, designAtom) : null
+  // The board's copy when it shows this design (a field typed there and not sent is not in the file yet), else the file's.
+  const opened = onBoard === null ? openDesign(name, await $.fs.read(path), shown) : null
+  const design = onBoard ?? opened?.design ?? null
+  if (design === null || !flatten(design).some(row => row.node.match !== undefined)) return null
+  if (opened !== null) {
+    await update($, designAtom, () => opened.design)
+    await update($, designUiAtom, () => opened.ui)
+  }
+  if (script !== undefined) await keepScript($, script, scriptFile(root, name))
+  // The tracker's write reads the run's design and the board: both hold this design before it places the agents.
+  await update($, designUiAtom, held => ({ ...held, follow: true, runCleared: false }))
+  await update($, runDesignAtom, () => name)
+  tracker.adopt(handoffOf(name, design))
+  const pane = await $.ui.open(paneArgs(false)).catch(() => undefined)
+
+  return { name, placed: pane?.isPlaced !== false }
+}
+
 export const registerRun = (on: On, tracker: Tracker): void => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'conductor',
-      description: 'Workflow designer and run view: no argument opens the run view; design [name], draft <name> <description>, run <name>, list, rename <old> <new>, delete <name>, replay <fixture>',
-      argumentHint: '[design [name] | draft <name> <description> | run <name> | list | rename <old> <new> | delete <name> | replay <fixture>]',
+      description: 'Workflow designer and run view: no argument opens the run view; design [name], draft <name> <description>, run <name>, list, rename <old> <new>, delete <name>, ask reset, replay <fixture>',
+      argumentHint: '[design [name] | draft <name> <description> | run <name> | list | rename <old> <new> | delete <name> | ask reset | replay <fixture>]',
     })
 
     // A run a previous load of the module was following: when it came from a design, its
@@ -137,8 +185,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
 
       return { text: 'Conductor pane opened.' }
     }
-    // design.tsx answers these, whichever of the two hooks the engine asks first.
-    if (verb === 'design' || verb === 'draft' || verb === 'run' || verb === 'list' || verb === 'delete' || verb === 'rename' || (verb === 'replay' && name === 'design')) return next(e)
+    // design.tsx answers these (offer.tsx `ask`), whichever of the hooks the engine asks first.
+    if (verb === 'ask' || verb === 'design' || verb === 'draft' || verb === 'run' || verb === 'list' || verb === 'delete' || verb === 'rename' || (verb === 'replay' && name === 'design')) return next(e)
     if (verb !== 'replay') return { text: HELP }
 
     if (name === 'clear') {
@@ -155,16 +203,61 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     return { text: `Replaying ${name} (${speed ?? 'fast'}); token counts are made up.` }
   })
 
-  on('tool.call', { tool: 'Workflow' }, async (_$, e, next) => {
+  // The run starts here. One that no design claimed is asked about, the turn held meanwhile (API-NOTES S10): whether
+  // to draw a design of it. Whatever happens after the start, the tool's result goes back: never a throw.
+  on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
     const answer = await next(e)
     const result = (answer as { result?: unknown }).result
-    if (result !== null && typeof result === 'object') {
-      const { runId, workflowName, transcriptDir } = result as Record<string, unknown>
-      const id = text(runId)
-      if (id !== undefined) tracker.runStarted({ runId: id, name: text(workflowName), transcriptDir: text(transcriptDir) })
-    }
+    if (result === null || typeof result !== 'object') return answer
+    const { runId, workflowName, transcriptDir, scriptPath } = result as Record<string, unknown>
+    const id = text(runId)
+    if (id === undefined) return answer
+    tracker.runStarted({ runId: id, name: text(workflowName), transcriptDir: text(transcriptDir) })
 
-    return answer
+    try {
+      // The script is the file the result names, in every form of the call (S11). A run started again keeps its drawing.
+      const script = text(scriptPath)
+      await update($, runScriptAtom, held => (script === undefined ? null : { runId: id, path: script, drawn: held !== null && held.runId === id ? held.drawn : null }))
+      const claimed = tracker.design()
+      if (claimed !== undefined) {
+        // A design's own run: the script it was implemented as is kept beside it, for the next handoff to update.
+        if (script !== undefined && isSaved(claimed)) await keepScript($, script, scriptFile(await $.session.root(), claimed))
+
+        return answer
+      }
+      // A subagent's workflow is not the person's to be asked about; nor is one where nobody reads a question.
+      if (e.agentId !== undefined || answer.deny !== undefined || answer.isError === true) return answer
+      const surfaces = await $.session.surfaces().catch(() => undefined)
+      if (surfaces !== undefined && surfaces.length === 0) return answer
+      // The workflow has a design drawn of its script before: no question, the run is on it.
+      const reused = await reuseDesign($, tracker, text(workflowName), script)
+      if (reused !== null) {
+        $.ui.toast(reusedToast(reused.name, reused.placed))
+
+        return answer
+      }
+      const kept = storedVisualize(await $.store.get(VISUALIZE_KEY).catch(() => undefined))
+      let choice = kept
+      if (choice === null) {
+        let said: string
+        try {
+          said = await $.ui.ask(VISUALIZE_QUESTION, { options: VISUALIZE_OPTIONS, header: VISUALIZE_HEADER })
+        } catch {
+          return answer
+        }
+        const picked = visualizeChoice(said)
+        if (picked === null) return said.trim() === '' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeTyped(said)] }
+        if (picked.always) {
+          await $.store.set(VISUALIZE_KEY, picked.choice).catch(() => undefined)
+          $.ui.toast(visualizeToast(picked.choice))
+        }
+        choice = picked.choice
+      }
+
+      return choice === 'skip' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeBrief(script, kept === null)] }
+    } catch {
+      return answer
+    }
   })
 
   // Only a workflow's agents carry `e.workflow`; the id is on what `next` resolves to.

@@ -157,7 +157,7 @@ export const TEACH: Record<NodeType, Teach> = {
 export type BlockRef = { type: NodeType; kind?: Kind }
 
 /** The free-text fields of a block: its logic and the knobs typed as text. */
-export type TextField = 'logic' | 'prompt' | 'condition' | 'oncePer' | 'stopCondition' | 'output' | 'agentType'
+export type TextField = 'logic' | 'prompt' | 'condition' | 'oncePer' | 'stopCondition' | 'output'
 
 /** A block a new container of some kind starts with. */
 export type Starter = { type: NodeType; kind?: Kind; name: string; logic?: string; knobs?: Knobs }
@@ -173,6 +173,8 @@ export type KindTeach = {
   script: string
   /** The knobs a new block of this kind is given: what the pattern needs to be itself. */
   fill?: Knobs
+  /** The logic a new block of this kind is given: a voting kind says its votes in it. */
+  logic?: string
   /** What its empty fields are for, shown in the field. `condition` is said on a branch and shown on its arms. */
   hints?: Partial<Record<TextField, string>>
   /** The blocks a new, empty container of this kind starts with. */
@@ -186,8 +188,8 @@ function plain(type: NodeType, script: string, hints?: KindTeach['hints']): Kind
 
 /**
  * Every kind: what it means, what it fills in and what it starts with. A kind adds no field
- * and takes none away: a block's fields are its type's (`KNOBS_BY_TYPE`). The one exception
- * is `votes`, which only the two voting kinds of agent have (`VOTING_KINDS`).
+ * and takes none away: a block's fields are its type's (`KNOBS_BY_TYPE`). The two voting kinds
+ * of agent (`VOTING_KINDS`) say their votes in their logic, which they are given filled in.
  */
 export const KIND_TEACH: Record<Kind, KindTeach> = {
   // agent: what is its job?
@@ -226,10 +228,11 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'A finding survives only if a majority fail to refute it.',
       'Use after any finder: it stops plausible but wrong findings from surviving.',
       'Give voters distinct lenses (correctness, security, repro) when a claim can fail several ways.',
-      'Cost: votes × findings agents. 1 vote for a quick check, 3 to 5 for a thorough one.',
+      'Cost: votes × findings agents. 1 vote for a quick check, 3 to 5 for a thorough one: say how many in its logic (`3 votes`).',
     ],
-    script: '`votes` agents in a parallel(), each told to refute the result and to say refuted when unsure; keep it when a majority fail to refute',
-    fill: { votes: 3, output: '{ refuted: boolean, reason }' },
+    script: 'voters in a parallel(), as many as its logic says, each told to refute the result and to say refuted when unsure; keep it when a majority fail to refute',
+    fill: { output: '{ refuted: boolean, reason }' },
+    logic: '3 votes: each voter tries to refute the result; it is kept when a majority fail to refute it',
     hints: { prompt: 'what to try to refute, e.g. this finding against the code' },
   },
   judge: {
@@ -239,10 +242,11 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'Parallel judges score every candidate against the same criteria; the highest total wins.',
       'Put the attempts before it (a parallel of kind attempts) and a synthesize after it.',
       'Waiting for all results is right here: the judges need every candidate at once.',
-      'Cost: one agent per vote.',
+      'Cost: one agent per vote: say how many in its logic (`3 votes`).',
     ],
-    script: '`votes` judges in a parallel(), each scoring every candidate; sum the scores in code and take the highest',
-    fill: { votes: 3, output: '{ scores: [{ candidate, score, why }] }' },
+    script: 'judges in a parallel(), as many as its logic says, each scoring every candidate; sum the scores in code and take the highest',
+    fill: { output: '{ scores: [{ candidate, score, why }] }' },
+    logic: '3 votes: each judge scores every candidate; the highest total wins',
     hints: { prompt: 'the criteria to score on, e.g. correctness, simplicity, risk' },
   },
   critic: {
@@ -438,6 +442,12 @@ export function fillOf(block: BlockRef): Knobs {
   return kind === undefined ? {} : (KIND_TEACH[kind].fill ?? {})
 }
 
+/** The logic a new block of this type and kind is given; undefined where its kind gives none. */
+export function logicOf(block: BlockRef): string | undefined {
+  const kind = kindOf(block)
+  return kind === undefined ? undefined : KIND_TEACH[kind].logic
+}
+
 /** The blocks a new, empty container of this type and kind starts with. */
 export function starterOf(block: BlockRef): readonly Starter[] {
   const kind = kindOf(block)
@@ -458,17 +468,16 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
   isolation: '"worktree", only for agents that edit files in parallel',
   agentType: 'a subagent type to run as',
   oncePer: 'on a pipeline or parallel: the items it runs once per, with a count when known: "changed files", "×4 dimensions" (no leading "each")',
-  votes: 'a whole number, on an agent of kind verify or judge',
   stopCondition: 'a loop\'s stop condition, in words: "2 dry rounds", "the check passes, at most 3 rounds"',
   condition: 'on a block directly in a branch: the condition that picks this arm, "no findings"; the last arm with none is the else',
 }
 
 /**
  * Which knobs a type has: the one place that says so, and the same for every kind of the
- * type. The detail pane offers a field for each one typed as text, the card a chip for model,
- * effort and votes; a knob a block carries anyway (set from chat, by hand in the file, or
- * before the fields were made the same) is offered after them. `isolation` has no control:
- * Claude sets it, and the detail pane only says where it is set.
+ * type. The detail pane offers a field for each one typed as text, the card a chip for model
+ * and effort; a knob a block carries anyway (set from chat, by hand in the file, or
+ * before the fields were made the same) is offered after them. `isolation` and `agentType` have no control:
+ * Claude sets them, and the detail pane only says where one is set.
  *
  * Reasoning: a block that does work says what it is told (`prompt`) and what it hands on
  * (`output`); a block that holds blocks says its one rule: what it runs once per (`oncePer`)
@@ -476,7 +485,7 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
  * what its last block makes, so it has no `output` of its own.
  */
 export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
-  agent: ['prompt', 'output', 'agentType', 'model', 'effort', 'isolation'],
+  agent: ['prompt', 'output', 'model', 'effort', 'isolation', 'agentType'],
   code: ['output'],
   subworkflow: ['prompt', 'output'],
   args: ['output'],
@@ -490,12 +499,11 @@ export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
 /** The kinds of agent whose name already says the task: they are not asked for a brief. */
 export const SELF_BRIEFED: readonly Kind[] = ['verify', 'judge', 'critic']
 
-/** The kinds of agent that vote: the only blocks with a `votes` knob. */
+/** The kinds of agent that vote: how many is said in their logic, as plain words nothing reads. */
 export const VOTING_KINDS: readonly Kind[] = ['verify', 'judge']
 
-/** Whether a block has a knob by its type and kind, whatever it carries. */
+/** Whether a block has a knob by its type, whatever it carries. */
 export function offers(block: BlockRef, knob: keyof Knobs): boolean {
-  if (knob === 'votes') return block.type === 'agent' && block.kind !== undefined && VOTING_KINDS.includes(block.kind)
   return KNOBS_BY_TYPE[block.type].includes(knob)
 }
 
@@ -505,12 +513,12 @@ export function hasLogic(node: { type: NodeType; logic?: string }): boolean {
 }
 
 /**
- * The knobs of a block: its type's (with `votes` on a voting agent), then any other it has set.
+ * The knobs of a block: its type's, then any other it has set.
  * `condition` belongs to no type: it is offered (after the prompt) to a block that stands
  * directly in a `branch`, which `parentType` says.
  */
 export function knobsOf(node: BlockRef & { knobs?: Knobs }, parentType?: NodeType): (keyof Knobs)[] {
-  const own: readonly (keyof Knobs)[] = offers(node, 'votes') ? [...KNOBS_BY_TYPE[node.type], 'votes'] : KNOBS_BY_TYPE[node.type]
+  const own = KNOBS_BY_TYPE[node.type]
   const listed: readonly (keyof Knobs)[] = parentType !== 'branch' ? own : own[0] === 'prompt' ? ['prompt', 'condition', ...own.slice(1)] : ['condition', ...own]
   const extra = (Object.keys(node.knobs ?? {}) as (keyof Knobs)[]).filter(key => !listed.includes(key) && node.knobs?.[key] !== undefined)
   return [...listed, ...extra]
@@ -529,10 +537,9 @@ export const FIELD_LABEL = {
   stopCondition: 'stop condition',
   condition: 'condition',
   output: 'output',
-  agentType: 'agent type',
 } as const
 
-/** A field's name as a message says it: the label where it has one (`logic`, `stop condition`), else the knob's own name (`votes`). */
+/** A field's name as a message says it: the label where it has one (`logic`, `stop condition`), else the knob's own name (`model`). */
 export function fieldWord(field: string): string {
   return (FIELD_LABEL as Readonly<Record<string, string>>)[field] ?? field
 }
@@ -544,7 +551,6 @@ export const FIELD_PLACEHOLDER = {
   stopCondition: 'e.g. 2 dry rounds, 10 findings, budget < 50k',
   condition: 'e.g. no findings; leave the last arm empty for the else',
   output: 'e.g. { findings: [{ file, claim }] }, or in words',
-  agentType: 'the default subagent; name another to change it, e.g. Explore',
 } as const
 
 /** What a type's empty fields are for where the type has no kinds to say it. */

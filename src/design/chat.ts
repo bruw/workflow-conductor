@@ -7,21 +7,21 @@
 import { outline } from './handoff'
 import { lint } from './lints'
 import { CONTAINER_TYPES, EFFORTS, KINDS, NODE_TYPES, argsOf, typeName, canHoldChildren, findNode, flatten, kindsOf, parseDesign, readType, serializeDesign } from './model'
-import type { Design, Kind } from './model'
+import type { Design, DesignNode, Kind, Row } from './model'
 import { addNode, moveNode, nextIdNumber, removeNode, retypeNode, updateNode } from './ops'
 import type { NodePatch, Place } from './ops'
 import { FLASH_MS } from '../ui/graph-model'
 import { UNDO_HINT } from './history'
 import { DESIGN_DIR, carryUi, initialUi } from './session'
 import type { DesignUi } from './session'
-import { KIND_TEACH, KNOB_HELP, TEACH, defaultName, fillOf } from './teach'
+import { KIND_TEACH, KNOB_HELP, TEACH, defaultName, fillOf, logicOf } from './teach'
 
 /** The tool's short name; the model calls it as `mcp__conductor__design`. */
 export const TOOL_NAME = 'design'
 export const TOOL_FULL_NAME = 'mcp__conductor__design'
 export const DESIGN_DIR_HINT = `${DESIGN_DIR}/<name>.json`
 
-export const ACTIONS = ['read', 'apply', 'write', 'guide'] as const
+export const ACTIONS = ['read', 'apply', 'write', 'attach', 'guide'] as const
 export const OP_KINDS = ['add', 'update', 'move', 'remove'] as const
 
 const KNOB_NAMES = Object.keys(KNOB_HELP)
@@ -52,12 +52,12 @@ function knobLine(): string {
     .join('; ')
 }
 
-/** What the model reads every turn: kept short. The long cards are behind `guide`. */
+/** What the model reads once it has loaded the tool (it is deferred: only its name is in every turn). The long cards are behind `guide`. */
 export function toolDescription(): string {
   return [
     `Reads and edits the user's Conductor workflow design: the board of blocks they see, saved at ${DESIGN_DIR_HINT}. Use it whenever the user asks to draft, add, change, move or remove workflow blocks or steps ("add a verify after n3", "this block"); do not edit that file by hand. A design is a spec the user reviews, not a script: never run it from here.`,
-    'Actions: read = the design JSON, the block selected on the board ("this block") and the lints. Always read before you describe, review or edit a design: the user changes the board by hand between your turns, so what you read or wrote earlier may be gone (every answer names the revision it shows). apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures): keep the id of every block that stays, leave id off new ones. guide = the long help card of every type. `name` defaults to the design open on the board. An edit shows on the board at once and returns the lints: fix them or tell the user.',
-    "Block: { id, type, kind?, name, logic?, knobs?, children? }. Ids (n1, n2…) are assigned for you and never change. name is a short label; logic is free text saying what the block should do. Order is execution order. Only containers hold children. Blocks directly inside a branch are its arms (one runs, picked by its `condition`), and directly inside a parallel they run side by side: to run two blocks one after the other there, put both in a pipeline. Every design starts with its args block (the workflow's input): it is not added, moved or removed; update it by id to say what the input is, or leave it empty for none. A phase only frames its blocks: they run in order where it stands. The design's `description` is the goal of the whole workflow: set it when drafting, keep it true.",
+    'Actions: read = the design JSON, the block selected on the board ("this block") and the lints. Always read before you describe, review or edit a design: the user changes the board by hand between your turns, so what you read or wrote earlier may be gone (every answer names the revision it shows). apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures): keep the id of every block that stays, leave id off new ones. attach = a write, with `match`, of a design OF the workflow run tracked now: the run shows on it. guide = the long help card of every type. `name` defaults to the design open on the board. An edit shows on the board at once and returns the lints: fix them or tell the user.',
+    "Block: { id, type, kind?, name, logic?, knobs?, match?, children? }. Ids (n1, n2…) are assigned for you and never change. name is a short label; logic is free text saying what the block should do. match only ties a block to a script that exists (see the schema). Order is execution order. Only containers hold children. Blocks directly inside a branch are its arms (one runs, picked by its `condition`), and directly inside a parallel they run side by side: to run two blocks one after the other there, put both in a pipeline. Every design starts with its args block (the workflow's input): it is not added, moved or removed; update it by id to say what the input is, or leave it empty for none. A phase only frames its blocks: they run in order where it stands. The design's `description` is the goal of the whole workflow: set it when drafting, keep it true.",
     'Types:',
     ...typeLines(),
     `Kinds: \`kind\` names the pattern a block is used for (each explained on \`kind\` in the schema); leave it out for the plain block. ${kindNames()}. A new block of a kind gets the knobs its pattern needs where you set none. The board and the lints say a key in words: oncePer is "once per", stopCondition "stop condition".`,
@@ -72,6 +72,7 @@ const BLOCK_FIELDS = {
   name: { type: 'string' },
   logic: { type: 'string' },
   knobs: { type: 'object', description: `All optional: ${knobLine()}. In an update, "" clears a knob.` },
+  match: { type: 'array', items: { type: 'string' }, description: "Only on a design of a script that exists: the script's agent labels or phase titles this block stands for, each exact, or a prefix when it ends in *. In an update, [] clears it." },
   children: { type: 'array', items: { type: 'object' }, description: 'Blocks inside a container, same shape.' },
 }
 
@@ -80,7 +81,7 @@ export const TOOL_SCHEMA: Record<string, unknown> = {
   required: ['action'],
   properties: {
     action: { enum: [...ACTIONS] },
-    name: { type: 'string', description: 'Design name. Default: the one open on the board.' },
+    name: { type: 'string', description: 'Design name. Default: the one open on the board (attach: name it).' },
     description: { type: 'string', description: "apply/write: the design's one-line description: the goal of the workflow." },
     ops: {
       type: 'array',
@@ -94,14 +95,14 @@ export const TOOL_SCHEMA: Record<string, unknown> = {
     },
     nodes: {
       type: 'array',
-      description: 'write. The whole tree, top level first.',
+      description: 'write/attach. The whole tree, top level first.',
       // The knobs are explained once, on the ops.
-      items: { type: 'object', required: ['type', 'name'], properties: { id: { type: 'string', description: 'Only for a block that already exists.' }, ...BLOCK_FIELDS, kind: { type: 'string', description: 'The same kinds as in `ops`.' }, knobs: { type: 'object', description: 'The same knobs as in `ops`.' } } },
+      items: { type: 'object', required: ['type', 'name'], properties: { id: { type: 'string', description: 'Only for a block that already exists.' }, ...BLOCK_FIELDS, kind: { type: 'string', description: 'The same kinds as in `ops`.' }, knobs: { type: 'object', description: 'The same knobs as in `ops`.' }, match: { type: 'array', items: { type: 'string' }, description: 'As in `ops`.' } } },
     },
   },
 }
 
-/** Every type's long card: what `guide` answers, and what a draft is briefed with. */
+/** Every type's long card: what `guide` answers. */
 export function guideText(): string {
   const lines: string[] = [`Containers (the only blocks that hold children): ${CONTAINER_TYPES.join(', ')}.`, `Knobs: ${knobLine()}.`, `Effort values: ${EFFORTS.join(', ')}.`, '']
   for (const type of NODE_TYPES) {
@@ -119,20 +120,83 @@ export function guideText(): string {
   return lines.join('\n')
 }
 
-/** What Claude is told, unseen, when the person asks for a draft. */
+/** What a draft is, whichever way it was asked for: the two sentences every brief for one says. */
+const DRAFT_RULES = [
+  'The design is a spec the user reviews on the board. Do not write a workflow script and do not run anything.',
+  'Pick the structure the task needs and no more: a few blocks with clear logic beat many. Give a block its kind where one fits, and use knobs where they say something (oncePer, stopCondition, output).',
+]
+
+/** What Claude is told, unseen, when the person asks for a draft. It names the tool in full: the tool is deferred, and the name is what Claude loads it by. */
 export function draftBrief(name: string, description: string): string[] {
   return [
     [
       `Conductor draft: the user wants a workflow design named "${name}" for: ${description}`,
       '',
       `Make it with the ${TOOL_FULL_NAME} tool: one call with action "write", name "${name}", a one-line description and the nodes.`,
-      'The design is a spec the user reviews on the board. Do not write a workflow script and do not run anything.',
-      'Pick the structure the task needs and no more: a few blocks with clear logic beat many. Give a block its kind where one fits, and use knobs where they say something (oncePer, votes, stopCondition, output).',
+      ...DRAFT_RULES,
       `Afterwards say in two or three lines what the blocks do, name any lint you chose to leave, and say that /conductor run ${name} runs it.`,
-      '',
-      guideText(),
     ].join('\n'),
   ]
+}
+
+/**
+ * What the question before a workflow answers with when the person wants it in Conductor: the draft's brief, for a
+ * design Claude names itself, ending at the board. `asked` is false when an "Always Conductor" kept earlier answered.
+ */
+export function offerBrief(asked: boolean): string {
+  return [
+    `${asked ? 'The user chose Conductor' : 'The user chose Always Conductor earlier, so they were not asked'}: they want this workflow as a design on the Conductor board, to review and edit before anything is written or run.`,
+    '',
+    `Make it with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "write", a short kebab-case name of your choosing, the goal of the workflow as the one-line description, and the nodes.`,
+    ...DRAFT_RULES,
+    'Afterwards stop: the user takes it from there. Say in two or three lines what the blocks do, name any lint you chose to leave, and tell the user to review and edit the design on the board and to approve it there with r (or with /conductor run <name>).',
+  ].join('\n')
+}
+
+/**
+ * What a "Visualize" answer adds to the Workflow tool's result: Claude draws a design of the script that is running.
+ * `scriptPath` is the run's script file; `asked` is false when an "Always visualize" kept earlier answered.
+ */
+export function visualizeBrief(scriptPath: string | undefined, asked: boolean): string {
+  return [
+    `Conductor: ${asked ? 'the user chose to see' : 'the user chose Always visualize earlier, so they see'} this workflow run as a design on the Conductor board. The run goes on meanwhile: do not change, re-run or stop the script.`,
+    '',
+    `Draw the design OF the script that is running with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "attach", a short kebab-case name, the workflow's goal as the one-line description, and the nodes.`,
+    "- The nodes mirror the script's real structure: its phases, pipelines, parallels, loops, branches and agents, no more.",
+    '- `match` ties the run to the blocks. It goes on the INNERMOST block an agent belongs to, and a label on one block only (never also on the container around it): the exact `label` of each agent() the block stands for, or the fixed start of the label and a * ("review *") where the script builds it at runtime.',
+    "- Where the script groups its agents by `phase`, the top-level block of each phase gets that phase's exact title in `match`.",
+    ...(scriptPath === undefined ? [] : [`The script, if you do not hold its text: ${scriptPath}`]),
+    'The answer lists the agent labels no block took: fix `match` and call attach again under the same name. Afterwards tell the user in one or two lines what the board shows.',
+  ].join('\n')
+}
+
+/** A label two blocks both list in `match`: the first in design order takes its agents, and the other shows none. One line each. */
+function sharedMatch(design: Design): string[] {
+  const first = new Map<string, string>()
+  const notes: string[] = []
+  for (const { node } of flatten(design)) {
+    for (const one of node.match ?? []) {
+      const held = first.get(one)
+      if (held === undefined) first.set(one, node.id)
+      else if (held !== node.id) notes.push(`Note: ${JSON.stringify(one)} is in the \`match\` of ${held} and ${node.id}: ${held} comes first and takes those agents. Keep it on the innermost block only.`)
+    }
+  }
+  return notes
+}
+
+/** What an attach adds to its edit report: the agents of the run no block took, each label once. Later phases may still place some. */
+export function attachNote(design: Design, unplaced: readonly string[]): string {
+  const labels = [...new Set(unplaced)]
+  const placed =
+    labels.length === 0
+      ? 'The run is shown on it: every agent so far is on a block.'
+      : `The run is shown on it. Agent labels not placed yet (an agent whose phase has not been read yet may still land): ${labels.map(label => JSON.stringify(label)).join(', ')}. For any that no \`match\` covers, fix \`match\` and call attach again.`
+  return [placed, ...sharedMatch(design)].join('\n')
+}
+
+/** Added to an edit's answer when the board could not be put on screen (an open nobody typed waits under 144 columns: API-NOTES S12). */
+export function unplacedNote(name: string): string {
+  return `The board is not on screen (the terminal is too narrow for it to open by itself): tell the user that /conductor design ${name} opens it.`
 }
 
 // ---------------------------------------------------------------------------
@@ -169,8 +233,8 @@ function knobsError(raw: unknown, where: string): string | undefined {
 function signature(design: Design): Map<string, string> {
   const out = new Map<string, string>()
   for (const row of flatten(design)) {
-    const { id, type, kind, name, logic, knobs } = row.node
-    out.set(id, JSON.stringify([row.parentId ?? null, type, kind ?? '', name, logic ?? '', Object.entries(knobs ?? {}).sort(([a], [b]) => a.localeCompare(b))]))
+    const { id, type, kind, name, logic, knobs, match } = row.node
+    out.set(id, JSON.stringify([row.parentId ?? null, type, kind ?? '', name, logic ?? '', Object.entries(knobs ?? {}).sort(([a], [b]) => a.localeCompare(b)), match ?? []]))
   }
   return out
 }
@@ -252,12 +316,16 @@ export function replaceDesign(before: Design, rawNodes: unknown, description?: u
     problem ??= knobsError(raw.knobs, id)
     const node: Record<string, unknown> = { id, type: block?.type ?? raw.type, name: typeof raw.name === 'string' && raw.name.trim() !== '' ? raw.name : block ? defaultName(block) : '' }
     if (block?.kind !== undefined) node.kind = block.kind
+    // A new block of a kind gets what the kind fills in, under the logic and the knobs it came with; a block that stays is taken as written.
+    const filled = stays || !block ? undefined : logicOf(block)
     if (typeof raw.logic === 'string' && raw.logic.trim() !== '') node.logic = raw.logic
     else if (raw.logic !== undefined && raw.logic !== null && typeof raw.logic !== 'string') problem ??= `${id}: logic must be a string`
-    // A new block of a kind gets what the kind fills in, under the knobs it came with; a block that stays is taken as written.
+    else if (filled !== undefined) node.logic = filled
     const given = isRecord(raw.knobs) ? Object.fromEntries(Object.entries(raw.knobs).filter(([, value]) => value !== '' && value !== null)) : {}
     const knobs = stays || !block ? given : { ...fillOf(block), ...given }
     if (isRecord(raw.knobs) || Object.keys(knobs).length > 0) node.knobs = knobs
+    // Read back by parseDesign below, which refuses a list that is not one of strings.
+    if (raw.match !== undefined && raw.match !== null) node.match = raw.match
     const children = raw.children
     if (children !== undefined && children !== null && !Array.isArray(children)) problem ??= `${id}: children must be an array`
     const list = Array.isArray(children) ? children : []
@@ -301,6 +369,7 @@ function patchOf(raw: Record<string, unknown>): NodePatch {
   if (raw.name !== undefined && raw.name !== null) patch.name = raw.name
   if (raw.logic !== undefined && raw.logic !== null) patch.logic = raw.logic
   if (raw.knobs !== undefined && raw.knobs !== null) patch.knobs = raw.knobs
+  if (raw.match !== undefined && raw.match !== null) patch.match = raw.match
   return patch as NodePatch
 }
 
@@ -317,7 +386,7 @@ function grow(design: Design, raw: unknown, at: Place): Grown {
   const id = added.id
   const knobs = knobsError(raw.knobs, id)
   if (knobs) return { error: knobs }
-  const patched = updateNode(added.design, id, patchOf({ logic: raw.logic, knobs: raw.knobs }))
+  const patched = updateNode(added.design, id, patchOf({ logic: raw.logic, knobs: raw.knobs, match: raw.match }))
   if (patched.error) return { error: `${id}: ${patched.error}` }
   let current = patched.design
   const ids = [id]
@@ -460,9 +529,91 @@ export function changeWords(change: Change): string {
   return [change.added.length > 0 ? `added ${list(change.added)}` : '', change.changed.length > 0 ? `changed ${list(change.changed)}` : '', change.removed.length > 0 ? `removed ${list(change.removed)}` : ''].filter(Boolean).join('; ')
 }
 
-/** What the model is told, unseen, with a prompt sent after the board changed by hand since it last read the design. */
+/** What the model is told, unseen, with a prompt sent after the board changed by hand since it last read the design, when the change itself cannot be said (`changedNote`). */
 export function staleNote(name: string, revision: number): string {
   return `Conductor: the user changed the "${name}" workflow design on the board by hand since you last read or edited it (it is now revision ${revision}). What you know of it is out of date: call ${TOOL_FULL_NAME} with action "read" before you describe, review or edit it.`
+}
+
+// A block on one line, its fields in the file's order: its own, and with `deep` everything it holds.
+function blockOf(node: DesignNode, deep: boolean): Record<string, unknown> {
+  const { id, type, kind, name, logic, knobs, match, children } = node
+  const own = { id, type, kind, name, logic, knobs: knobs && Object.keys(knobs).length > 0 ? knobs : undefined, match }
+  return deep && children ? { ...own, children: children.map(child => blockOf(child, true)) } : own
+}
+
+const TOP = ''
+
+// The ids each container holds, in order; the top level's under TOP.
+function childIds(rows: readonly Row[]): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const row of rows) out.set(row.parentId ?? TOP, [...(out.get(row.parentId ?? TOP) ?? []), row.node.id])
+  return out
+}
+
+const whereWords = (parentId: string): string => (parentId === TOP ? 'at the top level' : `inside ${parentId}`)
+
+/**
+ * Everything that differs between the design as Claude last saw it and the board, a line each, so that the one
+ * and the lines give the other exactly: new blocks whole and where they stand, changed blocks as they are now,
+ * blocks that went to another container, the order of a container whose blocks changed places, the ids gone.
+ * None when nothing differs.
+ */
+export function boardChanges(seen: Design, now: Design): string[] {
+  const old = new Map(flatten(seen).map(row => [row.node.id, row]))
+  const rows = flatten(now)
+  const kids = childIds(rows)
+  // A block is placed by the one before it: with the blocks that stayed keeping their order, that says the whole order.
+  const place = (row: Row): string => `${whereWords(row.parentId ?? TOP)}, ${row.index === 0 ? 'first' : `after ${kids.get(row.parentId ?? TOP)?.[row.index - 1]}`}`
+  const added: string[] = []
+  const changed: string[] = []
+  const moved: string[] = []
+  // A new block is said whole, so nothing it holds is said again.
+  const within = new Set<string>()
+  for (const row of rows) {
+    const { id } = row.node
+    const was = old.get(id)
+    if (row.parentId !== undefined && within.has(row.parentId)) within.add(id)
+    else if (!was) {
+      within.add(id)
+      added.push(`- ${place(row)}: ${JSON.stringify(blockOf(row.node, true))}`)
+    } else {
+      if (JSON.stringify(blockOf(was.node, false)) !== JSON.stringify(blockOf(row.node, false))) changed.push(`- ${JSON.stringify(blockOf(row.node, false))}`)
+      if (was.parentId !== row.parentId) moved.push(`- ${id}: ${place(row)}`)
+    }
+  }
+  // Blocks that stayed in their container but not in their order: the container's whole order is said.
+  const before = childIds([...old.values()])
+  const order: string[] = []
+  for (const [parentId, ids] of kids) {
+    if (within.has(parentId)) continue
+    const stayed = ids.filter(id => (old.get(id)?.parentId ?? TOP) === parentId && old.has(id))
+    const asWas = (before.get(parentId) ?? []).filter(id => stayed.includes(id))
+    if (stayed.join() !== asWas.join()) order.push(`Order ${whereWords(parentId)} now: ${ids.join(', ')}.`)
+  }
+  const removed = [...old.keys()].filter(id => !findNode(now, id))
+  return [
+    ...(added.length > 0 ? ['Added, each whole (a block you knew that is written inside one now stands there):', ...added] : []),
+    ...(changed.length > 0 ? ['Changed, each as it is now (what it holds is as before, but for what these lines say):', ...changed] : []),
+    ...(moved.length > 0 ? ['Moved, each with everything it holds:', ...moved] : []),
+    ...order,
+    ...(removed.length > 0 ? [`Removed: ${removed.join(', ')}.`] : []),
+    ...(seen.description !== now.description ? [`Description now: ${JSON.stringify(now.description)}.`] : []),
+  ]
+}
+
+/**
+ * What the model is told, unseen, in place of `staleNote` when the design as it last saw it is at hand: the change
+ * itself, so no read is needed. Null when saying the change takes more than the design does: a read is cheaper.
+ */
+export function changedNote(name: string, revision: number, seen: Design, now: Design, selectedId: string | null): string | null {
+  const lines = boardChanges(seen, now)
+  if (lines.join('\n').length > serializeDesign(now).length) return null
+  const selected = selectedId === null ? undefined : findNode(now, selectedId)
+  return [
+    `Conductor: the user changed the "${name}" workflow design on the board by hand since you last read or edited it (it is now revision ${revision}). ${lines.length > 0 ? 'What follows is everything that changed' : 'Nothing in it differs from what you last saw'}: with it you know the board as it is, so do not call read. An edit with ${TOOL_FULL_NAME} from here is accepted.`,
+    ...lines,
+    `Selected block ("this block"): ${selected ? `${selected.id} (${typeName(selected)} "${selected.name}")` : 'none'}.`,
+  ].join('\n')
 }
 
 /** When the hooks module takes the mark's ids back: once the graph has shown it. */

@@ -53,12 +53,9 @@ export function replayDue(total: number, step: number, steps: number): number {
 /** Labels of the agents a design replay adds that no node of the design claims. */
 export const REPLAY_STRAYS = ['fix lint', 'stray check'] as const
 
-/** How many agents a design replay gives a leaf: `×N` of its fan-out or votes when stated, else 2 to 4. */
-function replayAgents(knobs: { fanout?: string; votes?: number } | undefined, id: string): number {
-  const stated = /^[×x]\s*(\d+)/.exec(knobs?.fanout ?? '')?.[1]
-  const count = stated !== undefined ? Number(stated) : (knobs?.votes ?? 2 + (idNumber(id) % 3))
-
-  return Math.max(2, Math.min(6, count))
+/** How many agents a design replay gives a leaf: 2 to 4, by its id. */
+function replayAgents(id: string): number {
+  return 2 + (idNumber(id) % 3)
 }
 
 /**
@@ -94,7 +91,7 @@ export function replayDesignEvents(design: Design, name: string = design.name): 
   }
 
   for (const [at, { node }] of leaves.entries()) {
-    const count = replayAgents(node.knobs, node.id)
+    const count = replayAgents(node.id)
     const agents = Array.from({ length: count }, (_, k) => run(`replay-${node.id}-${k + 1}`, `${node.id}: ${node.name} ${k + 1}`, phaseOf.get(node.id), !(node.id === failing && k === 1)))
     // One stray beside the first leaf, one beside the last.
     const stray = at === 0 ? strays[0] : at === leaves.length - 1 ? strays[1] : undefined

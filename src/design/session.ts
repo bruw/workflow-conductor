@@ -121,10 +121,18 @@ export function freeName(taken: readonly string[]): string {
   for (let n = 2; ; n++) if (!taken.includes(`${DEFAULT_DESIGN_NAME}-${n}`)) return `${DEFAULT_DESIGN_NAME}-${n}`
 }
 
-/** What the tracker is told of a design handed off: its name, its block ids in design order, and their titles (the status line names the running one). */
-export function handoffOf(name: string, design: Design): { name: string; nodeIds: string[]; titles: Record<string, string> } {
+/**
+ * What the tracker is told of a design handed off: its name, its block ids in design order, their titles (the status
+ * line names the running one), and the `match` of every block that has one (a run of a script that is not labelled by id is put on the blocks by them).
+ */
+export function handoffOf(name: string, design: Design): { name: string; nodeIds: string[]; titles: Record<string, string>; match: Record<string, string[]> } {
   const rows = flatten(design)
-  return { name, nodeIds: rows.map(row => row.node.id), titles: Object.fromEntries(rows.map(row => [row.node.id, row.node.name])) }
+  return {
+    name,
+    nodeIds: rows.map(row => row.node.id),
+    titles: Object.fromEntries(rows.map(row => [row.node.id, row.node.name])),
+    match: Object.fromEntries(rows.flatMap(row => (row.node.match ? [[row.node.id, row.node.match]] : []))),
+  }
 }
 
 /** The room the graph is drawn in: its region's columns and rows. The keys walk the layout made for it. */
@@ -261,6 +269,11 @@ export function designName(args: string): string {
 /** The design's file under the project root. */
 export function designFile(root: string, name: string): string {
   return `${root.replace(/\/+$/, '')}/${DESIGN_DIR}/${name}.json`
+}
+
+/** The script a design was drawn of, or was last run as: beside its file. The design does not name it: that the file is there is the link. */
+export function scriptFile(root: string, name: string): string {
+  return `${root.replace(/\/+$/, '')}/${DESIGN_DIR}/${name}.workflow.js`
 }
 
 /**
@@ -608,12 +621,12 @@ export function cyclePlace(design: Design, ui: DesignUi): DesignUi {
   return { ...ui, picker: { ...picker, where, at: placeBy(design, node.id, where) } }
 }
 
-/** The add list's heading: `New block after n4 Deep read` (the legend says the key that changes the place), `Type of n4 Deep read (now agent verify)`; `· which loop?` while it lists a block's kinds. */
+/** The add list's heading: `New block after n4 Deep read` (the legend says the key that changes the place), `Block n4 Deep read (now agent verify)`; `· which loop?` while it lists a block's kinds. */
 export function addHeading(design: Design, picker: NonNullable<DesignUi['picker']>): string {
   const retyped = picker.retypeId === undefined ? undefined : findNode(design, picker.retypeId)
   // A block was opened: the list is of its kinds.
   const kinds = picker.block !== undefined && picker.query === '' ? ` · which ${picker.block}?` : ''
-  if (retyped) return `Type of ${blockName(retyped)} (now ${typeName(retyped)})${kinds}`
+  if (retyped) return `Block ${blockName(retyped)} (now ${typeName(retyped)})${kinds}`
   const node = picker.anchorId === undefined ? undefined : findNode(design, picker.anchorId)
   if (node) return `New block ${picker.where ?? 'after'} ${blockName(node)}${kinds}`
   const place = placeLabel(design, picker.at)
@@ -636,7 +649,7 @@ function afterRemoval(design: Design, id: string): string | null {
 }
 
 /** What each digit steps, as a refusal names it. */
-const QUICK_NAMES = ['model', 'effort', 'votes'] as const
+const QUICK_NAMES = ['model', 'effort'] as const
 
 /** The way each key that walks or moves goes. */
 const WAYS: Partial<Record<KeyOp, Direction>> = { left: 'left', right: 'right', up: 'up', down: 'down', moveLeft: 'left', moveRight: 'right', moveUp: 'up', moveDown: 'down' }
@@ -685,9 +698,8 @@ export function applyOp(design: Design | null, ui: DesignUi, op: KeyOp, context:
       return settle(design, calm, removeNode(design, node.id), afterRemoval(design, node.id), `deleted ${node.id} "${clip(node.name, 24)}"${held > 0 ? ` and what it held` : ''}`, context)
     }
     case 'knob1':
-    case 'knob2':
-    case 'knob3': {
-      const slot = op === 'knob1' ? 1 : op === 'knob2' ? 2 : 3
+    case 'knob2': {
+      const slot = op === 'knob1' ? 1 : 2
       if (!node) return { design, ui: { ...calm, notice: `${QUICK_NAMES[slot - 1]}: select a block first` }, changed: false }
       const stepped = stepKnob(design, node.id, slot)
       return settle(design, calm, stepped, node.id, `${node.id} ${stepped.knob ?? ''}: ${stepped.value ?? ''}`, context)
@@ -853,8 +865,8 @@ export function pickBlock(design: Design | null, ui: DesignUi, choice: Partial<P
   return step.changed ? { ...step, ui: { ...step.ui, picker: null, editing: true, freshId: result.id ?? null, drafting: false } } : step
 }
 
-/** The knobs typed as text, each in a field of its own in the detail pane; model, effort and votes are stepped on the card. */
-export const TEXT_KNOBS = ['prompt', 'condition', 'oncePer', 'stopCondition', 'output', 'agentType'] as const
+/** The knobs typed as text, each in a field of its own in the detail pane; model and effort are stepped on the card. */
+export const TEXT_KNOBS = ['prompt', 'condition', 'oncePer', 'stopCondition', 'output'] as const
 export type TextKnob = (typeof TEXT_KNOBS)[number]
 
 /** What an empty graph says while Claude drafts the design. */
@@ -896,7 +908,7 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['Tab', 'the same field, by the ring\'s own step'],
   ['n  +', 'a new block after this one: pick a block, then its kind, or type either name; n again in the list: inside, before'],
   ['x', 'delete (a container that holds blocks asks: x again); closes the add list and these pages'],
-  ['1 2 3', 'step the model, the effort, the votes (the chips on the selected card)'],
+  ['1 2', 'step the model, the effort (the chips on the selected card)'],
   ['o  b', 'open the selected container as the view / back up one level'],
   ['i', 'hide or show this pane'],
   ['u  y', 'undo / redo'],

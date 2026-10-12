@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderChildren } from 'claude-code'
 
-import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, changeWords, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, guideText, readReport, replaceDesign, showEdit, staleNote, toolDescription } from '../src/design/chat'
+import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, attachNote, changeWords, changedNote, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, guideText, readReport, replaceDesign, showEdit, staleNote, toolDescription, unplacedNote } from '../src/design/chat'
 import { UNDO_HINT, remember, travel } from '../src/design/history'
 import type { History } from '../src/design/history'
 import { lint, preflightLine, problemFields, problemParts } from '../src/design/lints'
@@ -58,6 +58,7 @@ import {
   pickBlock,
   pickerMatches,
   previewProps,
+  scriptFile,
   restoreDesign,
   runOverlay,
   runSummary,
@@ -86,6 +87,8 @@ import { GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_W, SOLO_ROWS, SPLASH_MS, g
 import type { PersonaSpan, Pose } from '../src/ui/persona'
 import { clip, firstLines, wrapText } from '../src/ui/text'
 import { ACCENT, FADED, GLYPH, PANE_TITLE, RULE } from '../src/ui/theme'
+
+import { takeOffered } from './offer'
 
 // The designer: the hooks module owns the Design and everything chosen on it
 // (selection, view, add list), applies ops, saves the file and draws the screen:
@@ -172,13 +175,13 @@ let pickGen = 0
 const pickerKey = (): string => `${PICKER_KEY}:${LOAD}.${pickGen}`
 const isPickerField = (element: string | undefined): boolean => (element ?? '').startsWith(`${PICKER_KEY}:`)
 /**
- * The type picker's label: `design-label:design-type`. A Button, so that a click on the word opens the list of types
- * as a click on its value does; it is drawn after the picker, so Tab from the picker comes to it and is passed on (`offLabel`).
+ * The block picker's label: `design-label:design-type`. A Button, so that a click on the word opens the list of blocks
+ * as a click on its value does; it is the stop before the picker, so Shift+Tab from the picker comes to it and is passed on (`offLabel`).
  */
 const LABEL_KEY = 'design-label:'
 /**
  * Where a move of the person's that lands on the picker's label goes instead: to the picker; or, coming from the
- * picker (Tab stepping on, and it is the last stop), to the catcher. Any other element stays.
+ * picker (Shift+Tab stepping back, and it is the first stop), to the catcher. Any other element stays.
  */
 const offLabel = (element: string | undefined): string | undefined => {
   if (element === undefined || !element.startsWith(LABEL_KEY)) return element
@@ -243,7 +246,7 @@ const SPLASH_REST_MS = 150
  * edit from chat opens the pane and the person goes on typing in the prompt).
  * The dock is asked for all of the terminal but a sliver for the transcript.
  */
-const paneArgs = (focus: boolean): { id: string; title: string; rows: number; columns?: number; focus?: true } => {
+export const paneArgs = (focus: boolean): { id: string; title: string; rows: number; columns?: number; focus?: true } => {
   const columns = dockColumns(terminalColumns)
 
   return { id: DESIGN_PANE_ID, title: DESIGN_PANE_TITLE, rows: PANE_ROWS, ...(columns === undefined ? {} : { columns }), ...(focus ? { focus: true as const } : {}) }
@@ -264,6 +267,20 @@ const histories: Record<string, History> = {}
  */
 const revisions: Record<string, number> = {}
 const seenByClaude: Record<string, number> = {}
+/**
+ * The design as Claude last saw it, kept in step with `seenByClaude`: what a prompt sent after a change by hand is
+ * compared with, to say the change. None where Claude does not hold the whole design (it never read it, or the
+ * conversation that held it was compacted or cleared): the prompt then says to read again.
+ */
+const seenDesigns: Record<string, Design> = {}
+/** Claude has the design as it stands, whole: the revision it is compared against later, and the design a later change is said from. */
+const sawDesign = (name: string, design: Design): void => {
+  seenByClaude[name] = revisions[name] ?? 0
+  seenDesigns[name] = design
+}
+const forgetSeenDesigns = (): void => {
+  for (const name of Object.keys(seenDesigns)) delete seenDesigns[name]
+}
 /** The revision the model was last told is stale, so it is told once per change and not with every prompt. */
 const warnedAt: Record<string, number> = {}
 /** A change was made: it counts as a revision, and the design before it is what `u` returns to. */
@@ -402,8 +419,41 @@ const splashedAtom = atom({ plugin: 'conductor', key: 'splashed' } as const, fal
 /** The gesture the header's persona holds; at rest it is `idle`. */
 const personaAtom = atom({ plugin: 'conductor', key: 'persona' } as const, 'idle')
 const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initialTimes())
+/** The tracked run's script file (run.tsx writes it), and the design an `attach` drew of that run. */
+const runScriptAtom = atom({ plugin: 'conductor', key: 'runScript' } as const, null)
 
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 160)
+
+/** A design's script, when it has one: the file beside it (`scriptFile`). */
+const scriptOf = async ($: EngineInterface, root: string, name: string): Promise<string | null> => {
+  const path = scriptFile(root, name)
+
+  return (await $.fs.exists(path).catch(() => false)) ? path : null
+}
+
+/** Copies a run's script beside its design; a run of that very file copies nothing. False when it could not be done, never a throw. (run.tsx has its own: `$` does not cross files.) */
+const keepScript = async ($: EngineInterface, from: string, to: string): Promise<boolean> => {
+  if (from === to) return true
+  try {
+    await $.fs.write(to, await $.fs.read(from))
+
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The run tracked now becomes `design`'s, which the board already shows: the tracker places its agents again, and
+ * the write that follows reads the run's design and the board (run.tsx `write`), so both are set before it.
+ * The labels no block took; null with no run.
+ */
+const showRunOn = async ($: EngineInterface, tracker: Tracker, name: string, design: Design): Promise<string[] | null> => {
+  await update($, uiAtom, held => ({ ...held, follow: true, runCleared: false }))
+  await update($, runDesignAtom, () => name)
+
+  return tracker.adopt(handoffOf(name, design))
+}
 
 /** Whether a run of the design shown locks it now. */
 const lockedNow = async ($: EngineInterface): Promise<boolean> => {
@@ -708,6 +758,8 @@ const startSplash = ($: EngineInterface): void => {
   if (splashing) return
   splashing = true
   $.clock.after(SPLASH_MS + SPLASH_REST_MS, () => {
+    // Given back: a /clear starts the session's state over (the splash is unseen again) while this module lives on.
+    splashing = false
     void update($, splashedAtom, () => true).then(() => settleRing($))
   })
 }
@@ -1082,21 +1134,27 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       if (!isSaved(name) || !(await $.fs.exists(path))) return { text: `No saved design named ${name} (${DESIGN_DIR}/${name}.json): nothing to delete.` }
       const entry = savedDesign(name, await $.fs.read(path).catch(() => ''))
       if (word !== 'confirm' && word !== name) {
-        return { text: `Delete ${savedLine(entry)}? This removes ${DESIGN_DIR}/${name}.json and cannot be undone here. To go ahead: /${COMMAND} delete ${name} confirm` }
+        return { text: `Delete ${savedLine(entry)}? This removes ${DESIGN_DIR}/${name}.json${(await scriptOf($, root, name)) === null ? '' : ' and its script'} and cannot be undone here. To go ahead: /${COMMAND} delete ${name} confirm` }
       }
       if ((await read($, runDesignAtom)) === name && (await read($, runAtom)).status === 'running') return { text: `Design ${name} is being run: it can be deleted once the run ends.` }
       const removed = await $.process.run(['rm', '--', path]).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: reason(error) }))
       if (removed.exitCode !== 0) return { text: `Design ${name} could not be deleted: ${removed.stderr.trim().slice(0, 160) || 'rm failed'}` }
+      // Its script goes with it. One that stays behind is said: the design is gone all the same.
+      const script = await scriptOf($, root, name)
+      const scriptGone = script === null || (await $.process.run(['rm', '--', script]).catch(() => ({ exitCode: 1 }))).exitCode === 0
       delete histories[name]
       delete revisions[name]
       delete seenByClaude[name]
+      delete seenDesigns[name]
       // The pane was showing it: nothing is shown in its place but the way to open another.
       if ((await read($, uiAtom)).name === name) {
         await update($, designAtom, () => null)
         await update($, uiAtom, held => ({ ...carryUi(held, initialUi()), picks: Object.fromEntries(Object.entries(held.picks ?? {}).filter(([key]) => key !== name)) }))
       }
 
-      return { text: `Design ${name} deleted (${DESIGN_DIR}/${name}.json).` }
+      if (!scriptGone) return { text: `Design ${name} deleted (${DESIGN_DIR}/${name}.json), but its script ${DESIGN_DIR}/${name}.workflow.js could not be removed.` }
+
+      return { text: `Design ${name} deleted (${DESIGN_DIR}/${name}.json${script === null ? '' : ' and its script'}).` }
     }
 
     if (verb === 'rename') {
@@ -1132,8 +1190,11 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         const removed = await $.process.run(['rm', '--', oldPath]).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: reason(error) }))
         if (removed.exitCode !== 0) return { text: `Design ${newName} was written, but ${DESIGN_DIR}/${oldName}.json could not be removed: ${removed.stderr.trim().slice(0, 160) || 'rm failed'}` }
       }
+      // Its script moves with it. One that stays behind is said: the design is renamed all the same.
+      const script = await scriptOf($, root, oldName)
+      const scriptMoved = script === null || (await $.process.run(['mv', '--', script, scriptFile(root, newName)]).catch(() => ({ exitCode: 1 }))).exitCode === 0
       // What this session knows of the design goes with it: its undo history, its revisions, the block it was left on.
-      for (const book of [histories, revisions, seenByClaude, warnedAt] as Record<string, unknown>[]) {
+      for (const book of [histories, revisions, seenByClaude, seenDesigns, warnedAt] as Record<string, unknown>[]) {
         if (oldName in book) book[newName] = book[oldName]
         delete book[oldName]
       }
@@ -1149,7 +1210,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         return { ...ui, picks: left === undefined ? picks : { ...picks, [newName]: left } }
       })
 
-      return { text: `Design ${oldName} renamed to ${newName} (${DESIGN_DIR}/${newName}.json).` }
+      if (!scriptMoved) return { text: `Design ${oldName} renamed to ${newName} (${DESIGN_DIR}/${newName}.json), but its script ${DESIGN_DIR}/${oldName}.workflow.js could not be moved with it.` }
+
+      return { text: `Design ${oldName} renamed to ${newName} (${DESIGN_DIR}/${newName}.json${script === null ? '' : ', its script with it'}).` }
     }
 
     if (verb === 'replay') {
@@ -1264,7 +1327,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       if (!parsed.ok) return { text: `Design ${name} is not valid, nothing was handed off: ${parsed.error}` }
       if (isBlank(parsed.design)) return { text: `Design ${name} is empty: add a block before running it.` }
 
-      const handoff = buildHandoff(parsed.design, path)
+      const handoff = buildHandoff(parsed.design, path, await scriptOf($, root, name))
       // The next run to start is this design's: its agents count against these ids.
       tracker.handoff(handoffOf(name, parsed.design))
       // The pane shows the design being run, whatever it showed before; the keyboard stays in the prompt.
@@ -1358,9 +1421,10 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     return { text: step.ui.status === 'pick' ? `No design named ${name} yet: start it from a template in the pane.` : `Design ${name} opened.` }
   })
 
-  // The tool Claude edits a design with. The matcher is always true: run.tsx holds the unmatched session.start.
+  // The tool Claude edits a design with, deferred: its schema is loaded when Claude asks for it, not sent with every turn.
+  // The matcher is always true: run.tsx holds the unmatched session.start.
   on('session.start', { cwd: /^/ }, async ($, e, next) => {
-    await $.tool.register({ name: TOOL_NAME, description: toolDescription(), inputSchema: TOOL_SCHEMA, isDeferred: false })
+    await $.tool.register({ name: TOOL_NAME, description: toolDescription(), inputSchema: TOOL_SCHEMA, isDeferred: true })
     // A load (the first, or a reload): the state outlives it, what it said of the moment does not. No field is open,
     // nothing waits in the prompt box under a `run: …` line, and the ring starts on the catcher.
     await update($, uiAtom, held =>
@@ -1375,27 +1439,43 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   // The hand-off as a prompt: `r` fills the box with the request, the person says what to run it on
   // and sends it. The conventions go with the prompt as hidden context (the same text
   // `/conductor run` answers with), and the run that starts is counted against the design.
-  on('prompt.submit', { text: /^/ }, async ($, e, next) => {
+  on('prompt.submit', { text: /^/ }, async ($, e, enter) => {
     // What was typed into a field and not sent goes with the design: Claude reads the file.
     await flushDrafts($)
     const shown = await read($, uiAtom)
+    // A "Conductor" answer whose draft never came is over with its turn: a later edit from chat leaves the keyboard alone.
+    takeOffered()
     // A prompt was sent: whatever waited in the box for the keys is on its way, and the line that said so is spent.
     if (shown.handed || (shown.notice !== null && /^(run|ask): /.test(shown.notice))) {
       await update($, uiAtom, held => ({ ...held, handed: false, notice: held.notice === HANDED_NOTICE || (held.notice !== null && /^(run|ask): /.test(held.notice)) ? null : held.notice }))
     }
     // The board changed by hand since Claude last read the design: it is told so with this prompt, once per change,
-    // or it would answer from what it remembers (a review of a block deleted a minute ago).
+    // or it would answer from what it remembers (a review of a block deleted a minute ago). The note says the change
+    // itself where the design Claude saw is at hand, so no read is spent on it; without one it says to read again.
     let context = e.context ?? []
     const revision = revisions[shown.name] ?? 0
     const seen = seenByClaude[shown.name]
+    let told: Design | null = null
     if (shown.status === 'ready' && !e.text.trimStart().startsWith('/') && seen !== undefined && seen !== revision && warnedAt[shown.name] !== revision) {
       warnedAt[shown.name] = revision
-      context = [...context, staleNote(shown.name, revision)]
+      const board = await read($, designAtom)
+      const before = seenDesigns[shown.name]
+      const change = board !== null && before !== undefined ? changedNote(shown.name, revision, before, board, shown.selectedId) : null
+      if (change !== null) told = board
+      context = [...context, change ?? staleNote(shown.name, revision)]
     }
     const pass = context === (e.context ?? []) ? e : { ...e, context }
+    // A change said in full counts as read once the prompt has entered with it: an edit made from it is not refused as stale.
+    const next = async (input: typeof e): Promise<Awaited<ReturnType<typeof enter>>> => {
+      const answer = await enter(input)
+      if (told !== null && answer.drop === undefined && (revisions[shown.name] ?? 0) === revision) sawDesign(shown.name, told)
+
+      return answer
+    }
     const name = handoffTarget(e.text)
     if (name === null || !isSaved(name)) return next(pass)
-    const path = designFile(await $.session.root(), name)
+    const root = await $.session.root()
+    const path = designFile(root, name)
     // A template nobody edited yet is on the board only: handing it off is what saves it.
     const onBoard = shown.name === name && shown.status === 'ready' ? await read($, designAtom) : null
     if (onBoard !== null && !(await $.fs.exists(path))) await $.fs.write(path, serializeDesign(onBoard)).catch(() => undefined)
@@ -1412,7 +1492,21 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       return next(pass)
     }
 
-    return next({ ...pass, context: [...context, ...buildHandoff(parsed.design, path).context] })
+    return next({ ...pass, context: [...context, ...buildHandoff(parsed.design, path, await scriptOf($, root, name)).context] })
+  })
+
+  // The summary that takes the conversation's place does not hold the design as Claude read it, and a cleared
+  // conversation holds nothing: a change made by hand after either is not said against it, Claude reads again.
+  on('session.compact', async ($, e, next) => {
+    const answer = await next(e)
+    if (e.agentId === undefined && answer.skip === undefined) forgetSeenDesigns()
+
+    return answer
+  })
+  on('session.end', { reason: 'clear' }, async ($, e, next) => {
+    forgetSeenDesigns()
+
+    return next(e)
   })
 
   // The design tool. Every edit is made by src/design/chat.ts on the mod's own
@@ -1421,17 +1515,29 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const input = e as unknown as Record<string, unknown>
     const action = input.action
     if (action === 'guide') return { result: guideText() }
-    if (action !== 'read' && action !== 'apply' && action !== 'write') return { deny: 'action must be one of read, apply, write, guide' }
+    if (action !== 'read' && action !== 'apply' && action !== 'write' && action !== 'attach') return { deny: 'action must be one of read, apply, write, attach, guide' }
 
     // Text typed into a field and not sent is the person's edit: saved first, so Claude reads it, and an edit made
     // without having read it is refused as stale (below) instead of writing over it.
     await flushDrafts($)
     const ui = await read($, uiAtom)
     const asked = typeof input.name === 'string' && input.name.trim() !== '' ? designName(input.name) : null
-    const name = asked ?? (ui.status === 'ready' ? ui.name : null)
-    if (name === null) return { deny: `No design is open on the board and no name was given. Pass name, or ask the user to open one with /${COMMAND} design <name>.` }
-    const path = designFile(await $.session.root(), name)
+    // An attach is for the run tracked now, whose script run.tsx noted; with no name it is the design drawn of that run before.
+    const ran = action === 'attach' ? await read($, runScriptAtom) : null
+    const tracked = tracker.state()
+    if (action === 'attach' && (ran === null || tracked.status === 'idle' || tracked.runId !== ran.runId)) return { deny: 'No workflow run is tracked now, so there is no run to attach a design to. Nothing was changed.' }
+    const name = asked ?? (action === 'attach' ? (ran?.drawn ?? null) : ui.status === 'ready' ? ui.name : null)
+    if (name === null) return { deny: action === 'attach' ? 'attach needs `name`: a short kebab-case name for the design. Nothing was changed.' : `No design is open on the board and no name was given. Pass name, or ask the user to open one with /${COMMAND} design <name>.` }
+    const root = await $.session.root()
+    const path = designFile(root, name)
     const isOpen = ui.status === 'ready' && ui.name === name
+    if (action === 'attach' && ran?.drawn !== name) {
+      // The first attach of this run under this name: the run must be nobody's yet, and the name free.
+      const owner = tracker.design()
+      if (owner !== undefined && owner !== name) return { deny: `This run already belongs to design ${owner}. Nothing was changed.` }
+      if (!isSaved(name)) return { deny: `Names starting with ${SCRATCH_PREFIX} are kept for replays. Nothing was changed: pick another name and call attach again.` }
+      if (owner === name || isOpen || (await $.fs.exists(path))) return { deny: `A design named ${name} exists that this run did not create. Nothing was changed: pick another name and call attach again.` }
+    }
     let design: Design | null = isOpen ? await read($, designAtom) : null
     if (design === null) {
       if (isSaved(name) && (await $.fs.exists(path))) {
@@ -1445,12 +1551,12 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const locked = (await read($, runDesignAtom)) === name && (await read($, runAtom)).status === 'running'
     if (action === 'read') {
       // What Claude has now is the board as it stands: the revision it names is the one to compare against later.
-      seenByClaude[name] = revisions[name] ?? 0
+      sawDesign(name, design)
 
       return { result: readReport(design, { open: isOpen, selectedId: isOpen ? ui.selectedId : null, locked, revision: revisions[name] ?? 0 }) }
     }
-    // The lock the board applies to the person's own edits.
-    if (locked) return { deny: `Design ${name} is being run: editing is locked until the run ends, for the board and for you alike. Tell the user; do not retry.` }
+    // The lock the board applies to the person's own edits. An attach is past it: the design is this run's own drawing.
+    if (locked && action !== 'attach') return { deny: `Design ${name} is being run: editing is locked until the run ends, for the board and for you alike. Tell the user; do not retry.` }
 
     // An edit made from memory of a board that has since changed by hand would undo the person's work.
     const known = seenByClaude[name]
@@ -1464,20 +1570,40 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     } catch (error) {
       return { deny: `Design ${name} could not be saved, nothing was changed: ${reason(error)}` }
     }
+    // The script the run is of goes beside the design: the next handoff updates that file.
+    const scriptKept = ran === null || (await keepScript($, ran.path, scriptFile(root, name)))
     // Undone like any edit made by hand; and Claude has seen what it just wrote.
     const said = changeWords(edit)
     if (said !== '' || edit.design.description !== design.description) record(name, design, `Claude ${said === '' ? 'changed the goal' : said}`)
-    seenByClaude[name] = revisions[name] ?? 0
+    // An apply on a design Claude does not hold whole (no read since the load, a compaction or a clear) leaves it with its own blocks only.
+    if (action !== 'apply' || seenDesigns[name] !== undefined) sawDesign(name, edit.design)
+    else seenByClaude[name] = revisions[name] ?? 0
     await update($, designAtom, () => edit.design)
     await update($, uiAtom, held => showEdit(held, name, edit.design, edit))
     const seq = (await read($, uiAtom)).flash?.seq ?? 0
-    // Shown, but the keyboard stays where the person is typing.
-    await $.ui.open(paneArgs(false)).catch(() => undefined)
+    let unplaced: string[] | null = null
+    if (ran !== null) {
+      await update($, runScriptAtom, held => (held !== null && held.runId === ran.runId ? { ...held, drawn: name } : held))
+      unplaced = await showRunOn($, tracker, name, edit.design)
+    }
+    // Shown, but the keyboard stays where the person is typing. The draft the person asked for in the question before a
+    // workflow is theirs to review next: its board takes the keyboard, as `/conductor design` gives it.
+    const offered = action === 'write' && takeOffered()
+    const opened = await $.ui.open(paneArgs(offered)).catch(() => undefined)
+    if (offered) settleRing($)
     $.clock.after(FLASH_CLEAR_MS, () => {
       void update($, uiAtom, held => clearFlash(held, seq))
     })
+    // A design that was not on the board, in a terminal too narrow for the pane to open unasked: nothing shows, so Claude says the way in.
+    const report = editReport(edit.design, edit, revisions[name] ?? 0)
 
-    return { result: editReport(edit.design, edit, revisions[name] ?? 0) }
+    const notes = [
+      ...(ran === null ? [] : [attachNote(edit.design, unplaced ?? [])]),
+      ...(scriptKept ? [] : [`Note: the run's script could not be copied to ${DESIGN_DIR}/${name}.workflow.js.`]),
+      ...((!isOpen || ran !== null) && opened?.isPlaced === false ? [unplacedNote(name)] : []),
+    ]
+
+    return { result: [report, ...notes].join('\n') }
   })
 
   // The design file written with the built-in tools: the open board follows it,
@@ -1503,7 +1629,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const before = ui.status === 'ready' ? await read($, designAtom) : null
     const change = diffDesigns(before, parsed.design)
     if (before !== null && JSON.stringify(before) !== JSON.stringify(parsed.design)) record(name, before, `the file ${changeWords(change) || 'changed'}`)
-    seenByClaude[name] = revisions[name] ?? 0
+    sawDesign(name, parsed.design)
     await update($, designAtom, () => parsed.design)
     await update($, uiAtom, held => showEdit(held, name, parsed.design, change))
     const seq = (await read($, uiAtom)).flash?.seq ?? 0
@@ -2098,7 +2224,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       undo: (history?.undo.length ?? 0) > 0,
       redo: (history?.redo.length ?? 0) > 0,
       // As the chips on the card name them.
-      knobs: [1, 2, 3].map(slot => (node ? (quickKnob(node, slot) ?? null) : null)).map(name => (name === null ? null : cap(name))),
+      knobs: [1, 2].map(slot => (node ? (quickKnob(node, slot) ?? null) : null)).map(name => (name === null ? null : cap(name))),
       hidden,
     })
     const legend = legendOf(keys.footer)
@@ -2344,20 +2470,28 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const typeLine = (target: DesignNode): Item => ({
       rows: 1,
       el: (
-        // The label is drawn first and comes second among the stops (the row runs backward): Tab reaches the picker before its label.
-        <Box flexDirection="row-reverse" justifyContent="flex-end" flexShrink={0}>
-          {/* The type is picked from the same list a block is added from: every type on a row with what it does, none scrolled away. */}
-          <Button key={TYPE_KEY} plain label={`${typeName(target)} ▾`} onPress={() => retype(target)} />
+        // The row is the first of the block's own: its label is the stop before the picker, and the picker the one before
+        // the name. Shift+Tab from the name comes to the picker; from the picker to the label, which passes it on to the graph (`offLabel`).
+        <Box flexDirection="row" flexShrink={0}>
           <Box width={PICKER_LABEL_W} flexShrink={0}>
             <Button key={`${LABEL_KEY}${TYPE_KEY}`} plain onPress={() => retype(target)}>
-              <Text color="suggestion">{'Type'.padEnd(PICKER_LABEL_W)}</Text>
+              <Text color="suggestion">{'Block'.padEnd(PICKER_LABEL_W)}</Text>
             </Button>
           </Box>
+          {/* The block is picked from the same list one is added from: every block and kind on a row with what it does. */}
+          <Button key={TYPE_KEY} plain label={`${typeName(target)} ▾`} onPress={() => retype(target)} />
         </Box>
       ),
     })
     // The args block has no type to pick: it becomes no other block.
-    const pickerItems: Item[] = node ? [...(editable && node.type !== 'args' ? [typeLine(node)] : []), ...(node.knobs?.isolation === 'worktree' ? [line(`${'Isolation'.padEnd(PICKER_LABEL_W)}worktree`, FADED)] : [])] : []
+    const blockItems: Item[] = node && editable && node.type !== 'args' ? [typeLine(node)] : []
+    // What Claude set and the pane has no control for, read only: the worktree, the subagent it runs as.
+    const setItems: Item[] = node
+      ? [
+          ...(node.knobs?.isolation === 'worktree' ? [line(`${'Isolation'.padEnd(PICKER_LABEL_W)}worktree`, FADED)] : []),
+          ...((node.knobs?.agentType ?? '') !== '' ? [line(clip(`${'Agent type'.padEnd(PICKER_LABEL_W)}${node.knobs?.agentType ?? ''}`, detailW), FADED)] : []),
+        ]
+      : []
     // The selected block's agents, while a run is laid over the design.
     const agentItems = (most: number): Item[] => {
       if (!agents || agents.shown.length === 0) return []
@@ -2384,7 +2518,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const inspector = (level: number): Item[] => {
       if (!node || !heading) return []
       const most = level < 4 ? Infinity : (CUTS[level - 4] ?? 1)
-      const sections: Item[][] = []
+      // The block and its kind come first, always: what the rest of the pane is about.
+      const sections: Item[][] = blockItems.length > 0 ? [blockItems] : []
       if (level < 3) {
         sections.push([label('Meaning'), ...lines(capped(wrapText(`${cap(teachOf(node).hint)}.`, detailW), most)), ...lines(capped(wrapText(`${cap(useWhen(node))}.`, detailW), most), FADED)])
       }
@@ -2393,7 +2528,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         sections.push([label('Error', 'error'), ...lines(capped(wrapText(parts.error, detailW), most)), ...(parts.fix === '' ? [] : [label('Fix'), ...lines(capped(wrapText(parts.fix, detailW), most))])])
       }
       if (editable) for (const one of texts) sections.push([fielding ? openField(one, most, level < 1) : restField(one, most)])
-      if (pickerItems.length > 0) sections.push(pickerItems)
+      if (setItems.length > 0) sections.push(setItems)
       const ran = agentItems(Number.isFinite(most) ? Math.max(2, most) : AGENT_ROWS_MAX)
       if (ran.length > 0) sections.push(ran)
       return [heading, thin, ...sections.flatMap((section, index) => (index > 0 && level < 2 ? [blank, ...section] : section))]

@@ -1,39 +1,22 @@
-// Advisory lints over a Design. A design is a loose spec, so every rule is a
-// structural or keyword heuristic, stated above the rule. Each one prefers
-// missing a case to raising a false alarm. Lints never block anything.
+// Advisory lints over a Design. Every rule is structural: it reads what blocks
+// there are, where they stand and which fields are empty, never the words or
+// the numbers typed into a field. Lints never block anything.
 
 import { KINDS, blockCount, typeName, canHoldChildren, flatten, kindOf, walk } from './model'
 import type { Design, DesignNode } from './model'
-import { KIND_TEACH, SELF_BRIEFED, placeholderOf } from './teach'
+import { KIND_TEACH, SELF_BRIEFED, VOTING_KINDS, placeholderOf } from './teach'
 
 export type LintRule =
-  | 'barrier-not-needed'
-  | 'worktree-read-only'
   | 'loop-unbounded'
   | 'code-input-no-output'
-  | 'fanout-over-cap'
   // structural: what a block is missing to mean anything
   | 'agent-no-brief'
-  | 'no-votes'
   | 'verify-nothing-before'
   | 'single-branch'
   | 'loop-no-decider'
   | 'arm-no-condition'
 
 export type Lint = { nodeId: string; rule: LintRule; message: string }
-
-/** Agents that run at once in one workflow; further calls queue. */
-export const CONCURRENCY_CAP = 16
-
-// Words that say a stage works on the whole result set at once.
-const CROSS_ITEM = /\b(dedup\w*|de-dup\w*|merg\w+|compar\w+|all|every|across|together|overall|rank\w*|scor\w+|winner|best|pick\w*|select\w*|synthes\w+|summar\w+|aggregat\w+|combin\w+|collect\w*|total|count\w*|zero|none|early[- ]exit)\b/i
-const WRITES = /\b(edit\w*|writ\w+|fix\w*|transform\w*|migrat\w+|modif\w+|chang\w+|refactor\w*|renam\w+|appl\w+|patch\w*|updat\w+|replac\w+|rewrit\w+|creat\w+|delet\w+|remov\w+|generat\w+|implement\w*|codemod\w*|format\w*|mutat\w+|add\w*|insert\w*|install\w*|upgrad\w+|convert\w*|port\w*|build\w*|commit\w*)\b/i
-const READS = /\b(read\w*|review\w*|scan\w*|search\w*|find\w*|discover\w*|analy[sz]\w+|inspect\w*|audit\w*|list\w*|explor\w+|summar\w+|verif\w+|check\w*|judg\w+|critiqu\w+|scout\w*|grep\w*|look\w*|map\w*|survey\w*)\b/i
-const BOUNDED = /\b(until|budget|max\w*|at most|rounds?|times|cap\w*|limit\w*|stop\w*|dry|while|iterations?|attempts?|retries|converg\w+)\b/i
-
-function words(node: DesignNode): string {
-  return [node.name, node.logic ?? '', node.knobs?.prompt ?? ''].join(' ')
-}
 
 function blank(text: string | undefined): boolean {
   return text === undefined || text.trim() === ''
@@ -57,13 +40,6 @@ const LOOP_STOPS: Readonly<Record<string, string | undefined>> = Object.fromEntr
 function producer(node: DesignNode): DesignNode {
   const last = node.children?.at(-1)
   return last && node.type !== 'branch' ? producer(last) : node
-}
-
-// The block that receives what stands before `node`: the node itself, or the
-// first block of a phase (a phase only frames what it holds).
-function receiver(node: DesignNode): DesignNode {
-  const first = node.type === 'phase' ? node.children?.[0] : undefined
-  return first ? receiver(first) : node
 }
 
 /** Containers whose blocks run one after the other: a block in one receives what the block before it made. */
@@ -95,44 +71,14 @@ export function lint(design: Design): Lint[] {
 
   walk(design, (node, info) => {
     const siblings = info.parent?.children ?? design.nodes
-    const next = siblings[info.index + 1]
     const previous = siblings[info.index - 1]
 
-    // 1. Barrier not needed. Heuristic: a `parallel` node directly followed by
-    // a sibling that is neither a `code` node nor an agent of kind judge or
-    // synthesize (all three work on the full set by nature) and whose title, notes and prompt carry no word
-    // about working across items (dedup, merge, compare, all, rank, …).
-    // A parallel with nothing after it returns its results and is left alone.
-    // A phase after it is looked into (its first block is the sibling), and an empty one is left alone.
-    const taker = next ? receiver(next) : undefined
-    const wholeSet = taker !== undefined && (taker.type === 'code' || taker.kind === 'judge' || taker.kind === 'synthesize')
-    if (node.type === 'parallel' && taker && taker.type !== 'phase' && !wholeSet && !CROSS_ITEM.test(words(taker))) {
-      lints.push({
-        nodeId: node.id,
-        rule: 'barrier-not-needed',
-        message: `parallel waits for all results, but "${taker.name}" does not seem to need them together: make it a pipeline so each item moves on as it finishes`,
-      })
-    }
+    // 1, 2. (Barrier not needed, worktree on a reader: gone, they guessed from the words of a block.)
 
-    // 2. Worktree on a reader. Heuristic: `isolation: worktree` on a node whose
-    // title, notes and prompt contain a reading word (read, review, search,
-    // verify, …) and no writing word (edit, fix, transform, migrate, …).
-    // Text with neither kind of word is not flagged.
-    if (node.knobs?.isolation === 'worktree' && READS.test(words(node)) && !WRITES.test(words(node))) {
-      lints.push({
-        nodeId: node.id,
-        rule: 'worktree-read-only',
-        message: 'worktree isolation costs setup time and disk per agent and only helps agents that edit files at the same time; this one looks read-only: ask Claude in the prompt to drop the worktree from this block',
-      })
-    }
-
-    // 3. Unbounded loop. A `loop` node with an empty `stopCondition`.
-    // A plain loop is let off when its title, notes and prompt mention a bound
-    // (until, budget, max, rounds, limit, …: a heuristic); a loop of a kind has
-    // its stop condition filled in, so an empty one was emptied. The kind `dry`
-    // is exempt: the pattern is its bound.
-    const stops = kindOf(node)
-    if (node.type === 'loop' && blank(node.knobs?.stopCondition) && (stops === 'custom' ? !BOUNDED.test(words(node)) : stops !== 'dry')) {
+    // 3. Unbounded loop. Structural: a `loop` with an empty `stopCondition`.
+    // The kind `dry` is exempt: the pattern is its bound.
+    if (needsStop(node) && blank(node.knobs?.stopCondition)) {
+      const stops = kindOf(node)
       lints.push({
         nodeId: node.id,
         rule: 'loop-unbounded',
@@ -140,7 +86,7 @@ export function lint(design: Design): Lint[] {
       })
     }
 
-    // 4. Code fed by free text. Heuristic: a `code` node whose previous sibling
+    // 4. Code fed by free text. Structural: a `code` node whose previous sibling
     // is an `agent` with no `output` knob, or a container (not a branch) whose
     // last stage is such an agent. The lint lands on the agent.
     if (node.type === 'code' && previous) {
@@ -154,20 +100,7 @@ export function lint(design: Design): Lint[] {
       }
     }
 
-    // 5. Fan-out over the cap behind a barrier. Heuristic: a `parallel` node
-    // whose `oncePer` knob contains a whole number above 16 ("×40 files",
-    // "~200 call sites"). Fan-out given only in words is not flagged.
-    if (node.type === 'parallel') {
-      const numbers = (node.knobs?.oncePer ?? '').match(/\d[\d,]*/g) ?? []
-      const largest = Math.max(0, ...numbers.map(one => Number(one.replace(/,/g, ''))))
-      if (largest > CONCURRENCY_CAP) {
-        lints.push({
-          nodeId: node.id,
-          rule: 'fanout-over-cap',
-          message: `fan-out of ${largest} is above the ~${CONCURRENCY_CAP} agents that run at once: the rest queue, and everything after waits for the last one. Use a pipeline, or fan out over fewer, larger items`,
-        })
-      }
-    }
+    // 5. (Fan-out over the cap: gone, it read a number out of `oncePer`.)
 
     // 6. An agent nobody briefed. Structural: an `agent` block with neither
     // notes nor a prompt knob. Its title is all Claude has to write a prompt from.
@@ -180,15 +113,7 @@ export function lint(design: Design): Lint[] {
       })
     }
 
-    // 7. A vote with no count. Structural: an agent of kind verify or judge
-    // whose `votes` knob is unset.
-    if ((node.kind === 'verify' || node.kind === 'judge') && node.knobs?.votes === undefined) {
-      lints.push({
-        nodeId: node.id,
-        rule: 'no-votes',
-        message: `${node.kind} has no votes, so how many ${node.kind === 'verify' ? 'checkers look at each result' : 'judges score the attempts'} is left to chance: set votes (1 is a quick check, 3 a majority)`,
-      })
-    }
+    // 7. (A vote with no count: gone with the `votes` knob. The numbers after it stay.)
 
     // 8. A verify with nothing to verify. Structural: see `hasInput`.
     if (node.kind === 'verify' && !hasInput(design, node.id)) {
@@ -262,43 +187,30 @@ export function lint(design: Design): Lint[] {
 // ---------------------------------------------------------------------------
 // Preflight: what a design implies before it is handed off
 
-/** The count a fan-out states at its start (`×4 dimensions`, `12 files`); 1 when it names none. */
-function statedCount(oncePer: string | undefined): number {
-  const count = /^\s*[×x]?\s*(\d+)\b/.exec(oncePer ?? '')
-  return count ? Math.max(1, Number(count[1])) : 1
-}
-
 /**
- * The fewest agents a block implies. A fan-out or votes count multiplies only
- * where it is a number; a fan-out in words, a loop's rounds and a subworkflow's
- * own agents count once or not at all, so the sum is a floor, never an estimate.
+ * The fewest agents a block implies: one per agent block, the cheapest arm of a branch. Nothing typed
+ * into a field is read for a count: what a block runs once per, its votes and a loop's rounds are words
+ * for Claude, so a block that may run more than once counts once and makes the sum a floor (`unknownsOf`).
  */
 function leastAgents(node: DesignNode): number {
-  const times = statedCount(node.knobs?.oncePer)
   if (canHoldChildren(node.type)) {
     const kids = (node.children ?? []).map(leastAgents)
-    // One path of a branch runs: the cheapest. An empty sweep or dry loop (one saved before these held their agents as blocks) still spawns its own searchers.
     if (node.type === 'branch') return kids.length > 0 ? Math.min(...kids) : 0
-    const inside = kids.reduce((sum, one) => sum + one, 0)
-    if (kids.length === 0) return node.kind === 'sweep' || node.kind === 'dry' ? times : 0
-    // Branches side by side: the count may name the branches drawn (`×2 angles`, two searchers) or items each
-    // of them runs for. The floor holds for both readings. Stages in a row run once per item.
-    if (node.type === 'parallel') return Math.max(inside, times)
-    return inside * times
+    return kids.reduce((sum, one) => sum + one, 0)
   }
-  if (node.type === 'code' || node.type === 'subworkflow' || node.type === 'args') return 0
-  return times * (node.knobs?.votes ?? 1)
+  return node.type === 'agent' ? 1 : 0
 }
 
-/** Why the count of agents cannot be known from the drawing: what each kind of open end is, and how many blocks have it. */
-export type Unknowns = { fanouts: number; loops: number; subworkflows: number }
+/** Why the count of agents is only a floor: how many blocks of each type that may run its agents more than once. */
+export type Unknowns = { fanouts: number; loops: number; votes: number; subworkflows: number }
 
+/** By type and kind alone: a pipeline or a parallel may fan out, a loop repeats, a verify or a judge votes, a subworkflow starts its own. */
 function unknownsOf(design: Design): Unknowns {
-  const out: Unknowns = { fanouts: 0, loops: 0, subworkflows: 0 }
+  const out: Unknowns = { fanouts: 0, loops: 0, votes: 0, subworkflows: 0 }
   for (const { node } of flatten(design)) {
-    // A fan-out said in words (`changed files`) names no number.
-    if (node.knobs?.oncePer && !/^\s*[×x]?\s*\d+\b/.test(node.knobs.oncePer)) out.fanouts++
-    if (node.type === 'loop' && (node.children?.length ?? 0) > 0) out.loops++
+    if (node.type === 'pipeline' || node.type === 'parallel') out.fanouts++
+    if (node.type === 'loop') out.loops++
+    if (node.type === 'agent' && node.kind !== undefined && VOTING_KINDS.includes(node.kind)) out.votes++
     if (node.type === 'subworkflow') out.subworkflows++
   }
   return out
@@ -311,20 +223,21 @@ export function preflight(design: Design): Preflight {
   return { blocks: blockCount(design), agents: design.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lintIds: lintIds(lint(design)), unknowns: unknownsOf(design) }
 }
 
-/** The agents a design starts, as a count: `agents = 18` with every count known, `agents ≥ 12` where the number is only the fewest. */
+/** The agents a design starts, as a count: `agents = 3` where every block runs once, `agents ≥ 12` where the number is only the fewest. */
 export function agentsCount(agents: number, unknowns: Unknowns): string {
-  return `agents ${unknowns.fanouts + unknowns.loops + unknowns.subworkflows > 0 ? '≥' : '='} ${agents}`
+  return `agents ${unknowns.fanouts + unknowns.loops + unknowns.votes + unknowns.subworkflows > 0 ? '≥' : '='} ${agents}`
 }
 
 /**
- * The agents a design starts, as far as the drawing says. Every count known: `agents = 12`. Otherwise the
- * floor is marked as one and the reason follows: `agents ≥ 12 (more: 2 blocks fan out over an unknown number)`.
+ * The agents a design starts, as far as the drawing says. Every block runs once: `agents = 3`. Otherwise the
+ * floor is marked as one and the reason follows: `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats)`.
  */
 export function agentsText(agents: number, unknowns: Unknowns): string {
   const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`
   const why = [
-    unknowns.fanouts > 0 ? `${plural(unknowns.fanouts, 'block fans', 'blocks fan')} out over an unknown number` : '',
+    unknowns.fanouts > 0 ? `${plural(unknowns.fanouts, 'block', 'blocks')} may fan out` : '',
     unknowns.loops > 0 ? `${plural(unknowns.loops, 'loop repeats', 'loops repeat')}` : '',
+    unknowns.votes > 0 ? `${plural(unknowns.votes, 'block votes', 'blocks vote')}` : '',
     unknowns.subworkflows > 0 ? `${plural(unknowns.subworkflows, 'subworkflow starts', 'subworkflows start')} its own` : '',
   ].filter(part => part !== '')
   return `${agentsCount(agents, unknowns)}${why.length === 0 ? '' : ` (more: ${why.join(', ')})`}`
@@ -346,7 +259,6 @@ export function problemFields(rule: LintRule): string[] {
   if (rule === 'agent-no-brief') return ['logic', 'prompt']
   if (rule === 'loop-unbounded' || rule === 'loop-no-decider') return ['stopCondition']
   if (rule === 'code-input-no-output') return ['output']
-  if (rule === 'no-votes') return ['votes']
   if (rule === 'arm-no-condition') return ['condition']
   return []
 }
@@ -360,7 +272,7 @@ export function lintIds(lints: readonly Lint[]): string[] {
 export const LINT_IDS_MAX = 6
 
 /**
- * `agents = 14 · problems in n3, n5`, or `agents ≥ 12 (more: …)` where a count is not stated; the
+ * `agents = 3 · problems in n3, n5`, or `agents ≥ 12 (more: …)` where a block may run more than once; the
  * blocks that have a problem are named, and nothing is said of problems where there are none. It informs; nothing is blocked.
  */
 export function preflightLine(design: Design): string {

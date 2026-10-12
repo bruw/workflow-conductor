@@ -21,7 +21,6 @@ export type ConductorDesignNode = {
     isolation?: 'worktree'
     agentType?: string
     oncePer?: string
-    votes?: number
     stopCondition?: string
     condition?: string
   }
@@ -86,6 +85,8 @@ declare module 'claude-code' {
       runClock: number
       /** The design the tracked run was started from; null when it came from none. */
       runDesign: string | null
+      /** The tracked run's script file, and the design drawn of that run after it started (`attach`); null with no run of a script. */
+      runScript: { runId: string; path: string; drawn: string | null } | null
       /** When the tracked run began and ended, in `$.clock.now()`'s ms (RunTimes in src/design/session.ts). */
       runTimes: { runId: string | null; startedAt: number | null; endedAt: number | null; seenAt: number | null }
       design: ConductorDesign | null

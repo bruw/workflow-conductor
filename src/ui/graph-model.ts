@@ -112,7 +112,7 @@ export function parseGraphMessage(data: unknown): GraphMessage | undefined {
   }
   if (kind === 'key') return typeof data.key === 'string' && data.key in KEY_OPS ? { kind, key: data.key } : undefined
   if (typeof id !== 'string') return undefined
-  if (kind === 'knob') return typeof data.slot === 'number' && [1, 2, 3].includes(data.slot) ? { kind, id, slot: data.slot } : undefined
+  if (kind === 'knob') return typeof data.slot === 'number' && [1, 2].includes(data.slot) ? { kind, id, slot: data.slot } : undefined
   if (kind === 'slide') return typeof data.first === 'number' && Number.isInteger(data.first) && data.first >= 0 ? { kind, id, first: data.first } : undefined
   if (kind === 'move') {
     const to = readPlace(data.to)
@@ -484,7 +484,6 @@ export function dragHint(state: Pick<GraphState, 'drag' | 'panY'>, context: Grap
 export const LEGEND: readonly (readonly [string, string])[] = [
   ['↓', 'hands each result on as it arrives'],
   ['all ⇓', 'waits for all results first'],
-  ['×N', 'on a header: a fan-out, the block runs once per item, N of them (count unknown: it states none)'],
   ['IF  ELSE', 'on a border: the condition of that arm of a branch'],
   ['OR  ∥', 'between arms: one of them runs / they run at the same time'],
   ['◀ N ▶', 'more arms than fit, N out of sight on that side'],

@@ -18,7 +18,6 @@ export type KeyOp =
   | 'remove'
   | 'knob1'
   | 'knob2'
-  | 'knob3'
   | 'open'
   | 'back'
   | 'detail'
@@ -52,7 +51,6 @@ export const KEY_OPS: Record<string, KeyOp> = {
   x: 'remove',
   '1': 'knob1',
   '2': 'knob2',
-  '3': 'knob3',
   o: 'open',
   b: 'back',
   i: 'detail',
@@ -152,7 +150,7 @@ export function legendItems(state: LegendState): Legend {
         ...(state.placed ? [{ keys: 'n', word: 'Change place', core: true }] : []),
         ...(state.kinds ? [{ keys: 'b', word: 'Blocks', core: true }] : []),
         { keys: 'a-z', word: 'Filter', core: false },
-        { keys: 'Enter', word: state.opens ? 'Kinds' : state.retype ? 'Set type' : 'Add', core: true },
+        { keys: 'Enter', word: state.opens ? 'Kinds' : state.retype ? 'Set block' : 'Add', core: true },
         { keys: 'x', word: 'Cancel', core: true },
       ],
     }

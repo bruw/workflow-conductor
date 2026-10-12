@@ -50,7 +50,6 @@ export type Knobs = {
   agentType?: string
   /** On a pipeline or a parallel: the items it runs once per. */
   oncePer?: string
-  votes?: number
   /** On a loop: when it stops. */
   stopCondition?: string
   /** On a block that stands directly in a `branch`: the condition that picks this arm. */
@@ -64,9 +63,14 @@ export type DesignNode = {
   kind?: Kind
   /** The block's name on the graph. */
   name: string
-  /** Free text: what the block does and why. */
+  /** Free text: what the block does and why. A verify or a judge says its votes here (`3 votes`). */
   logic?: string
   knobs?: Knobs
+  /**
+   * On a design drawn of a script that exists: the script's own strings this block stands for, each an agent
+   * label or a phase title, exact, or a prefix when it ends in `*` (`review:*`). The run is put on the block by them.
+   */
+  match?: string[]
   children?: DesignNode[]
 }
 
@@ -162,7 +166,7 @@ export function withArgs(design: Design): Design {
   return { ...design, nextId: number + 1, nodes: [{ id: `n${number}`, type: 'args', name: 'args' }, ...design.nodes] }
 }
 
-const KNOB_KEYS = ['prompt', 'output', 'model', 'effort', 'isolation', 'agentType', 'oncePer', 'votes', 'stopCondition', 'condition'] as const
+const KNOB_KEYS = ['prompt', 'output', 'model', 'effort', 'isolation', 'agentType', 'oncePer', 'stopCondition', 'condition'] as const
 const TEXT_KNOBS: readonly string[] = ['prompt', 'output', 'model', 'agentType', 'oncePer', 'stopCondition', 'condition']
 const ID_PATTERN = /^n(\d+)$/
 
@@ -207,9 +211,6 @@ export function knobError(key: string, value: unknown): string | undefined {
     return (EFFORTS as readonly unknown[]).includes(value) ? undefined : `knob effort must be one of ${EFFORTS.join(', ')}`
   }
   if (key === 'isolation') return value === 'worktree' ? undefined : 'knob isolation must be "worktree"'
-  if (key === 'votes') {
-    return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? undefined : 'knob votes must be a whole number of at least 1'
-  }
   return `unknown knob ${key}`
 }
 
@@ -221,6 +222,11 @@ function fail(message: string): never {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Why a block's `match` is not acceptable, or undefined when it is. */
+export function matchError(value: unknown): string | undefined {
+  return Array.isArray(value) && value.every(one => typeof one === 'string' && one !== '') ? undefined : 'match must be a list of non-empty strings'
 }
 
 // Unknown knob keys are dropped; known keys with a wrong value are refused.
@@ -245,7 +251,7 @@ function readNodes(raw: unknown, where: string, seen: Set<string>): DesignNode[]
 
 function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
   if (!isRecord(raw)) fail(`${where} must be an object`)
-  const { id, name, logic, children } = raw
+  const { id, name, logic, match, children } = raw
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) fail(`${where}: id must look like "n1"`)
   if (seen.has(id)) fail(`duplicate id ${id}`)
   seen.add(id)
@@ -260,6 +266,11 @@ function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
   if (logic !== undefined) node.logic = logic
   const knobs = readKnobs(raw.knobs, id)
   if (knobs) node.knobs = knobs
+  if (match !== undefined) {
+    if (matchError(match)) fail(`${id}: ${matchError(match)}`)
+    // An empty list says nothing: the file is written without it.
+    if ((match as string[]).length > 0) node.match = [...(match as string[])]
+  }
   if (children !== undefined) {
     const list = readNodes(children, `${id}.children`, seen)
     if (list.length > 0 && !canHoldChildren(type)) fail(`${id}: ${aType(type)} node cannot hold children`)
@@ -308,6 +319,7 @@ function orderedNode(node: DesignNode): Record<string, unknown> {
     for (const key of KNOB_KEYS) if (node.knobs[key] !== undefined) knobs[key] = node.knobs[key]
     if (Object.keys(knobs).length > 0) out.knobs = knobs
   }
+  if (node.match && node.match.length > 0) out.match = node.match
   if (node.children) out.children = node.children.map(orderedNode)
   return out
 }

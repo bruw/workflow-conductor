@@ -10,6 +10,10 @@ Rerun: `CONDUCTOR_EXTRA_PLUGIN_DIRS=spikes/probe scripts/dev-session.sh`, then `
 
 S7 and the findings marked "redesign v1" were added on 2026-10-11, same version and surface.
 S8 and the last two findings under S7 came with the UI pass that followed, same version and surface.
+S9 to S15 were added on 2026-10-12: same version, the probe alone in its own tmux session (Opus 5.5, high
+effort, auto mode). They are off unless `.capture/spike.json` exists; it picks the tools and switches
+(`{"tools":["choose"|"deferred"|"nudge"|"nudge2"],"hint":true,"askWorkflow":true,"blockWorkflow":true}`), and the
+log is `.capture/spike.jsonl`. Tools are registered at `session.start`, so each setup is a new session.
 
 ## S1. Is `agent.spawn`'s `description` the script's `label`? Yes. Phase on the event? No.
 
@@ -226,6 +230,224 @@ in a `Box` with `backgroundColor: composerSidebarBackground`, and every descenda
   graph: `backgroundColor="inverseText"` on the `Text` of its cells. A theme key is accepted there and follows
   the theme (seen in tmux at 256 colours: the dock `48;5;235`, the phase `48;5;16`).
 
+## S9. Does `$.ui.ask` work inside the `tool.call` hook of a mod's own tool, mid-turn? Yes. A 174 s wait survives; Esc rejects.
+
+```
+❯ spike choose, n=2
+● conductor-probe - spike_choose (MCP)(n: 2)
+ ☐ Workflow
+Conductor or standard?
+❯ 1. Conductor
+  2. Standard
+  3. Type something.
+  4. Chat about this
+{"kind":"choose.call","keys":["n","tool","tool_use_id"],"n":2}
+{"kind":"choose.answer","answer":"Standard","heldMs":174468}
+[DEBUG] conductor-probe (user) answered tool.call without next() in 174483.0ms
+  ⎿  The user chose: Standard. Reply with exactly: CHOSE Standard
+● CHOSE Standard
+{"kind":"choose.answer","answer":"Fourth","heldMs":11819}                     (n=4: four rows, then the same two extra rows)
+{"kind":"choose.rejected","isError":true,"name":"HooksError","keys":["message","name","stack","line","column"],
+ "message":"conductor-probe: $.ui.ask: no answer (The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_strin)"}
+```
+
+- The dialog is the engine's AskUserQuestion, with the `header` as its chip. It resolves to the label as written.
+- The engine adds two rows the mod did not ask for: `Type something.` (free text comes back as the answer) and
+  `Chat about this`. So compare the answer with the labels exactly and treat anything else as "no choice".
+- Esc rejects with a `HooksError` whose message starts `<plugin>: $.ui.ask: no answer (`. `Chat about this`
+  rejects with the same message: the two cannot be told apart. No field beyond `name` and `message` says why.
+- A rejected ask does not end the turn: the hook caught it, returned a result, and the model read it.
+- The hook was held 174 s by the open dialog and was not skipped: time inside a `$` call is not on the budget.
+- No permission prompt came up for the mod's tool (auto mode). Not tested in the default permission mode.
+- The ask is a nested `tool.call` of `AskUserQuestion`: the module's other `tool.call` hooks see it (the
+  catch-all one logged it); only the calling hook is left out. A catch-all hook must pass it through.
+- Not tested: `multiSelect`, and typing under `Type something.`.
+
+```ts
+on('tool.call', { tool: 'mcp__conductor__mode' }, async $ => {
+  try {
+    const answer = await $.ui.ask('Conductor or standard?', { options: ['Conductor', 'Standard'], header: 'Workflow' })
+    return { result: `The user chose: ${answer}` }       // a label, or free text
+  } catch {
+    return { result: 'The user dismissed the question.' } // Esc, or "Chat about this"
+  }
+})
+```
+
+## S10. Does `$.ui.ask` work in the `Workflow` `tool.call` hook after `await next(e)`, and does `context` reach the model? Yes to both.
+
+```
+14:57:25.112 workflow.input                       (the hook is entered)
+14:57:25.518 workflow.result  status async_launched, runId wf_cf2940ca-61b
+14:57:25.529 tool AskUserQuestion                 (dialog up; the row reads "Workflow(One haiku agent replies ok)")
+   …         agent.spawn, turn.complete of the run's one agent (probe.jsonl): the run ended under the dialog
+14:58:09.622 workflow.ask {"answer":"Yes","heldMs":44102,"signalAborted":false}
+14:58:09.686 prompt {"origin":{"kind":"task-notification"}}
+● Dynamic workflow "One haiku agent replies ok" completed · 3s
+● VISUALIZE-ACK
+  Workflow tiny done: 1 haiku agent, result ok (3.6s, 33k tokens).
+```
+
+- The run starts and goes on while the dialog is up; here it finished under it.
+- `return { ...r, context: [...] }` delivers: the model wrote the word the context asked for, first.
+- **The turn is held as long as the dialog is.** The model does not get the tool result, and the run's
+  completion notice is not delivered, until the person answers; both arrive together in one turn. A person
+  who walks away from the dialog freezes the chat while the workflow burns in the background.
+- With a pane docked, the dialog is drawn in the transcript's column (24 columns wide here), still usable.
+- Answering `No` returns `r` untouched; the turn goes on as without the mod.
+
+```ts
+on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
+  const r = await next(e)
+  if (r.deny !== undefined || r.isError === true) return r
+  const answer = await $.ui.ask('Visualize this run in Conductor?', { options: ['Yes', 'No'], header: 'Conductor' }).catch(() => 'No')
+  return answer === 'Yes' ? { ...r, context: ['…what the model should do…'] } : r
+})
+```
+
+## S11. What does a `Workflow` `tool.call` carry? The script text only in the inline form; `result.scriptPath` holds the full text in all three.
+
+```
+inline      keys: script tool tool_use_id        scriptChars 240
+            result.scriptPath …/<session>/workflows/scripts/tiny-wf_cf2940ca-61b.js   $.fs.read == e.script (240 chars)
+scriptPath  keys: scriptPath tool tool_use_id    (no script)
+            result.scriptPath = the path passed in (same file, no new copy), runId wf_cb1066c2-2af, 240 chars read
+name        keys: name tool tool_use_id          name "tinysaved" (a .claude/workflows/tinysaved.js of a scratch project)
+            result.scriptPath …/<session>/workflows/scripts/tinysaved-wf_fa89c342-ccc.js   245 chars read
+result keys (all three): status taskId taskType workflowName runId summary transcriptDir scriptPath
+```
+
+- Types (`claude-code-tools`): input `script? name? description? title? args? scriptPath? resumeFromRunId?`
+  (`scriptPath` wins over `script` and `name`); result adds `sessionUrl? warning? error?` to the keys above.
+- The input is flat on the event (`e.script`, `e.name`, `e.scriptPath`), as in S3. Fields the model did not
+  pass are absent, not empty.
+- One rule gives the script in every form: after `next(e)`, `await $.fs.read(r.result.scriptPath)`. The file
+  exists when `next` resolves. It is named `<meta.name>-<runId>.js` under
+  `~/.claude/projects/<project>/<session>/workflows/scripts/`.
+- For the `scriptPath` form the file can also be read before `next` (`e.scriptPath`), to decide ahead of the run.
+  For the `name` form nothing on the event holds the text before the run.
+- `workflowName` is `meta.name`. `r.text` (what the model reads) repeats the paths and the run id.
+- Not observed: `resumeFromRunId`, a remote run (`status: 'remote_launched'`, no `runId`), a syntax error (`error`).
+
+## S12. Is a pane opened right after a yes in `$.ui.ask` placed? At 160 columns yes; at 100 no: the open counts as unasked.
+
+```
+[DEBUG] ui.open conductor-probe spike-pane (unasked, 160 columns): placed
+{"opened":{"isPlaced":true},"panes":[{"id":"spike-pane","isShown":true,"isFocused":false,"isPlaced":true}]}
+pane.render {"viewport":{"columns":24,…},"placement":"dock","bodyColumns":135}
+
+[DEBUG] ui.open conductor-probe spike-pane (unasked, 100 columns): waits unplaced (unasked below 144 columns (100 now): placed when the person opens it, or when the terminal is widened to 144 columns)
+{"opened":{"isPlaced":false,"reason":"unasked below 144 columns (100 now): …"},"panes":[{…,"isPlaced":false}]}
+[DEBUG] ui.open conductor-probe spike-pane (waiting, 150 columns): placed          (tmux resize-window -x 150)
+pane.render {"viewport":{"columns":100,…},"placement":"inline","bodyColumns":96}   (back at 100: stays, inline)
+```
+
+- **An answer in `$.ui.ask` is not "the person's input" for `$.ui.open`.** The open is unasked: placed from
+  144 columns, waiting below.
+- At 100 columns the person sees nothing at all: no pane, no tab, no notice, and no `ui.render` is raised.
+  The mod must say so itself (`$.ui.toast` or a line in the `context`) and name the command that opens it.
+- It seats by itself when the terminal reaches 144 columns, and once seated it stays when narrowed again
+  (inline above the prompt under 110).
+- An open from the person's own command is placed at any width (S5, and the types). So below 144 the way in
+  is a slash command the person types; 110 is the floor once they have opened that id before.
+- At 160 the dock took 135 body columns and left the transcript 24: this machine has `dockColumns: 141` kept
+  in `~/.claude.json` from an earlier drag. The mod cannot count on its own width.
+
+```ts
+const opened = await $.ui.open({ id: PANE, title: 'Conductor' })
+if (!opened.isPlaced) $.ui.toast('Conductor: type /conductor to see the run (the terminal is narrow)')
+```
+
+## S13. Does Claude find a deferred mod tool by itself? From a plain workflow request, no (0 of 2). Named in hidden context, yes, when it goes for Workflow (2 of 3).
+
+Tool: `workflow_mode`, `isDeferred: true`, listed as `mcp__conductor-probe__workflow_mode`. Each try after `/clear`.
+
+```
+(a) name in the deferred list only
+1 "use a workflow to review README.md with 2 haiku agents"            Skill(workflow-authoring) → Workflow        not called
+2 "orchestrate 2 haiku subagents in a workflow to review README.md"   Skill(workflow-authoring) → Workflow        not called
+3 "… Before you write the script, let me pick the workflow mode."     ToolSearch select:… → workflow_mode         called
+4 "… built visually or as a plain script? Check with me using whatever tool exists for that."  ToolSearch → called
+(b) prompt.submit context: "Before authoring or running any Workflow script, call the tool <full name> (load it with ToolSearch "select:<full name>") …"
+1 "use a workflow to review README.md with 2 haiku agents"            ToolSearch select:… → workflow_mode         called
+2 "orchestrate 2 haiku subagents to review README.md"                 Agent, Agent (two real subagents)           not called
+3 "ultracode: review README.md with 2 haiku agents"                   ToolSearch select:… → workflow_mode         called
+```
+
+- (a) The name alone does not pull the tool into a workflow request. Claude loads it only when the person's
+  words ask for that very thing (tries 3 and 4), which no real user will type.
+- (b) With the full name in hidden context Claude loaded it with one `ToolSearch select:` and called it, before
+  the skill and before any script, both times it was heading for Workflow. In try 2 it never headed there:
+  "orchestrate subagents" went to the `Agent` tool, and the context spoke of Workflow scripts only.
+- The context was attached to every prompt (`next({ ...e, context: [...(e.context ?? []), hint] })`).
+- A deferred tool costs one extra model step (the ToolSearch) and about a second.
+
+## S14. Does a non-deferred tool whose description says "call this before any Workflow script" get called first? Yes, 3 of 3 with the plain wording.
+
+Tool: `before_workflow`, `isDeferred: false`, no input, description:
+"Call this before authoring or running any Workflow script (multi-agent workflow); it asks the user how they want to proceed."
+
+```
+1 "use a workflow to review README.md with 2 haiku agents"   before_workflow first (1.3 s after the prompt)   no Skill, no Workflow before it
+2 "orchestrate 2 haiku subagents to review README.md"        before_workflow first (3.2 s)
+3 "ultracode: review README.md with 2 haiku agents"          before_workflow first (1.8 s)
+4 "use one haiku subagent to count the lines of LICENSE"     Agent directly, before_workflow not called
+```
+
+- In all three phrasings the tool was the turn's first call, ahead of `Skill(workflow-authoring)` and `Workflow`.
+  The stronger wording (`NUDGE_2` in the probe) was not needed and was not run.
+- It beat S13: the same "orchestrate subagents" phrasing that skipped the deferred tool called this one.
+- Try 4: a single subagent did not trigger it, so the wording does not fire on every delegation.
+- The spike's tool answered "stop here" and Claude stopped. Not observed: Claude going on to write the script
+  after a real answer, and whether it calls the tool again later in the same conversation.
+- One try per phrasing, each after `/clear`. Not tested: a long conversation, another model, plan mode.
+
+## S15. `$.store` and a compaction event (types; the event also seen once)
+
+(a) `$.store`: this plugin's own key-value store, a JSON file under the user's Claude Code configuration
+directory, kept between sessions and reloads.
+
+```ts
+$.store.get(key: string): Promise<unknown>           // undefined when unset
+$.store.set(key: string, value: unknown): Promise<void>
+$.store.delete(key: string): Promise<void>
+$.store.keys(): Promise<string[]>                    // insertion order
+```
+
+- **Nothing is declared in the contract.** `types/index.d.ts` and `PluginState` are for `$.state` only; the
+  store is untyped (`unknown` out), so the mod narrows what it reads.
+- Values are JSON: `get` returns `JSON.parse(JSON.stringify(value))`. `set` rejects a function, a cycle, or a
+  store over 4 MiB of JSON text in all.
+- Read from the types only; no `$.store` call was run.
+
+(b) Compaction: the event is `session.compact`. It fires before the compaction, and `await next(e)` resolves
+once it is done, so one hook sees both sides.
+
+```ts
+type SessionCompactInput = {
+  trigger: 'manual' | 'auto' | 'plugin' | 'precompute'  // matcher key; 'precompute' installs nothing
+  agentId?: string                                      // absent for the main conversation
+  instructions?: string                                 // the text after /compact
+  messages: readonly SessionMessage[]                   // the transcript being compacted
+}
+type SessionCompactResult =
+  | { messages: readonly SessionMessage[]; tokensBefore?: number; tokensAfter?: number; usage?: ModelUsage }
+  | { skip: string }
+
+on('session.compact', async ($, e, next) => {
+  const r = await next(e)
+  if (e.trigger !== 'precompute' && e.agentId === undefined && r.skip === undefined) { /* the conversation was compacted */ }
+  return r
+})
+```
+
+Seen once, on `/compact`: `{"kind":"session.compact","trigger":"manual","messagesIn":6,"messagesOut":3,"tokensBefore":45229,"tokensAfter":3744}`.
+
+- Subagents and forks compact too (`agentId` set): filter on it.
+- Also in the types: a `session.append` row with `door: 'compaction'` (the boundary and the summary), and
+  `classic.PreCompact` / `classic.PostCompact` (`compact_summary`). Not run.
+- Not observed: `auto` and `precompute`.
+
 ## Other findings
 
 - Hot reload of a `--plugin-dir` mod is not immediate when the session is idle (the watch drops to a 30 s
@@ -259,3 +481,15 @@ in a `Box` with `backgroundColor: composerSidebarBackground`, and every descenda
 - Redesign v1, tools: a tool description is cut at 4096 characters (Conductor's is 4,050: what each knob means moved to the schema's `knobs` field when `args` and `phase` took the room).
 - The dock's width is the person's once they dragged it (kept in `~/.claude.json`); the mod's `columns` is
   only a request.
+- Spikes S9 to S15:
+  - A save of the hooks module re-raised `session.start` in a running session (the reload's `register` ran and
+    the start hook logged again), so tools registered there are registered again after a reload.
+  - A `{ deny }` from a `tool.call` hook reaches the model as the tool's error, and Claude treats instructions
+    in it as untrusted ("that text came from the tool result, not from you"). Keep a deny to a reason.
+  - A `tool.call` matcher naming the mod's own tool type-checks only once `.claude-plugin/types/claude-code-mcp/`
+    lists the tool: it is written when a hot-reloading session reloads the mod with the tool registered. Until
+    then `tsc` refuses the literal.
+  - tmux `send-keys 'long text' Enter` in one call can leave the text in the prompt box unsubmitted: send the
+    text, wait a second, then send `Enter`.
+  - "orchestrate 2 haiku subagents to …" with no word "workflow" starts real `Agent` subagents (36k to 100k
+    tokens each here before they were stopped). The probe's `blockWorkflow` switch denies `Workflow` and `Agent` for such tries.

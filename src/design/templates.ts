@@ -46,10 +46,9 @@ export function review(): Design {
             prompt: 'Review the diff for this dimension only and report concrete findings with evidence',
             output: '{ findings: [{ file, line, severity, claim, evidence }] }',
           }),
-          node('n4', 'agent verify', 'verify findings', 'Each skeptic tries to refute a finding and defaults to refuted when unsure. Keep a finding only if at least 2 of 3 fail to refute it.', {
+          node('n4', 'agent verify', 'verify findings', '3 votes: each skeptic tries to refute a finding and defaults to refuted when unsure. Keep a finding only if at least 2 of 3 fail to refute it.', {
             prompt: 'Try to refute this finding against the actual code',
             output: '{ refuted: boolean, reason }',
-            votes: 3,
           }),
         ],
       ),
@@ -93,10 +92,9 @@ export function research(): Design {
             prompt: 'Read the source in full and extract the claims that bear on the question, with quotes',
             output: '{ claims: [{ claim, quote, confidence }] }',
           }),
-          node('n6', 'agent verify', 'check claims', 'Drop claims the source does not actually support.', {
+          node('n6', 'agent verify', 'check claims', '2 votes: drop claims the source does not actually support.', {
             prompt: 'Try to refute each claim against the quoted source',
             output: '{ refuted: boolean, reason }',
-            votes: 2,
           }),
         ],
       ),
@@ -164,10 +162,9 @@ export function judgePanel(): Design {
           }),
         ],
       ),
-      node('n3', 'agent judge', 'judge', 'Judges score all attempts against the same criteria and compare them; highest total wins.', {
+      node('n3', 'agent judge', 'judge', '3 votes: judges score all attempts against the same criteria and compare them; highest total wins.', {
         prompt: 'Score every attempt on correctness, simplicity and risk',
         output: '{ scores: [{ attempt, score, strengths[], weaknesses[] }] }',
-        votes: 3,
       }),
       node('n4', 'agent synthesize', 'synthesize from winner', 'Start from the winning attempt and graft in the best ideas from the runners-up.', {
         prompt: 'Write the final approach from the winner, adopting the strongest ideas of the others',

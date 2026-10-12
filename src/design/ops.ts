@@ -1,9 +1,9 @@
 // Immutable edits on a Design. Every operation returns a new Design, or the
 // same Design plus a reason when the edit is refused. Pure TypeScript.
 
-import { ARGS_PLACE, EFFORTS, aType, argsOf, typeName, canHoldChildren, findNode, isNodeType, knobError, nextIdNumber, readType, walk } from './model'
+import { ARGS_PLACE, EFFORTS, aType, argsOf, typeName, canHoldChildren, findNode, isNodeType, knobError, matchError, nextIdNumber, readType, walk } from './model'
 import type { Design, DesignNode, Kind, Knobs, NodeType } from './model'
-import { defaultName, fillOf, offers, starterOf } from './teach'
+import { defaultName, fillOf, logicOf, offers, starterOf } from './teach'
 import type { BlockRef, Starter } from './teach'
 
 export type OpResult = { design: Design; error?: string }
@@ -13,7 +13,7 @@ export type AddResult = OpResult & { id?: string }
 
 export type Place = { parentId?: string; index: number }
 
-export type NodePatch = { name?: string; logic?: string; knobs?: Partial<Knobs> }
+export type NodePatch = { name?: string; logic?: string; knobs?: Partial<Knobs>; match?: readonly string[] }
 
 type Spot = { node: DesignNode; parent: DesignNode | undefined; index: number; siblings: readonly DesignNode[] }
 
@@ -99,10 +99,12 @@ export function placeFor(design: Pick<Design, 'nodes'>, type: NodeType, at: Plac
   return at.parentId === undefined && argsOf(design) ? { index: Math.max(1, Number.isFinite(at.index) ? Math.trunc(at.index) : design.nodes.length) } : at
 }
 
-/** A new block of a type and kind, with what the kind fills in under the knobs it is given. */
+/** A new block of a type and kind, with what the kind fills in (its logic, and knobs under the ones it is given). */
 function made(id: string, block: BlockRef, name: string, knobs: Knobs = {}): DesignNode {
   const node: DesignNode = { id, type: block.type, name }
   if (block.kind !== undefined) node.kind = block.kind
+  const logic = logicOf(block)
+  if (logic !== undefined) node.logic = logic
   const filled = { ...fillOf(block), ...knobs }
   if (Object.keys(filled).length > 0) node.knobs = filled
   if (canHoldChildren(block.type)) node.children = []
@@ -174,8 +176,9 @@ export function moveNode(design: Design, id: string, to: Place): OpResult {
 }
 
 /**
- * Changes name, logic and knobs. Knobs merge key by key; a knob set to
- * undefined or '' is cleared, and so is logic set to ''. Id and type are fixed.
+ * Changes name, logic, knobs and match. Knobs merge key by key; a knob set to
+ * undefined or '' is cleared, and so is logic set to ''. `match` is replaced whole, and
+ * cleared by an empty list. Id and type are fixed.
  */
 export function updateNode(design: Design, id: string, patch: NodePatch): OpResult {
   const node = findNode(design, id)
@@ -206,13 +209,19 @@ export function updateNode(design: Design, id: string, patch: NodePatch): OpResu
     if (Object.keys(knobs).length > 0) next.knobs = knobs as Knobs
     else delete next.knobs
   }
+  if (patch.match !== undefined) {
+    const error = matchError(patch.match)
+    if (error) return refuse(design, error)
+    if (patch.match.length > 0) next.match = [...patch.match]
+    else delete next.match
+  }
   return { design: { ...design, nodes: replace(design.nodes, id, next) } }
 }
 
 /**
  * Changes a node's type and kind (the plain kind where none is said). A block that holds others can only
  * become another container; the `args` block stays what it is, and no block becomes one.
- * Its knobs follow the kind and never lose what was typed: a knob still as the old kind filled it in goes,
+ * Its knobs and its logic follow the kind and never lose what was typed: one still as the old kind filled it in goes,
  * and the new kind fills in the ones that are not set. A container left empty starts with its new kind's blocks.
  */
 export function retypeNode(design: Design, id: string, type: NodeType, kind?: Kind): OpResult {
@@ -238,6 +247,9 @@ export function retypeNode(design: Design, id: string, type: NodeType, kind?: Ki
   for (const [key, value] of Object.entries(fillOf(block))) knobs[key] ??= value
   if (Object.keys(knobs).length > 0) next.knobs = knobs as Knobs
   else delete next.knobs
+  const logic = (node.logic === logicOf(node) ? undefined : node.logic) ?? logicOf(block)
+  if (logic !== undefined) next.logic = logic
+  else delete next.logic
   const number = nextIdNumber(design)
   const held = (node.children?.length ?? 0) > 0 ? [] : starters(block, number)
   if (canHoldChildren(type)) next.children = held.length > 0 ? held : (node.children ?? [])
@@ -246,45 +258,36 @@ export function retypeNode(design: Design, id: string, type: NodeType, kind?: Ki
 }
 
 /** The knobs a digit steps on the selected block, and the models the first one goes through. */
-export type QuickKnob = 'model' | 'effort' | 'votes'
+export type QuickKnob = 'model' | 'effort'
 export const MODEL_STEPS: readonly string[] = ['haiku', 'sonnet', 'opus']
-/** Votes go round from 1 to this. */
-export const VOTES_STEP_MAX = 5
 /** What an unset model or effort reads as. */
 export const INHERIT = 'inherit'
 
-/** Which knob a digit steps on a block: 1 its model, 2 its effort, 3 its votes. Undefined where its type and kind have none. */
+/** Which knob a digit steps on a block: 1 its model, 2 its effort. Undefined where its type has none. */
 export function quickKnob(node: Pick<DesignNode, 'type' | 'kind'>, slot: number): QuickKnob | undefined {
   const has = (knob: keyof Knobs): boolean => offers(node, knob)
   if (slot === 1) return has('model') ? 'model' : undefined
   if (slot === 2) return has('effort') ? 'effort' : undefined
-  if (slot === 3) return has('votes') ? 'votes' : undefined
   return undefined
 }
 
-/** A quick knob's value in a word: `inherit` for an unset model or effort, `none` for no votes. */
+/** A quick knob's value in a word: `inherit` for an unset model or effort. */
 export function quickValue(node: Pick<DesignNode, 'knobs'>, knob: QuickKnob): string {
-  if (knob === 'votes') return node.knobs?.votes === undefined ? 'none' : String(node.knobs.votes)
   return node.knobs?.[knob] ?? INHERIT
 }
 
 /**
  * Steps a quick knob of a block to its next value: model inherit → haiku → sonnet → opus → inherit (a model
- * of another name goes to inherit), effort inherit → low → … → max → inherit, votes 1 … 5 and round again.
+ * of another name goes to inherit), effort inherit → low → … → max → inherit.
  * `knob` and `value` say what it is now; refused where the block's type has no such knob.
  */
 export function stepKnob(design: Design, id: string, slot: number): OpResult & { knob?: QuickKnob; value?: string } {
   const node = findNode(design, id)
   if (!node) return refuse(design, `no block ${id}`)
   const knob = quickKnob(node, slot)
-  if (knob === undefined) return refuse(design, `${id} is ${/^[aeiou]/.test(node.type) ? 'an' : 'a'} ${typeName(node)}: it has no ${slot === 1 ? 'model' : slot === 2 ? 'effort' : 'votes'}`)
+  if (knob === undefined) return refuse(design, `${id} is ${/^[aeiou]/.test(node.type) ? 'an' : 'a'} ${typeName(node)}: it has no ${slot === 1 ? 'model' : 'effort'}`)
   const after = <T>(steps: readonly T[], now: T | undefined): T | undefined => (now === undefined ? steps[0] : steps[steps.indexOf(now) + 1 || steps.length])
-  const patch: Partial<Knobs> =
-    knob === 'model'
-      ? { model: after(MODEL_STEPS, node.knobs?.model) ?? '' }
-      : knob === 'effort'
-        ? { effort: after(EFFORTS, node.knobs?.effort) }
-        : { votes: ((node.knobs?.votes ?? 0) % VOTES_STEP_MAX) + 1 }
+  const patch: Partial<Knobs> = knob === 'model' ? { model: after(MODEL_STEPS, node.knobs?.model) ?? '' } : { effort: after(EFFORTS, node.knobs?.effort) }
   const result = updateNode(design, id, { knobs: patch })
   const changed = findNode(result.design, id)
   return result.error || !changed ? result : { ...result, knob, value: quickValue(changed, knob) }

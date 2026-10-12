@@ -2,7 +2,7 @@
   "version": 1,
   "name": "demo",
   "description": "Answer a question from many sources: search several ways, read deeply, check for gaps, then write up",
-  "nextId": 28,
+  "nextId": 29,
   "nodes": [
     {
       "id": "n27",
@@ -10,60 +10,64 @@
       "name": "args"
     },
     {
-      "id": "n4",
-      "type": "pipeline",
-      "name": "deep read",
-      "logic": "Each source is read and checked independently.",
-      "knobs": {
-        "oncePer": "deduped sources"
-      },
+      "id": "n28",
+      "type": "phase",
+      "name": "design",
       "children": [
         {
-          "id": "n2",
-          "type": "agent",
-          "name": "search",
-          "logic": "One agent per search angle",
+          "id": "n4",
+          "type": "pipeline",
+          "name": "deep read",
+          "logic": "Each source is read and checked independently.",
           "knobs": {
-            "prompt": "Search for sources on the question using only this angle",
-            "output": "{ sources: [{ ref, why }] }",
-            "model": "opus",
-            "effort": "low"
-          }
-        },
-        {
-          "id": "n6",
-          "type": "agent",
-          "kind": "verify",
-          "name": "check claims",
-          "logic": "Drop claims the source does not actually support.",
-          "knobs": {
-            "prompt": "Try to refute each claim against the quoted source",
-            "output": "{ refuted: boolean, reason }",
-            "model": "sonnet",
-            "effort": "low",
-            "votes": 1
-          }
-        },
-        {
-          "id": "n1",
-          "type": "parallel",
-          "kind": "sweep",
-          "name": "multi-modal sweep",
-          "logic": "Each searcher is blind to the others, so expect overlap between their results.",
-          "knobs": {
-            "oncePer": "4 search angles: by container, by content, by entity, by time"
+            "oncePer": "deduped sources"
           },
-          "children": []
-        },
-        {
-          "id": "n5",
-          "type": "agent",
-          "name": "read source",
-          "logic": "One reader per source.",
-          "knobs": {
-            "prompt": "Read the source in full and extract the claims that bear on the question, with quotes",
-            "output": "{ claims: [{ claim, quote, confidence }] }"
-          }
+          "children": [
+            {
+              "id": "n2",
+              "type": "agent",
+              "name": "searchs",
+              "logic": "One agent per search angle",
+              "knobs": {
+                "prompt": "Search for sources on the question using only this angle",
+                "output": "{ sources: [{ ref, why }] }",
+                "model": "opus",
+                "effort": "low"
+              }
+            },
+            {
+              "id": "n6",
+              "type": "agent",
+              "name": "check claims",
+              "logic": "Drop claims the source does not actually support.",
+              "knobs": {
+                "prompt": "Try to refute each claim against the quoted source",
+                "model": "sonnet",
+                "effort": "low"
+              }
+            },
+            {
+              "id": "n1",
+              "type": "parallel",
+              "kind": "sweep",
+              "name": "multi-modal sweep",
+              "logic": "Each searcher is blind to the others, so expect overlap between their results.",
+              "knobs": {
+                "oncePer": "4 search angles: by container, by content, by entity, by time"
+              },
+              "children": []
+            },
+            {
+              "id": "n5",
+              "type": "agent",
+              "name": "read source",
+              "logic": "One reader per source.",
+              "knobs": {
+                "prompt": "Read the source in full and extract the claims that bear on the question, with quotes",
+                "output": "{ claims: [{ claim, quote, confidence }] }"
+              }
+            }
+          ]
         }
       ]
     },
@@ -75,7 +79,8 @@
         {
           "id": "n21",
           "type": "loop",
-          "name": "loop",
+          "kind": "count",
+          "name": "count",
           "children": [
             {
               "id": "n22",
@@ -97,8 +102,7 @@
       "kind": "verify",
       "name": "verify",
       "knobs": {
-        "effort": "high",
-        "votes": 1
+        "effort": "high"
       }
     },
     {

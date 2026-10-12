@@ -9,6 +9,39 @@ export function parseNodeId(label: string): string | undefined {
   return NODE_ID.exec(label)?.[1]
 }
 
+/**
+ * What ties a run to a design: the ids of its blocks, and for the blocks that have one their `match`
+ * (the script's own agent labels and phase titles, a prefix where one ends in `*`), in design order.
+ */
+export type Mapping = { ids: ReadonlySet<string>; match?: Readonly<Record<string, readonly string[]>> }
+
+/** The block whose `match` names `text`: an exact string before any prefix, the longest prefix among those, the first block in design order on a tie. */
+export function matchNode(text: string, match: Mapping['match']): string | undefined {
+  let found: string | undefined
+  let length = -1
+  for (const [id, patterns] of Object.entries(match ?? {})) {
+    for (const pattern of patterns) {
+      if (pattern === text) return id
+      if (pattern.endsWith('*') && pattern.length - 1 > length && text.startsWith(pattern.slice(0, -1))) {
+        found = id
+        length = pattern.length - 1
+      }
+    }
+  }
+  return found
+}
+
+/**
+ * The block an agent belongs to: the id its label opens with (any id with no design, else one the design has),
+ * else the block that matches its label, else the one that matches its phase title. Undefined: unmapped.
+ */
+export function nodeOf(label: string, phase: string | undefined, mapping?: Mapping): string | undefined {
+  const parsed = parseNodeId(label)
+  if (parsed !== undefined && (!mapping || mapping.ids.has(parsed))) return parsed
+  if (!mapping?.match) return undefined
+  return (label === '' ? undefined : matchNode(label, mapping.match)) ?? (phase === undefined || phase === '' ? undefined : matchNode(phase, mapping.match))
+}
+
 type Buckets = Record<string, NodeRun>
 
 function patchBucket(buckets: Buckets, key: string | undefined, patch: (one: NodeRun) => NodeRun): Buckets {
@@ -30,10 +63,10 @@ function tokenCount(value: unknown): number | undefined {
 
 /**
  * Folds one run event into the state and returns a new state; the input is never mutated.
- * `knownNodeIds`, when given, is the set of node ids of the loaded design: a label whose
- * id is not in the set counts as unmapped.
+ * `mapping`, when given, is the loaded design: an agent no block of it claims (`nodeOf`)
+ * counts as unmapped.
  */
-export function reduce(state: RunState, event: RunEvent, knownNodeIds?: ReadonlySet<string>): RunState {
+export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): RunState {
   switch (event.kind) {
     case 'run-start': {
       // A repeated start for the run already in progress must not drop its agents.
@@ -52,21 +85,21 @@ export function reduce(state: RunState, event: RunEvent, knownNodeIds?: Readonly
         const phase = typeof event.phase === 'string' && event.phase.length > 0 ? event.phase : undefined
         if (known.phase !== undefined || phase === undefined) return state
 
+        // An agent no label placed may be placed by its phase title, now that it has one.
+        const nodeId = known.nodeId ?? nodeOf(known.label, phase, mapping)
+        const counted = (one: NodeRun): NodeRun => ({ ...one, total: one.total + 1, [known.status]: one[known.status] + 1, tokens: one.tokens + known.tokens })
+
         return {
           ...state,
-          agents: { ...state.agents, [known.agentId]: { ...known, phase } },
-          byPhase: patchBucket(state.byPhase, phase, one => ({
-            ...one,
-            total: one.total + 1,
-            [known.status]: one[known.status] + 1,
-            tokens: one.tokens + known.tokens,
-          })),
+          agents: { ...state.agents, [known.agentId]: { ...known, nodeId, phase } },
+          byNode: nodeId === known.nodeId ? state.byNode : patchBucket(state.byNode, nodeId, counted),
+          byPhase: patchBucket(state.byPhase, phase, counted),
+          unmapped: nodeId === known.nodeId ? state.unmapped : state.unmapped.filter(id => id !== known.agentId),
         }
       }
 
       const label = typeof event.label === 'string' ? event.label : ''
-      const parsed = parseNodeId(label)
-      const nodeId = parsed !== undefined && (!knownNodeIds || knownNodeIds.has(parsed)) ? parsed : undefined
+      const nodeId = nodeOf(label, event.phase, mapping)
       const agent: AgentRun = { agentId: event.agentId, label, nodeId, phase: event.phase, status: 'running', tokens: 0 }
       // A spawn for the run that was held finished (the quiet period is a guess) reopens it.
       const sameRun = state.runId === undefined || state.runId === event.runId
@@ -127,7 +160,24 @@ export function reduce(state: RunState, event: RunEvent, knownNodeIds?: Readonly
   }
 }
 
+/**
+ * The state with every agent placed again under `mapping`: the design a run was given after it started.
+ * Each agent's block, the per-block counts and the unmapped list are made anew; the phases stay.
+ */
+export function remap(state: RunState, mapping?: Mapping): RunState {
+  const agents: RunState['agents'] = {}
+  let byNode: Buckets = {}
+  const unmapped: string[] = []
+  for (const agent of Object.values(state.agents)) {
+    const nodeId = nodeOf(agent.label, agent.phase, mapping)
+    agents[agent.agentId] = { ...agent, nodeId }
+    byNode = patchBucket(byNode, nodeId, one => ({ ...one, total: one.total + 1, [agent.status]: one[agent.status] + 1, tokens: one.tokens + agent.tokens }))
+    if (nodeId === undefined) unmapped.push(agent.agentId)
+  }
+  return { ...state, agents, byNode, unmapped }
+}
+
 /** Replays a list of events from an empty state. */
-export function reduceAll(events: readonly RunEvent[], knownNodeIds?: ReadonlySet<string>, from: RunState = emptyRunState()): RunState {
-  return events.reduce((state, event) => reduce(state, event, knownNodeIds), from)
+export function reduceAll(events: readonly RunEvent[], mapping?: Mapping, from: RunState = emptyRunState()): RunState {
+  return events.reduce((state, event) => reduce(state, event, mapping), from)
 }

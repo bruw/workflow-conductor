@@ -78,7 +78,6 @@ export type SegRole =
   | 'sep'
   | 'title'
   /** `×4`: bold. */
-  | 'fan'
   /** `· each: …`, `· stop: …`, `· 2–4 of 9`, `N blocks`, `o: open`: dim. */
   | 'fact'
   /** `haiku low` at the right of a leaf's first row. */
@@ -241,20 +240,6 @@ function cardText(node: DesignNode): string {
   return notes !== '' ? notes : (node.knobs?.prompt ?? '').trim()
 }
 
-/** The count a fan-out states (`×4 dimensions`, `4 angles`), or undefined when it names none. */
-function fanCount(fanout: string | undefined): number | undefined {
-  const count = /^\s*[×x]?\s*(\d+)\b/.exec(fanout ?? '')
-  return count ? Number(count[1]) : undefined
-}
-
-/** What a fan-out runs once for: the `oncePer` knob without its count (`×4 dimensions` → `dimensions`). */
-function eachOf(node: Pick<DesignNode, 'knobs'>): string {
-  const fanout = clean(node.knobs?.oncePer ?? '')
-  const rest = fanout.replace(/^[×x]?\s*\d+\b\s*/, '')
-  // The header says `each:` itself: a fan-out typed as "each finding" must not read `each: each finding`.
-  return (rest === '' ? fanout.replace(/^[×x]\s*/, '') : rest).replace(/^(for\s+)?each\b[\s:,-]*(of\s+(the\s+)?)?/i, '')
-}
-
 /** The word between two arms of a stack. */
 export function armWord(type: NodeType | undefined): string {
   return type === 'branch' ? 'OR' : '∥'
@@ -284,21 +269,21 @@ export function drawnOpen(depth: number, width: number): boolean {
 /** The most cells a model's name takes on a card: a model named in full is cut. */
 const KNOB_MAX = 14
 
-/** The quick knobs a block has by its type and kind, each with the digit that steps it (`stepKnob` in ops.ts): `1` model, `2` effort, `3` votes. */
+/** The quick knobs a block has by its type and kind, each with the digit that steps it (`stepKnob` in ops.ts): `1` model, `2` effort. */
 export function quickKnobs(node: Pick<DesignNode, 'type' | 'kind'>): { key: string; knob: QuickKnob }[] {
   const out: { key: string; knob: QuickKnob }[] = []
-  for (const slot of [1, 2, 3]) {
+  for (const slot of [1, 2]) {
     const knob = quickKnob(node, slot)
     if (knob !== undefined) out.push({ key: String(slot), knob })
   }
   return out
 }
 
-/** One chip: its digit, then the knob's value when it is set (lit), else the knob's name (dim): `1 sonnet`, `2 effort`, `3 votes 3`. */
+/** One chip: its digit, then the knob's value when it is set (lit), else the knob's name (dim): `1 sonnet`, `2 effort`. */
 function chipSegs(node: DesignNode, knob: QuickKnob, key: string): Seg[] {
   const value = node.knobs?.[knob]
   const set = value !== undefined && value !== ''
-  const text = !set ? knob : knob === 'votes' ? `votes ${value}` : clip(clean(String(value)), KNOB_MAX)
+  const text = !set ? knob : clip(clean(String(value)), KNOB_MAX)
   return [
     { text: `${key} `, role: 'key', chip: knob },
     { text, role: set ? 'value' : 'unset', chip: knob },
@@ -308,17 +293,6 @@ function chipSegs(node: DesignNode, knob: QuickKnob, key: string): Seg[] {
 /** Every quick knob of a block as chips, two cells between two. */
 function chipsOf(node: DesignNode): Seg[] {
   return quickKnobs(node).flatMap((quick, i) => [...(i > 0 ? [{ text: '  ', role: 'rule' as const }] : []), ...chipSegs(node, quick.knob, quick.key)])
-}
-
-/**
- * `×N` means a fan-out and nothing else: `×4` from a stated count (`×4 dimensions`, `4 angles`), `×n` for a
- * fan-out in words, '' for none and for one. Votes are never a `×`: they are said in words (`votes 3`).
- */
-function fanMark(node: Pick<DesignNode, 'knobs'>): string {
-  const fanout = node.knobs?.oncePer
-  if (!fanout) return ''
-  const count = fanCount(fanout)
-  return count === undefined ? '×n' : count > 1 ? `×${count}` : ''
 }
 
 const MANY: readonly NodeType[] = ['pipeline', 'parallel']
@@ -332,13 +306,13 @@ function lastOf(node: DesignNode): DesignNode {
 /**
  * The arrow leaving `from` inside `parent` (undefined at the top level; for a phase, the container the phase stands
  * in). Stages of a pipeline hand each item on with no barrier. Anywhere else the next block starts when `from` is
- * done: a barrier when `from` yields many results (a fan-out, votes, a pipeline, a parallel), a plain hand-off
- * when it yields one.
+ * done: a barrier when `from` yields many results (a pipeline, a parallel: by its type, never by what its
+ * fields say), a plain hand-off when it yields one.
  */
 function edgeKind(parent: NodeType | undefined, from: DesignNode): EdgeKind {
   if (parent === 'pipeline') return 'stream'
   const source = lastOf(from)
-  return MANY.includes(source.type) || fanMark(source) !== '' || (source.knobs?.votes ?? 1) > 1 ? 'barrier' : 'stream'
+  return MANY.includes(source.type) ? 'barrier' : 'stream'
 }
 
 /** What a block needs and lacks, said in its place before `[not set]`: an agent's brief, a loop's stop. */
@@ -393,8 +367,8 @@ function unnamed(block: Pick<DesignNode, 'type' | 'kind'>, title: string): boole
   return title === '' || title.toLowerCase() === defaultName(block)
 }
 
-/** `TYPE kind / Title ×4` in at most `room` cells: the type and kind whole, then the title cut, then the fan-out's mark when there is room left. */
-function nameSegs(block: Pick<DesignNode, 'type' | 'kind'>, title: string, fan: string, room: number, prefix: string = ''): Seg[] {
+/** `TYPE kind / Title` in at most `room` cells: the type and kind whole, then the title cut. */
+function nameSegs(block: Pick<DesignNode, 'type' | 'kind'>, title: string, room: number, prefix: string = ''): Seg[] {
   const segs: Seg[] = []
   let left = room
   if (prefix !== '' && left > prefix.length + 2) {
@@ -407,12 +381,8 @@ function nameSegs(block: Pick<DesignNode, 'type' | 'kind'>, title: string, fan: 
   left -= word.length
   const named = !unnamed(block, title)
   if (named && left >= 5) {
-    const keep = fan !== '' && left - 3 - (fan.length + 1) >= Math.min(title.length, 8) ? fan.length + 1 : 0
-    const text = clip(title, left - 3 - keep)
-    segs.push({ text: ' / ', role: 'sep' }, { text, role: 'title' })
-    left -= 3 + text.length
+    segs.push({ text: ' / ', role: 'sep' }, { text: clip(title, left - 3), role: 'title' })
   }
-  if (fan !== '' && left >= fan.length + 1) segs.push({ text: ` ${fan}`, role: 'fan' })
   return segs
 }
 
@@ -523,7 +493,6 @@ function leafBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
   const selected = node.id === ctx.selectedId
   const knobs = node.knobs ?? {}
   const title = clean(node.name)
-  const fan = fanMark(node)
   const rows: CardRow[] = []
 
   // Row 1: `TYPE / Title`, and at the right what is set of the model and effort, or (selected) the chips.
@@ -533,11 +502,11 @@ function leafBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
   let right: Seg[] = chips.length > 0 ? chips : meta === '' ? [] : [{ text: meta, role: 'meta' }]
   // Chips that do not fit beside the whole name get the next row (the selected card says its title in full);
   // a model and effort that do not fit beside a name cut short are left to the detail pane.
-  const nameAll = typeLabel(node).length + (unnamed(node, title) ? 0 : 3 + title.length) + (fan === '' ? 0 : fan.length + 1)
+  const nameAll = typeLabel(node).length + (unnamed(node, title) ? 0 : 3 + title.length)
   const beside = right.length === 0 || (chips.length > 0 ? nameAll : nameMin) + 2 + segsWidth(right) <= inner
   if (!beside) right = []
   const room = inner - (right.length > 0 ? segsWidth(right) + 2 : 0)
-  rows.push({ left: nameSegs(node, title, fan, room), right })
+  rows.push({ left: nameSegs(node, title, room), right })
   if (selected && !beside && chips.length > 0) {
     // One space between chips when two do not fit; then as many as do.
     const tight = segsWidth(chips) <= inner ? chips : chips.map(seg => (seg.role === 'rule' ? { ...seg, text: ' ' } : seg))
@@ -550,9 +519,9 @@ function leafBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
     if (kept.length > 0) rows.push({ left: kept, right: [] })
   }
 
-  // Row 2: what it does, and at the right its votes and what it hands on (for the args block, the input's shape).
+  // Row 2: what it does, and at the right what it hands on (for the args block, the input's shape).
   const lacks = missingOf(node)
-  const out = [knobs.votes !== undefined && chips.length === 0 ? `votes ${knobs.votes}` : '', knobs.output ? `${node.type === 'args' ? 'input' : 'output'}: ${clean(knobs.output)}` : ''].filter(one => one !== '').join(' · ')
+  const out = knobs.output ? `${node.type === 'args' ? 'input' : 'output'}: ${clean(knobs.output)}` : ''
   const idle = node.type === 'args' && firstLine(node) === '' && out === '' ? NO_INPUT : ''
   const said: Seg[] = lacks !== '' ? [{ text: `${lacks} `, role: 'note' }, { text: NOT_SET, role: 'error' }] : idle !== '' ? [{ text: idle, role: 'more' }] : firstLine(node) === '' ? [] : [{ text: firstLine(node), role: 'note' }]
   const capped = selected && lacks === '' ? cappedLines(cardText(node), inner, ctx.noteRows) : { lines: [], more: 0 }
@@ -579,7 +548,7 @@ function collapsedBox(node: DesignNode, w: number, depth: number, parent: Design
   const inside = insideOf(node)
   const count = `${inside} ${inside === 1 ? 'block' : 'blocks'}`
   const fits = typeLabel(node).length + 4 + count.length <= inner
-  const rows: CardRow[] = [{ left: nameSegs(node, clean(node.name), fanMark(node), inner - (fits ? count.length + 2 : 0), '▸ '), right: fits ? [{ text: count, role: 'fact' }] : [] }]
+  const rows: CardRow[] = [{ left: nameSegs(node, clean(node.name), inner - (fits ? count.length + 2 : 0), '▸ '), right: fits ? [{ text: count, role: 'fact' }] : [] }]
   const titles = kin.length === 0 ? EMPTY : kin.map(child => clean(child.name) || child.type).join(childFlow(node.type) === 'chain' ? ' → ' : ' | ')
   const hint = OPEN_HINT.length + 6 <= inner
   rows.push({ left: [{ text: clip(titles, inner - (hint ? OPEN_HINT.length + 2 : 0)), role: 'note' }], right: hint ? [{ text: OPEN_HINT, role: 'fact' }] : [] })
@@ -587,14 +556,12 @@ function collapsedBox(node: DesignNode, w: number, depth: number, parent: Design
   return { node, kind: 'collapsed', w, h: 4, depth, index, parentId: parent?.id, top, rows, inside, kids: [], first: 0, lead: 0, gap: 0 }
 }
 
-/** A container's header on its top border: `TYPE kind / Title ×4 · each: … · stop: … · 2–4 of 9`, with what fits `room`. */
+/** A container's header on its top border: `TYPE kind / Title · once per: … · stop: … · 2–4 of 9`, with what fits `room`. */
 function headSegs(node: DesignNode, room: number, range: string): Seg[] {
   const title = clean(node.name)
-  const fanout = clean(node.knobs?.oncePer ?? '')
-  const fan = fanMark(node)
   // The carousel's window is said before any knob: it is the one fact found nowhere else.
   const kept = range !== '' && room - (range.length + 3) >= typeLabel(node).length + Math.min(title.length + 3, 9) ? range.length + 3 : 0
-  const segs = nameSegs(node, title, fan === '×n' ? '' : fan, room - kept)
+  const segs = nameSegs(node, title, room - kept)
   let left = room - kept - segsWidth(segs)
   const fact = (label: string, text: string, whole: boolean = false): void => {
     if (text === '' || left < label.length + 3 + (whole ? text.length : Math.min(text.length, 6))) return
@@ -602,9 +569,9 @@ function headSegs(node: DesignNode, room: number, range: string): Seg[] {
     segs.push({ text: words, role: 'fact' })
     left -= words.length
   }
-  if (fanout !== '') fact('each: ', eachOf(node))
+  // Its fields as they were typed: nothing is read out of them.
+  fact('once per: ', clean(node.knobs?.oncePer ?? ''))
   fact('stop: ', clean(node.knobs?.stopCondition ?? ''))
-  if (fan === '×n') fact('', 'count unknown', true)
   if (kept > 0) segs.push({ text: ` · ${range}`, role: 'fact' })
   return segs
 }

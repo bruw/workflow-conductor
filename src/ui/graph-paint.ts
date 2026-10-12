@@ -104,15 +104,17 @@ type Frame = readonly [string, string, string, string, string, string]
  * A card's border by what it is, at rest and selected (heavy): a leaf's is a plain line, round; a chain's
  * (pipeline, the loops) is dashed, a stack's (parallel, sweep, branch) dotted; a phase has none and stands
  * on a ground of its own (`PHASE_GROUND`), with the plain heavy line while it is selected.
+ * A cell is twice as tall as wide, so a horizontal glyph has half the dashes of its vertical one
+ * (`╴` with `╎`, `╌` with `┊`): the pitch is then the same along both sides.
  */
 const FRAMES: Record<'leaf' | 'chain' | 'stack' | 'phase', { rest: Frame; selected: Frame }> = {
   leaf: { rest: ['╭', '─', '╮', '│', '╰', '╯'], selected: ['┏', '━', '┓', '┃', '┗', '┛'] },
-  chain: { rest: ['┌', '╌', '┐', '╎', '└', '┘'], selected: ['┏', '╍', '┓', '╏', '┗', '┛'] },
-  stack: { rest: ['┌', '┈', '┐', '┊', '└', '┘'], selected: ['┏', '┉', '┓', '┋', '┗', '┛'] },
+  chain: { rest: ['┌', '╴', '┐', '╎', '└', '┘'], selected: ['┏', '╸', '┓', '╏', '┗', '┛'] },
+  stack: { rest: ['┌', '╌', '┐', '┊', '└', '┘'], selected: ['┏', '╍', '┓', '┋', '┗', '┛'] },
   phase: { rest: [' ', ' ', ' ', ' ', ' ', ' '], selected: ['┏', '━', '┓', '┃', '┗', '┛'] },
 }
 /** A leaf in the pointer's hand. */
-const LIFTED: Frame = ['╭', '╌', '╮', '┆', '╰', '╯']
+const LIFTED: Frame = ['╭', '╴', '╮', '╎', '╰', '╯']
 
 function shapeOf(card: Pick<GraphCard, 'type' | 'flow'>): keyof typeof FRAMES {
   return card.type === 'phase' ? 'phase' : (card.flow ?? 'leaf')
@@ -259,8 +261,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
         return { color: tone.tint, ...loud }
       case 'title':
         return tone.faded ? { color: 'inactive', bold: true } : { bold: true, ...loud }
-      case 'fan':
-        return tone.faded ? { color: 'inactive', bold: true } : { bold: true }
       case 'arm':
         return { color: tone.faded ? 'inactive' : ACCENT.branch, bold: true }
       case 'error':
