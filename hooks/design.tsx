@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderChildren } from 'claude-code'
 
-import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, attachNote, changeWords, changedNote, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, guideText, knownAfterEdit, readReport, replaceDesign, showEdit, staleNote, toolDescription, unplacedNote } from '../src/design/chat'
+import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, attachNote, changeWords, changedNote, clearFlash, designOfPath, diffDesigns, draftBrief, editReport, knownAfterEdit, readReport, replaceDesign, showEdit, staleNote, toolDescription, unplacedNote } from '../src/design/chat'
 import { UNDO_HINT, remember, travel } from '../src/design/history'
 import type { History } from '../src/design/history'
 import { lint, preflightLine, problemFields, problemParts } from '../src/design/lints'
@@ -1505,8 +1505,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   on('tool.call', { tool: TOOL_FULL_NAME }, async ($, e) => {
     const input = e as unknown as Record<string, unknown>
     const action = input.action
-    if (action === 'guide') return { result: guideText() }
-    if (action !== 'read' && action !== 'apply' && action !== 'write' && action !== 'attach') return { deny: 'action must be one of read, apply, write, attach, guide' }
+    if (action !== 'read' && action !== 'apply' && action !== 'write' && action !== 'attach') return { deny: 'action must be one of read, apply, write, attach' }
 
     // Text typed into a field and not sent is the person's edit: saved first, so Claude reads it, and an edit made
     // without having read it is refused as stale (below) instead of writing over it.

@@ -7,7 +7,7 @@
 import { OUTLINE_MAX, outline } from './handoff'
 import { OFFER_TOOL_FULL_NAME } from './offer'
 import { lint } from './lints'
-import { CONTAINER_TYPES, EFFORTS, KINDS, NODE_TYPES, startOf, typeName, canHoldChildren, findNode, flatten, kindsOf, parseDesign, readType, serializeDesign } from './model'
+import { CONTAINER_TYPES, KINDS, NODE_TYPES, startOf, typeName, canHoldChildren, findNode, flatten, kindsOf, parseDesign, readType, serializeDesign } from './model'
 import type { Design, DesignNode, Kind, Row } from './model'
 import { addNode, moveNode, nextIdNumber, removeNode, retypeNode, updateNode } from './ops'
 import type { NodePatch, Place } from './ops'
@@ -22,7 +22,7 @@ export const TOOL_NAME = 'design'
 export const TOOL_FULL_NAME = 'mcp__conductor__design'
 export const DESIGN_DIR_HINT = `${DESIGN_DIR}/<name>.json`
 
-export const ACTIONS = ['read', 'apply', 'write', 'attach', 'guide'] as const
+export const ACTIONS = ['read', 'apply', 'write', 'attach'] as const
 export const OP_KINDS = ['add', 'update', 'move', 'remove'] as const
 
 const KNOB_NAMES = Object.keys(KNOB_HELP)
@@ -53,26 +53,26 @@ function knobLine(): string {
     .join('; ')
 }
 
-/** What the model reads once it has loaded the tool (it is deferred: only its name is in every turn). The long cards are behind `guide`. */
+/** What the model reads once it has loaded the tool (it is deferred: only its name is in every turn). */
 export function toolDescription(): string {
   return [
     `Reads and edits the user's Conductor workflow design: the board of blocks they see, saved at ${DESIGN_DIR_HINT}. Use it whenever the user asks to draft, add, change, move or remove workflow blocks or steps ("add a verify after n3", "this block"); do not edit that file by hand. A design is a spec the user reviews, not a script: never run it from here.`,
-    'Actions: read = the design JSON, the block selected on the board ("this block") and the lints. Read before you describe, review or edit a design, unless a Conductor note with the prompt has told you what changed: the user changes the board by hand between your turns, so what you read or wrote earlier may be gone (every answer names the revision it shows). apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures): keep the id of every block that stays, leave id off new ones. attach = a write, with `match`, of a design OF the workflow run tracked now: the run shows on it. guide = the long help card of every type. `name` defaults to the design open on the board. An edit shows on the board at once and returns the lints: fix them or tell the user.',
-    "Block: { id, type, kind?, name, logic?, knobs?, match?, children? }. Ids (n1, n2…) are assigned for you and never change. name is a short label; logic is free text saying what the block should do. match only ties a block to a script that exists (see the schema). Order is execution order. Only containers hold children. Blocks directly inside a branch are its arms (one runs, picked by its `condition`), and directly inside a parallel they run side by side: to run two blocks one after the other there, put both in a pipeline. Every design starts with its start block: it is not added, moved or removed, and it alone has the knobs `goal` (the goal of the whole workflow, in a sentence: set it when drafting, keep it true) and `args` (the workflow's input, or unset for none). Update it by id; in a write, put it first, or leave it out to keep it as it is. A phase only frames its blocks: they run in order where it stands.",
+    'Actions: read = the design JSON, the block selected on the board ("this block") and the lints. Read before you describe, review or edit a design, unless a Conductor note with the prompt has told you what changed: the user changes the board by hand between your turns, so what you read or wrote earlier may be gone (every answer names the revision it shows). apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures). attach = a write, with `match`, of a design OF the workflow run tracked now: the run shows on it. An edit shows on the board at once and returns the lints: fix them or tell the user.',
+    "Block: { id, type, kind?, name, logic?, knobs?, match?, children? }. Ids (n1, n2…) are assigned for you and never change. name is a short label; logic is free text saying what the block should do. Order is execution order. Only containers hold children. Blocks directly inside a branch are its arms (one runs, picked by its `condition`), and directly inside a parallel they run side by side: to run two blocks one after the other there, put both in a pipeline. Every design starts with its start block: it is not added, moved or removed, and it alone has the knobs `goal` (the goal of the whole workflow, in a sentence: set it when drafting, keep it true) and `args` (the workflow's input, or unset for none). Update it by id; in a write, put it first, or leave it out to keep it as it is.",
     'Types:',
     ...typeLines(),
-    `Kinds: \`kind\` names the pattern a block is used for (each explained on \`kind\` in the schema); leave it out for the plain block. ${kindNames()}. A new block of a kind gets the knobs its pattern needs where you set none. The board and the lints say a key in words: oncePer is "once per", stopCondition "stop condition".`,
-    // What each knob means is said on `knobs` in the schema: a description is cut at 4096 characters, and the types take them.
+    `Kinds: \`kind\` names the pattern a block is used for (each explained on \`kind\` in the schema); leave it out for the plain block. ${kindNames()}.`,
+    // A description is cut at 4096 characters, and the types take them: what belongs to one field (what each knob and kind means, how a write keeps ids) is said on that field in the schema.
     `Knobs, all optional, explained on \`knobs\` in the schema: ${KNOB_NAMES.join(', ')}.`,
   ].join('\n')
 }
 
 const BLOCK_FIELDS = {
   type: { enum: [...NODE_TYPES] },
-  kind: { type: 'string', description: `Optional: the pattern, by type. ${kindLine()}. In an update, "" makes the block plain again.` },
+  kind: { type: 'string', description: `Optional: the pattern, by type. ${kindLine()}. A new block of a kind gets the knobs its pattern needs where you set none. In an update, "" makes the block plain again.` },
   name: { type: 'string' },
   logic: { type: 'string' },
-  knobs: { type: 'object', description: `All optional: ${knobLine()}. In an update, "" clears a knob.` },
+  knobs: { type: 'object', description: `All optional: ${knobLine()}. The board and the lints say a key in words: oncePer is "once per", stopCondition "stop condition". In an update, "" clears a knob.` },
   match: { type: 'array', items: { type: 'string' }, description: "Only on a design of a script that exists: the script's agent labels or phase titles this block stands for, each exact, or a prefix when it ends in *. In an update, [] clears it." },
   children: { type: 'array', items: { type: 'object' }, description: 'Blocks inside a container, same shape.' },
 }
@@ -95,29 +95,11 @@ export const TOOL_SCHEMA: Record<string, unknown> = {
     },
     nodes: {
       type: 'array',
-      description: 'write/attach. The whole tree, top level first.',
+      description: 'write/attach. The whole tree, top level first: keep the id of every block that stays, leave id off new ones.',
       // The knobs are explained once, on the ops.
       items: { type: 'object', required: ['type', 'name'], properties: { id: { type: 'string', description: 'Only for a block that already exists.' }, ...BLOCK_FIELDS, kind: { type: 'string', description: 'The same kinds as in `ops`.' }, knobs: { type: 'object', description: 'The same knobs as in `ops`.' }, match: { type: 'array', items: { type: 'string' }, description: 'As in `ops`.' } } },
     },
   },
-}
-
-/** Every type's long card: what `guide` answers. */
-export function guideText(): string {
-  const lines: string[] = [`Containers (the only blocks that hold children): ${CONTAINER_TYPES.join(', ')}.`, `Knobs: ${knobLine()}.`, `Effort values: ${EFFORTS.join(', ')}.`, '']
-  for (const type of NODE_TYPES) {
-    lines.push(`${type}${TEACH[type].name === type ? '' : ` — ${TEACH[type].name}`}: ${TEACH[type].hint}. Use when ${TEACH[type].when}.`)
-    for (const line of TEACH[type].card) lines.push(`  ${line}`)
-    // Its kinds but the plain one, each with what it fills in and what it is in the script.
-    for (const kind of kindsOf(type).slice(1)) {
-      const teach = KIND_TEACH[kind]
-      const fill = Object.entries(teach.fill ?? {}).map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-      lines.push(`  kind ${kind}: ${teach.hint}. Use when ${teach.when}.`)
-      for (const line of teach.card) lines.push(`    ${line}`)
-      lines.push(`    In the script: ${teach.script}.${fill.length > 0 ? ` Filled in on a new block: ${fill.join(', ')}.` : ''}`)
-    }
-  }
-  return lines.join('\n')
 }
 
 /** What a draft is, whichever way it was asked for: the two sentences every brief for one says. */
