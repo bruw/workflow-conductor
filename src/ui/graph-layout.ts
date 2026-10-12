@@ -280,13 +280,13 @@ export function quickKnobs(node: Pick<DesignNode, 'type' | 'kind'>): { key: stri
   return out
 }
 
-/** One chip: its digit, then the knob's value when it is set (lit), else the knob's name (dim): `1 sonnet`, `2 effort`. */
+/** One chip: its digit in brackets, as a key of the legend is, then the knob's value when it is set (lit), else the knob's name (dim): `[1] sonnet`, `[2] effort`. */
 function chipSegs(node: DesignNode, knob: QuickKnob, key: string): Seg[] {
   const value = node.knobs?.[knob]
   const set = value !== undefined && value !== ''
   const text = !set ? knob : clip(clean(String(value)), KNOB_MAX)
   return [
-    { text: `${key} `, role: 'key', chip: knob },
+    { text: `[${key}] `, role: 'key', chip: knob },
     { text, role: set ? 'value' : 'unset', chip: knob },
   ]
 }
@@ -721,7 +721,7 @@ export function layoutGraph(design: Design, options: GraphOptions): GraphLayout 
         for (const seg of side) {
           const last = chips.at(-1)
           if (seg.chip && last && last.knob === seg.chip && last.y === y + i && last.x + last.w === at) last.w += seg.text.length
-          else if (seg.chip) chips.push({ x: at, y: y + i, w: seg.text.length, h: 1, id: card.id, knob: seg.chip, key: seg.text.trim() })
+          else if (seg.chip) chips.push({ x: at, y: y + i, w: seg.text.length, h: 1, id: card.id, knob: seg.chip, key: seg.text.replace(/[^0-9]/g, '') })
           at += seg.text.length
         }
       }

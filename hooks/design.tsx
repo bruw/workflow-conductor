@@ -80,8 +80,8 @@ import { replayDesignEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
 import { NOT_SET, UNMAPPED_ID, canOpen, typeLabel } from '../src/ui/graph-layout'
 import { parseGraphMessage } from '../src/ui/graph-model'
-import { ENTER, KEY_OPS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_CORE_W, LEGEND_GAP } from '../src/ui/keys'
-import type { KeyOp, LegendItem } from '../src/ui/keys'
+import { ENTER, KEY_OPS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
+import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
 import { FAILED, fmtTokens } from '../src/ui/rail'
 import { GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene } from '../src/ui/persona'
 import type { PersonaSpan, Pose } from '../src/ui/persona'
@@ -114,6 +114,10 @@ const TYPE_KEY = 'design-type'
 const REST_KEY = 'design-rest:'
 /** A row of the start screen: `start:saved:demo`, `start:template:review`. */
 const START_KEY = 'start:'
+/** The design's name in the header: a press lists the project's designs. */
+const NAME_BUTTON_KEY = 'project-name'
+/** A button of the pane's last row, before its key: `act:r`. */
+const ACT_KEY = 'act:'
 /** Saved designs the start screen lists at once where it is short of rows: a window around the marked one. */
 const SAVED_ROWS = 8
 /** Design files read for a listing, at most. */
@@ -203,8 +207,8 @@ const GRAPH_LEAST_ROWS = 3
 const DETAIL_REST_SHARE = 0.45
 /** The detail pane's last rows name the keys that act on it: at most this many docked, one inline or where the pane is short. */
 const HINT_ROWS = 2
-/** The footer's legend, docked: one row where the pane is wide enough for its keys (`LEGEND_CORE_W`), else wrapped onto this many. */
-const LEGEND_WRAP_ROWS = 2
+/** Cells between two buttons of the pane's last row. */
+const ACTION_GAP = 4
 /** What is said stands in the rule over the footer, docked: this many cells of rule are kept at each side of it. */
 const SAID_RULE_W = 3
 /** Rows asked for when the pane sits inline above the prompt. */
@@ -360,6 +364,8 @@ const CATCH_FULL = 40
 let doored = { element: '', taken: 0 }
 /** The saved designs as last read, by name, for the start screen's preview: null for a file that is no design. */
 const previews: Record<string, Design | null> = {}
+/** The design the list of the project's designs was opened from, as it stood: one no file holds yet comes back from here. */
+let behind: { design: Design; ui: DesignUi } | null = null
 /**
  * What the catcher's text held when it was last read, by the key it was drawn under: the characters after that are the
  * new ones. `sent` is the text Enter was last pressed on, until the next key: Enter empties the catcher (seen live,
@@ -868,6 +874,71 @@ const startFrom = async ($: EngineInterface, templateId: string): Promise<void> 
   settleRing($)
 }
 
+/** The saved designs under `root`, each read: its line for a list, and its design kept for the start screen's graph. */
+const readSaved = async ($: EngineInterface, root: string): Promise<SavedDesign[]> => {
+  const dir = `${root.replace(/\/+$/, '')}/${DESIGN_DIR}`
+  const entries = await $.fs.list(dir).catch(() => [])
+  const names = entries
+    .filter(entry => entry.kind === 'file' && entry.name.endsWith('.json'))
+    .map(entry => entry.name.slice(0, -'.json'.length))
+    .filter(isSaved)
+    .sort()
+  const saved: SavedDesign[] = []
+  for (const one of names.slice(0, SAVED_MAX)) {
+    const text = await $.fs.read(`${dir}/${one}.json`).catch(() => '')
+    const parsed = parseDesign(text)
+    previews[one] = parsed.ok ? parsed.design : null
+    saved.push(savedDesign(one, text))
+  }
+
+  return saved
+}
+
+/** `p`, or a press on the header's name: the start screen over the design shown, its row marked. The design is kept for the way back. */
+const openProject = async ($: EngineInterface): Promise<void> => {
+  await flushDrafts($)
+  const held = await read($, uiAtom)
+  if (held.status !== 'ready' && held.status !== 'error') return
+  const design = await read($, designAtom)
+  const saved = await readSaved($, await $.session.root())
+  behind = design !== null && held.status === 'ready' ? { design, ui: { ...held, editing: false, freshId: null, picker: null, confirmId: null, help: 0, notice: null } } : null
+  // A template picked there starts a new design, under a name no saved one has.
+  const started = openDesign(freeName(saved.map(one => one.name)), undefined, held)
+  await update($, designAtom, () => null)
+  await update($, uiAtom, () => ({ ...started.ui, saved, startMark: Math.max(0, saved.findIndex(one => one.name === held.name)), back: held.name }))
+  settleRing($)
+}
+
+/** Back from the list of the project's designs to the one it was opened from: as its file has it now, or as it stood where no file holds it yet. */
+const closeProject = async ($: EngineInterface): Promise<void> => {
+  const held = await read($, uiAtom)
+  const name = held.back ?? null
+  if (held.status !== 'pick' || name === null) return
+  const kept = behind !== null && behind.ui.name === name ? behind : null
+  const text = isSaved(name) ? await $.fs.read(designFile(await $.session.root(), name)).catch(() => undefined) : undefined
+  const step = typeof text === 'string' ? openDesign(name, text, held) : null
+  behind = null
+  if (step !== null && step.design !== null) {
+    // The view it was left in, where that container is still there.
+    const design = step.design
+    const viewRootId = kept !== null && kept.ui.viewRootId !== null && findNode(design, kept.ui.viewRootId) ? kept.ui.viewRootId : null
+    await update($, designAtom, () => design)
+    await update($, uiAtom, () => ({ ...step.ui, viewRootId, carousels: kept?.ui.carousels ?? {}, runCleared: kept?.ui.runCleared ?? false, follow: kept?.ui.follow ?? true }))
+  } else if (step !== null) {
+    // Its file is no design any more: said as it is when opened by name.
+    await update($, designAtom, () => null)
+    await update($, uiAtom, () => step.ui)
+  } else if (kept !== null) {
+    await update($, designAtom, () => kept.design)
+    await update($, uiAtom, ui => ({ ...kept.ui, detailHidden: ui.detailHidden === true, picks: ui.picks ?? {} }))
+  } else {
+    await update($, uiAtom, ui => ({ ...ui, back: null, notice: `${name} is gone: it could not be read` }))
+
+    return
+  }
+  settleRing($)
+}
+
 /** A saved design picked on the start screen: read again as it is now, and shown. */
 const openSaved = async ($: EngineInterface, name: string): Promise<void> => {
   const held = await read($, uiAtom)
@@ -889,11 +960,20 @@ const openEntry = async ($: EngineInterface, at?: number): Promise<void> => {
   if (ui.status !== 'pick') return
   const entry = startEntries(ui.saved ?? [])[at ?? ui.startMark ?? 0]
   if (!entry) return
+  const back = ui.back ?? null
+  // The design the list was opened from: back to it, as it stood.
+  if (entry.kind === 'saved' && entry.id === back) return closeProject($)
+  // A design started from a template and never edited has no file: left for another, nothing of it is kept.
+  const dropped = back !== null && behind !== null && behind.ui.name === back && behind.ui.unsaved ? back : null
   if (entry.kind === 'saved') await openSaved($, entry.id)
   else await startFrom($, entry.id)
+  const now = await read($, uiAtom)
+  if (now.status !== 'ready') return
+  behind = null
+  if (dropped !== null && now.notice === null) await say($, `${dropped} was not saved: nothing of it was kept`)
 }
 
-/** One key on the start screen: `w` / `s` move the mark (the arrows do too: the `ui.focus` hook), Enter opens the marked row, `?` turns the help pages and `x` closes them. */
+/** One key on the start screen: `w` / `s` move the mark (the arrows do too: the `ui.focus` hook), Enter opens the marked row, `?` turns the help pages and `x` closes them; opened from a design, `x` and `p` go back to it. */
 const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   if (key === ENTER) {
     await openEntry($)
@@ -905,7 +985,12 @@ const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   if (op === 'up' || op === 'down') await update($, uiAtom, held => ({ ...moveStartMark(held, op === 'up' ? -1 : 1), help: 0 }))
   else if (op === 'help') await update($, uiAtom, held => ({ ...held, notice: null, help: ((held.help ?? 0) % HELP_PAGES) + 1 }))
   else if (op === 'remove' && ((await read($, uiAtom)).help ?? 0) > 0) await update($, uiAtom, held => ({ ...held, help: 0 }))
-  else await say($, unboundNotice(key))
+  // Opened from a design: `x` goes back to it, and so does the key that opened the list.
+  else if ((op === 'remove' || op === 'project') && ((await read($, uiAtom)).back ?? null) !== null) {
+    await closeProject($)
+
+    return false
+  } else await say($, unboundNotice(key))
 
   return true
 }
@@ -918,6 +1003,8 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   const ui = await read($, uiAtom)
   const design = await read($, designAtom)
   if (ui.status === 'pick') return startKey($, key)
+  // A file that is no design: the one key is the way to the others.
+  if (ui.status === 'error' && KEY_OPS[key] === 'project') await openProject($)
   if (ui.status !== 'ready' || design === null) return false
   const { locked } = await runContext($)
   const node = ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
@@ -964,6 +1051,11 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   await keepSaid($, flushed)
   // A request waits in the prompt box: the key was not acted on, and the pane says how to get to the prompt.
   if (ui.handed) return false
+  if (op === 'project') {
+    await openProject($)
+
+    return false
+  }
   if ((op === 'run' || op === 'review') && !locked) {
     await request($, op === 'run' ? 'run' : 'ask')
 
@@ -1228,19 +1320,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const saved: SavedDesign[] = []
     // The saved designs, each read: `/conductor list` prints them, the start screen lists them and draws the marked one.
     const listSaved = async (): Promise<void> => {
-      const dir = `${root.replace(/\/+$/, '')}/${DESIGN_DIR}`
-      const entries = await $.fs.list(dir).catch(() => [])
-      const names = entries
-        .filter(entry => entry.kind === 'file' && entry.name.endsWith('.json'))
-        .map(entry => entry.name.slice(0, -'.json'.length))
-        .filter(isSaved)
-        .sort()
-      for (const one of names.slice(0, SAVED_MAX)) {
-        const text = await $.fs.read(`${dir}/${one}.json`).catch(() => '')
-        const parsed = parseDesign(text)
-        previews[one] = parsed.ok ? parsed.design : null
-        saved.push(savedDesign(one, text))
-      }
+      saved.push(...(await readSaved($, root)))
     }
     if (verb === 'list' || fresh) await listSaved()
 
@@ -1775,7 +1855,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const headColumns = columns - SMALL_W
     // The run laid over this design, when it was started from it.
     const run = await read($, runAtom)
-    const over = overlaysDesign(run, await read($, runDesignAtom), ui)
+    const runDesign = await read($, runDesignAtom)
+    const over = overlaysDesign(run, runDesign, ui)
     const locked = over && run.status === 'running'
     // The tick clock is read only while it matters, so an idle pane is not redrawn by it.
     const clock = locked ? await read($, clockAtom) : 0
@@ -1798,39 +1879,66 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const mark = Math.max(0, Math.min(entries.length - 1, ui.startMark ?? 0))
     const marked = entries[mark]
 
-    // Row 1: the design's name, and at the right what state it is in. Every part is cut to its room, so the row never wraps.
+    // Row 1: the design's name, what state it is in, the agents it starts. Every part is cut to its room, so the row never wraps.
     const drafting = ui.drafting === true && design !== null && isBlank(design)
-    const summary = over ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, columns - 24)) : null
+    // The list of the project's designs, opened from one: the start screen, with the way back.
+    const project = starting && (ui.back ?? null) !== null
+    const summary = over ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, headColumns - COMMAND.length - 3 - 10 - 3)) : null
+    const begins = project ? 'PROJECT' : 'START'
     const state: { text: string; color: 'claude' | 'success' | 'error' | typeof FADED } =
       summary !== null
         ? { text: summary.text.replace(/^[a-z]+/, word => word.toUpperCase()), color: summary.color }
         : drafting
           ? { text: 'DRAFTING', color: 'claude' }
           : starting && marked
-            ? { text: marked.kind === 'saved' ? 'START · a saved design' : marked.kind === 'blank' ? 'START · a blank design' : `START · from the ${marked.title} template`, color: FADED }
+            ? { text: marked.kind === 'saved' ? `${begins} · a saved design` : marked.kind === 'blank' ? `${begins} · a blank design` : `${begins} · from the ${marked.title} template`, color: FADED }
             : ui.status !== 'ready' || !design
               ? { text: 'design', color: FADED }
               : { text: `EDITING · ${!isSaved(ui.name) ? 'replay, not saved' : !ui.unsaved ? 'saved' : isBlank(design) ? 'not saved yet' : 'unsaved template'}`, color: FADED }
     // On the start screen the name is the one the marked row opens: the saved design's, or the one a new design gets.
     const shownName = starting && marked?.kind === 'saved' ? marked.id : ui.name
-    // After the name, in a colour of its own, the design's facts (the agents it starts): left out where the row has no room for them.
-    const headOf = (facts: string | null) => {
-      const room = headColumns - COMMAND.length - 5 - state.text.length
-      const count = facts !== null && room - facts.length - 3 >= 8 ? facts : null
-      return (
-        <Box flexDirection="row" justifyContent="space-between">
-          <Box flexDirection="row" flexShrink={0}>
-            <Text bold color="claude">{COMMAND}</Text>
-            <Text color={FADED}>{' / '}</Text>
-            <Text bold color={TEXT}>{clip(shownName, Math.max(8, room - (count === null ? 0 : count.length + 3)))}</Text>
-            {count !== null && <Text color={FADED}>{' / '}</Text>}
-            {count !== null && <Text key="design-facts" color="suggestion">{count}</Text>}
-          </Box>
-          <Box flexShrink={0}>
-            <Text key="design-state" color={state.color}>{state.text}</Text>
-          </Box>
-        </Box>
-      )
+    // The name is pressed for the list of the project's designs, and there for the way back: the mark after it says which.
+    const pressable = project || !starting
+    const nameMark = !pressable ? '' : project ? ' ▴' : ' ▾'
+    // One row of keys, on the header's second row and on the detail pane's last rows: each key in brackets in the accent colour, its word dim; all of it dim while the keys are in the prompt.
+    const legendRow = (row: readonly LegendItem[]) => (
+      <Text wrap="truncate-end">
+        {row.flatMap((item, index) => [
+          <Text color={focused ? 'claude' : FADED}>{`${index > 0 ? ' '.repeat(LEGEND_GAP) : ''}[${item.keys}]`}</Text>,
+          <Text color={FADED}>{` ${item.word}`}</Text>,
+        ])}
+      </Text>
+    )
+    // The header's two rows. After the name its state, quiet, then in a colour of its own the design's facts (the agents
+    // it starts). Short of room the facts go first, then the state; the name keeps eight cells at the least.
+    // Row 2 is the legend: one row, and what does not fit is left to the help pages.
+    const headOf = (facts: string | null, keys: readonly LegendItem[] = []) => {
+      const room = headColumns - COMMAND.length - 3 - nameMark.length
+      const said = room - state.text.length - 3 >= 8 ? state : null
+      const left = room - (said === null ? 0 : said.text.length + 3)
+      const count = said !== null && facts !== null && left - facts.length - 3 >= 8 ? facts : null
+      const name = <Text bold color={TEXT}>{clip(shownName, Math.max(8, left - (count === null ? 0 : count.length + 3)))}</Text>
+      return [
+        <Box flexDirection="row" height={1} flexShrink={0}>
+          <Text bold color="claude">{COMMAND}</Text>
+          <Text color={FADED}>{' / '}</Text>
+          {pressable ? (
+            <Button key={NAME_BUTTON_KEY} plain onPress={() => queueKeys($, ['p'])}>
+              {name}
+              <Text color={focused ? 'claude' : FADED}>{nameMark}</Text>
+            </Button>
+          ) : (
+            name
+          )}
+          {said !== null && <Text color={FADED}>{' / '}</Text>}
+          {said !== null && <Text key="design-state" color={said.color}>{said.text}</Text>}
+          {count !== null && <Text color={FADED}>{' / '}</Text>}
+          {count !== null && <Text key="design-facts" color="suggestion">{count}</Text>}
+        </Box>,
+        <Box key="design-legend" flexDirection="row" height={1} flexShrink={0}>
+          {keys.length > 0 ? legendRow(legendRows(keys, headColumns, 1)[0] ?? []) : <Text color={TEXT}> </Text>}
+        </Box>,
+      ]
     }
 
     if (ui.status === 'closed') {
@@ -1845,7 +1953,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     if (ui.status === 'error') {
       return (
         <Box flexDirection="column" paddingLeft={1}>
-          {headOf(null)}
+          {headOf(null, [{ keys: 'p', word: 'Project', core: true }])}
           <Text color="error">{`${file} could not be used: ${ui.error ?? 'unknown reason'}`}</Text>
           <Text color={FADED}>{`The file was left as it is. Fix or remove it, then run /${COMMAND} design ${ui.name} again.`}</Text>
         </Box>
@@ -1886,27 +1994,37 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     }
     // A rule across the pane: under the header and above the footer; stacked, between the graph and the detail pane too.
     const rule = () => <Text color={RULE}>{'─'.repeat(columns)}</Text>
-    // One row of keys, in the footer's legend and on the detail pane's last rows: each key in brackets in the accent colour, its word dim; all of it dim while the keys are in the prompt.
-    const legendRow = (row: readonly LegendItem[]) => (
-      <Text wrap="truncate-end">
-        {row.flatMap((item, index) => [
-          <Text color={focused ? 'claude' : FADED}>{`${index > 0 ? ' '.repeat(LEGEND_GAP) : ''}[${item.keys}]`}</Text>,
-          <Text color={FADED}>{` ${item.word}`}</Text>,
-        ])}
-      </Text>
-    )
-    // The footer is its legend, centred: docked, one row where the pane is wide enough for its keys and two where it is
-    // not, whatever they hold, so the footer keeps its height; inline, one row.
-    const legendMost = !dock ? 1 : columns >= LEGEND_CORE_W ? 1 : LEGEND_WRAP_ROWS
-    const legendOf = (items: readonly LegendItem[]) => (
-      <Box key="design-legend" flexDirection="column" alignItems="center" height={legendMost} flexShrink={0}>
-        {legendRows(items, columns, legendMost).map(legendRow)}
+    // The pane's last row: the keys that ask something of Claude or put a run away, as buttons, centred. One row always,
+    // blank where there is none to press (the start screen), so the pane keeps its shape. One that cannot be pressed now is dim.
+    const actionsOf = (actions: readonly LegendAction[]) => (
+      <Box key="design-actions" flexDirection="row" justifyContent="center" height={1} flexShrink={0}>
+        {actions.length === 0 && <Text color={TEXT}> </Text>}
+        {actions.flatMap((action, index) => {
+          const label = (
+            <Text>
+              <Text color={action.on && focused ? 'claude' : FADED}>{`[${action.key}]`}</Text>
+              <Text color={action.on ? TEXT : FADED}>{` ${action.word}`}</Text>
+            </Text>
+          )
+          return [
+            ...(index > 0 ? [<Box width={ACTION_GAP} flexShrink={0} />] : []),
+            action.on ? (
+              <Box flexShrink={0}>
+                <Button key={`${ACT_KEY}${action.key}`} plain onPress={() => queueKeys($, [action.key])}>
+                  {label}
+                </Button>
+              </Box>
+            ) : (
+              label
+            ),
+          ]
+        })}
       </Box>
     )
     // The rows. Header, rules and footer keep theirs; the graph and the detail pane share the rest. Docked, a rule
     // stands under the header and one above the footer, and `stacked` (the detail pane under the graph) one between the two.
-    // Inline the rows are few: no rule, what is said has the row over the keys, and the pane never asks for more rows than it has (it would scroll, and the header leave).
-    const footRows = dock ? legendMost : 2
+    // Inline the rows are few: no rule, what is said has the row over the buttons, and the pane never asks for more rows than it has (it would scroll, and the header leave).
+    const footRows = dock ? 1 : 2
     const mainRowsFor = (stacked: boolean): number => Math.max(wide ? GRAPH_LEAST_ROWS + 2 : dock ? HINT_ROWS + 1 : 2, bodyRows - HEAD_ROWS - (dock ? 2 : 0) - (stacked ? 1 : 0) - footRows)
     // The key catcher, the ring's place while no field is open: in the tree, where it is the pane's first stop, and not drawn.
     const catcher = () =>
@@ -1976,9 +2094,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // frame's, which would take the pane's full width from the detail pane. Beside the graph the detail pane has the
     // main rows to itself and the graph is laid over its left. `detail` is null while the detail pane is hidden.
     const margin = (children: RenderChildren) => <Box flexDirection="column" paddingLeft={1} paddingRight={1}>{children}</Box>
-    const frame = (catching: boolean, head: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, beside: boolean, mainRows: number, said: Said, legend: RenderChildren) => (
+    const frame = (catching: boolean, head: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, beside: boolean, mainRows: number, said: Said, actions: RenderChildren) => (
       <Box flexDirection="column" position="relative">
-        {catching && catcher()}
         <Box flexDirection="row" paddingLeft={1} paddingRight={1}>
           <Box key="design-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
             {Svg ? <Svg source={smallPersonaSvg(pose)} alt={`the conductor, ${pose}`} width={SMALL_SVG_W} height={SMALL_SVG_H} /> : spanRows(smallPersona(pose))}
@@ -1987,6 +2104,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             {head}
           </Box>
         </Box>
+        {/* After the header: the name there is a stop before the catcher, so the Down arrow still goes from the catcher to the detail pane. */}
+        {catching && catcher()}
         {dock && margin(rule())}
         {beside ? (
           <Box flexDirection="column" height={mainRows}>
@@ -1999,7 +2118,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             {detail}
           </Box>
         )}
-        {margin([saidRow(said), legend])}
+        {margin([saidRow(said), actions])}
         {beside && (
           <Box position="absolute" top={HEAD_ROWS + (dock ? 1 : 0)} left={1} flexDirection="row" height={mainRows}>
             {graph}
@@ -2084,9 +2203,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         shown = previews[marked.id] ?? null
       } else if (marked) shown = TEMPLATES.find(one => one.id === marked.id)?.make() ?? emptyDesign(ui.name)
       const mainRows = mainRowsFor(dock && !wide)
-      // The keys: the list's on the detail pane's last rows, the rest in the footer.
-      const keys = legendItems({ ring: 'start', placed: false, retype: false, empty: true, helping, locked: false, selected: false, container: false, nested: false, results: false, undo: false, redo: false, knobs: [], hidden: false })
-      const legend = legendOf(keys.footer)
+      // The keys: the list's on the detail pane's last rows, the rest in the header.
+      const keys = legendItems({ ring: 'start', placed: false, retype: false, empty: true, helping, locked: false, selected: false, container: false, nested: false, results: false, undo: false, redo: false, hidden: false, back: project })
       const message = focused ? ui.notice : KEYS_CUE
 
       // The list: the saved designs, then the templates, one row each, the marked one said in `claude`.
@@ -2094,7 +2212,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const countW = Math.max(...entries.map(one => (one.kind === 'blank' ? 0 : blocksWord(one.blocks).length)))
       const entryRow = (entry: (typeof entries)[number], at: number): Item => {
         const lit = at === mark
-        const note = clip(entry.note, Math.max(0, detailW - 2 - nameW - 2 - countW - 2))
+        // The design the list was opened from says so, and the one a run is on.
+        const tags = entry.kind !== 'saved' ? [] : [...(entry.id === ui.back ? ['open'] : []), ...(entry.id === runDesign && run.status === 'running' ? ['running'] : [])]
+        const note = clip([...tags, ...(entry.note === '' ? [] : [entry.note])].join(' · '), Math.max(0, detailW - 2 - nameW - 2 - countW - 2))
         return {
           rows: 1,
           el: (
@@ -2137,7 +2257,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       graphArea = graphRows < 1 || !('Client' in els) ? null : { top: HEAD_ROWS + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
       drawnCatcher = Input !== null ? catcherKey() : ''
       fieldsDrawn = false
-      const stops = [ui.status, ui.name, saved.length, helping].join('|')
+      const stops = [ui.status, ui.name, saved.length, helping, project].join('|')
       if (stops !== ringStops) {
         ringStops = stops
         if (focused) settleRing($)
@@ -2146,13 +2266,13 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       return frame(
         true,
         // The agents the marked row's design starts, where it has blocks to count.
-        headOf(shown !== null && !isBlank(shown) ? factsLine(shown) : null),
+        headOf(shown !== null && !isBlank(shown) ? factsLine(shown) : null, keys.header),
         shown ? preview : <Box key="design-graph" width={graphW} height={graphRows} flexShrink={0} />,
         detailBox(detailRows, hints, content, beside ? 1 + graphW + 3 : 0),
         beside,
         mainRows,
         message === null ? null : { text: message, color: focused ? 'warning' : FADED },
-        legend,
+        actionsOf(keys.actions),
       )
     }
     if (!design) return <Box />
@@ -2175,7 +2295,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // The view follows the selection where something other than the person's keys moved it out of sight.
     const viewRoot = viewRootOf(design, ui, graphW)
 
-    // The keys that work now, in their fixed order: the graph's in the footer's right half, the detail pane's on its last rows.
+    // The keys that work now, in their fixed order: the graph's on the header's second row, the detail pane's on its last rows.
     const history = histories[ui.name]
     const keys = legendItems({
       ring: !focused ? 'graph' : ui.picker !== null && !locked ? 'list' : ui.editing ? 'fields' : 'graph',
@@ -2193,11 +2313,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       results: over,
       undo: (history?.undo.length ?? 0) > 0,
       redo: (history?.redo.length ?? 0) > 0,
-      // As the chips on the card name them.
-      knobs: [1, 2].map(slot => (node ? (quickKnob(node, slot) ?? null) : null)).map(name => (name === null ? null : cap(name))),
       hidden,
     })
-    const legend = legendOf(keys.footer)
 
     // What is said on the message row: a change just made (with the way back), a refused edit, the delete question, the lock.
     const said: Said =
@@ -2647,6 +2764,6 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         )),
     )
 
-    return frame(catching, headOf(factsLine(design)), graph, hidden ? null : detailBox(detailRows, hints, content, detailLeft), beside, mainRows, message, legend)
+    return frame(catching, headOf(factsLine(design), keys.header), graph, hidden ? null : detailBox(detailRows, hints, content, detailLeft), beside, mainRows, message, actionsOf(keys.actions))
   })
 }

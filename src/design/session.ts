@@ -89,6 +89,8 @@ export type DesignUi = {
   handed: boolean
   /** The start screen's marked entry, from 0, over `startEntries`: the saved designs, the templates, Blank. */
   startMark: number
+  /** The start screen was opened from this design (`p`, a press on the header's name): it lists the project's designs, and `x` goes back to this one. */
+  back: string | null
 }
 
 /** A saved design as the start screen and `/conductor list` name it. */
@@ -204,6 +206,7 @@ export function initialUi(): DesignUi {
     saved: [],
     handed: false,
     startMark: 0,
+    back: null,
   }
 }
 
@@ -725,7 +728,8 @@ export function applyOp(design: Design | null, ui: DesignUi, op: KeyOp, context:
       return { design, ui: { ...calm, detailHidden: false, help: ((ui.help ?? 0) % HELP_PAGES) + 1 }, changed: false }
     case 'run':
     case 'review':
-      // The hooks module puts the request in the prompt box; nothing changes here.
+    case 'project':
+      // The hooks module puts the request in the prompt box, or lists the project's designs; nothing changes here.
       return { design, ui: calm, changed: false }
     case 'clearRun':
       // The results of a run that is over are put away; while it runs they stay.
@@ -912,9 +916,10 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['o  b', 'open the selected container as the view / back up one level'],
   ['i', 'hide or show this pane'],
   ['u  y', 'undo / redo'],
-  ['q', 'ask Claude to review the design (fills the prompt)'],
+  ['q', 'Claude review: asks Claude to review the design (fills the prompt)'],
   ['r', 'run: puts the request in the prompt; add what to run it on, then Enter'],
   ['c', 'put away the results of a run that is over (the first edit does too)'],
+  ['p', 'the project: its saved designs and the templates, to open another or start one; x comes back'],
   ['?  h', 'these pages, one after the other'],
 ]
 

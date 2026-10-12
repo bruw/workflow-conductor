@@ -55,6 +55,7 @@ export type ConductorDesignUi = {
   saved: { name: string; blocks: number; goal: string }[]
   handed: boolean
   startMark: number
+  back: string | null
 }
 
 declare module 'claude-code' {

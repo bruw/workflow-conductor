@@ -1,6 +1,7 @@
 // The keys: the one table that says what each character typed into the key
-// catcher does, and the legend drawn from it: the graph's keys in the footer,
-// the detail pane's on its last rows. Case matters: `w` moves the selection,
+// catcher does, and the legend drawn from it: the graph's keys in the header,
+// the run and the review as buttons on the last row, the detail pane's on its
+// last rows. Case matters: `w` moves the selection,
 // `W` the block. Pure TypeScript: no `$`, no engine imports.
 
 /** What a key asks for. The graph sends the same keys in its `key` messages. */
@@ -27,6 +28,7 @@ export type KeyOp =
   | 'review'
   | 'run'
   | 'clearRun'
+  | 'project'
   | 'help'
   /** No key of its own: the add list's `cancel`. */
   | 'cancel'
@@ -60,6 +62,7 @@ export const KEY_OPS: Record<string, KeyOp> = {
   q: 'review',
   r: 'run',
   c: 'clearRun',
+  p: 'project',
   '?': 'help',
   h: 'help',
 }
@@ -71,7 +74,7 @@ export const BURST_MAX = 8
 export const PASTE_NOTICE = 'pasted text is not keys: nothing was done'
 
 /** The keys that still act while a run locks the design. */
-export const LOCKED_OPS: readonly KeyOp[] = ['left', 'right', 'up', 'down', 'open', 'back', 'detail', 'help', 'clearRun']
+export const LOCKED_OPS: readonly KeyOp[] = ['left', 'right', 'up', 'down', 'open', 'back', 'detail', 'help', 'clearRun', 'project']
 
 /** What a key the table does not hold says. */
 export function unboundNotice(key: string): string {
@@ -87,7 +90,7 @@ export function burstKeys(text: string): { keys: string[] } | { paste: true } {
 // ---------------------------------------------------------------------------
 // The legend
 
-/** Where the ring is: on the catcher (`graph`), in a field of the block, in the add list's filter; `start` is the catcher on the start screen. */
+/** Where the ring is: on the catcher (`graph`), in a field of the block, in the add list's filter; `start` is the catcher on the start screen and on the list of the project's designs. */
 export type RingPlace = 'graph' | 'fields' | 'list' | 'start'
 
 /** What decides which keys work right now. */
@@ -119,31 +122,52 @@ export type LegendState = {
   results: boolean
   undo: boolean
   redo: boolean
-  /** The quick knobs of the selected block, by digit: its name, or null where its type has none. */
-  knobs: readonly (string | null)[]
-  /** The detail pane is hidden: it has no rows to name its keys on, and the footer names the one that shows it. */
+  /** The detail pane is hidden: it has no rows to name its keys on, and the header names the one that shows it. */
   hidden: boolean
+  /** The start screen was opened from a design (`p`): `x` goes back to it. */
+  back?: boolean
 }
 
 /** One entry: the key as drawn in brackets, its word, and whether it is among the ones kept when the room is short. */
 export type LegendItem = { keys: string; word: string; core: boolean }
 
+/** A key drawn as a button on the pane's last row: `on` while a press does something. */
+export type LegendAction = { key: string; word: string; on: boolean }
+
 /**
- * The keys that work now, each named in one place: the graph's and the pane's own in the footer, the ones that act
- * on the detail pane on its last rows.
+ * The keys that work now, each named in one place: the graph's and the pane's own on the header's second row, the
+ * ones that act on the detail pane on its last rows. `actions` are the keys that hand the design to Claude or put a
+ * run away, not edits of it: buttons on the pane's last row.
  */
-export type Legend = { footer: LegendItem[]; detail: LegendItem[] }
+export type Legend = { header: LegendItem[]; actions: LegendAction[]; detail: LegendItem[] }
 
 /** The keys that work now, in their fixed order. */
 export function legendItems(state: LegendState): Legend {
   const out: LegendItem = { keys: 'Esc', word: 'Keys to the prompt', core: true }
   const save: LegendItem = { keys: 'Enter', word: 'Save, back to the graph', core: true }
   const pages: LegendItem[] = [{ keys: '? h', word: 'Next page', core: true }, { keys: 'x', word: 'Close help', core: true }]
-  // In a field and in the add list's filter the letters are text: no key of the graph acts, and the footer names the one way out.
-  if (state.ring === 'fields') return { footer: [out], detail: [{ keys: '↑ ↓', word: 'Field', core: true }, save] }
+  const help: LegendItem = { keys: '?', word: 'Help', core: true }
+  if (state.ring === 'start') {
+    const choose: LegendItem[] = [{ keys: '↑ ↓', word: 'Choose', core: true }, { keys: 'Enter', word: 'Open', core: true }]
+    const back: LegendItem[] = state.back ? [{ keys: 'x', word: 'Back', core: true }] : []
+    // A help page has the detail pane in place of the list: the keys that walk the list still act, and are the header's.
+    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, help], actions: [], detail: choose }
+  }
+  const edits = !state.locked
+  // The run and the review are asked of Claude, not done to the design: they are pressed on the last row. In a field
+  // and in the add list the letters are text, and they wait.
+  const ready = edits && !state.empty && state.ring === 'graph'
+  const actions: LegendAction[] = [
+    { key: 'r', word: 'Run', on: ready },
+    { key: 'q', word: 'Claude Review', on: ready },
+    ...(state.results && edits ? [{ key: 'c', word: 'Clear results', on: state.ring === 'graph' }] : []),
+  ]
+  // In a field and in the add list's filter the letters are text: no key of the graph acts, and the header names the one way out.
+  if (state.ring === 'fields') return { header: [out], actions, detail: [{ keys: '↑ ↓', word: 'Field', core: true }, save] }
   if (state.ring === 'list') {
     return {
-      footer: [out],
+      header: [out],
+      actions,
       detail: [
         { keys: '↑ ↓', word: 'Choose', core: true },
         ...(state.placed ? [{ keys: 'n', word: 'Change place', core: true }] : []),
@@ -154,37 +178,29 @@ export function legendItems(state: LegendState): Legend {
       ],
     }
   }
-  if (state.ring === 'start') {
-    const choose: LegendItem[] = [{ keys: '↑ ↓', word: 'Choose', core: true }, { keys: 'Enter', word: 'Open', core: true }]
-    // A help page has the detail pane in place of the list: the keys that walk the list still act, and are the footer's.
-    return state.helping ? { footer: choose, detail: pages } : { footer: [{ keys: '?', word: 'Help', core: true }], detail: choose }
-  }
   // A help page has the detail pane: the keys that turn and close it are its own, and `x` deletes nothing.
-  if (state.helping) return { footer: [{ keys: 'WASD', word: 'Navigate', core: true }], detail: pages }
-  const edits = !state.locked
-  const footer: (LegendItem | false)[] = [
-    // With no detail pane to say it, the footer names the one key that brings it back, first: it is the last to go where the room is short.
+  if (state.helping) return { header: [{ keys: 'WASD', word: 'Navigate', core: true }], actions, detail: pages }
+  const moves = edits && state.selected && !state.fixed
+  const header: (LegendItem | false)[] = [
+    // With no detail pane to say it, the header names the one key that brings it back, first: it is the last to go where the room is short.
     state.hidden && { keys: 'i', word: 'Show details', core: true },
-    // Every design has a card to walk to: its start block.
-    { keys: 'WASD', word: 'Navigate', core: true },
-    edits && state.selected && !state.fixed && { keys: 'Shift+WASD', word: 'Move', core: true },
+    // The designs of the project: the one shown is changed for another there.
+    { keys: 'p', word: 'Project', core: true },
+    // Every design has a card to walk to: its start block. With Shift the same keys move the block, where it can move.
+    moves ? { keys: '⇧+WASD', word: '(Move) Navigate', core: true } : { keys: 'WASD', word: 'Navigate', core: true },
     edits && { keys: 'n', word: 'New', core: true },
-    edits && state.selected && !state.fixed && { keys: 'x', word: 'Delete', core: true },
-    edits && state.selected && !state.fixed && { keys: 't', word: 'Block', core: false },
-    ...state.knobs.map((name, index) => edits && name !== null && { keys: String(index + 1), word: name, core: false }),
+    moves && { keys: 'x', word: 'Delete', core: true },
+    moves && { keys: 't', word: 'Block', core: false },
     state.container && { keys: 'o', word: 'Open', core: true },
     state.nested && { keys: 'b', word: 'Back', core: true },
     edits && state.undo && { keys: 'u', word: 'Undo', core: false },
     edits && state.redo && { keys: 'y', word: 'Redo', core: false },
-    edits && !state.empty && { keys: 'q', word: 'Ask Claude', core: false },
-    edits && !state.empty && { keys: 'r', word: 'Run', core: true },
-    state.results && !state.locked && { keys: 'c', word: 'Clear results', core: false },
-    { keys: '?', word: 'Help', core: true },
+    help,
   ]
   // Enter opens the selected block's fields (the Down arrow does too: the help page says so).
   const detail: (LegendItem | false)[] = state.hidden ? [] : [edits && state.selected && { keys: 'Enter', word: 'Edit', core: true }, { keys: 'i', word: 'Hide', core: false }]
   const kept = (items: readonly (LegendItem | false)[]): LegendItem[] => items.filter((one): one is LegendItem => one !== false)
-  return { footer: kept(footer), detail: kept(detail) }
+  return { header: kept(header), actions, detail: kept(detail) }
 }
 
 /** Cells between two entries of a legend row. */
@@ -199,14 +215,6 @@ export function legendCells(item: LegendItem): number {
 export function legendWidth(row: readonly LegendItem[]): number {
   return row.reduce((sum, item) => sum + legendCells(item), 0) + LEGEND_GAP * Math.max(0, row.length - 1)
 }
-
-/**
- * The widest the footer's legend is with its `core` keys alone, whatever is selected: a pane with this many columns
- * names its keys on one row; a narrower one wraps them onto a second.
- */
-export const LEGEND_CORE_W = legendWidth(
-  legendItems({ ring: 'graph', placed: false, retype: false, empty: false, helping: false, locked: false, selected: true, container: true, nested: true, results: true, undo: true, redo: true, knobs: [], hidden: true }).footer.filter(one => one.core),
-)
 
 function fill(items: readonly LegendItem[], width: number): LegendItem[][] {
   const rows: LegendItem[][] = [[]]
