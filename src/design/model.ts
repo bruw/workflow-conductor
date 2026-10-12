@@ -2,7 +2,7 @@
 // tree helpers. Pure TypeScript: no `$`, no engine imports, no fs.
 
 export const NODE_TYPES = [
-  // primitives
+  // what a workflow script is written in
   'agent',
   'pipeline',
   'parallel',
@@ -10,18 +10,30 @@ export const NODE_TYPES = [
   'branch',
   'subworkflow',
   'code',
-  // patterns
-  'verify',
-  'judge-panel',
-  'loop-until-dry',
-  'sweep',
-  'critic',
   // frame: the workflow's input, and a group that only frames blocks
   'args',
   'phase',
 ] as const
 
 export type NodeType = (typeof NODE_TYPES)[number]
+
+/**
+ * The kinds of a block: the pattern it is used for. Each list answers one question about its
+ * block (an agent's job, when a loop stops, what differs between a parallel's arms, how a
+ * branch picks its arm). The first of a list is the plain block, and a node that says no
+ * `kind` is that one. A kind never changes a block's fields: it fills some in and says what
+ * the empty ones are for (`KIND_TEACH` in teach.ts).
+ */
+export const KINDS = {
+  agent: ['task', 'scout', 'check', 'verify', 'judge', 'critic', 'synthesize', 'classify'],
+  loop: ['custom', 'count', 'pass', 'dry', 'converged', 'target', 'budget'],
+  parallel: ['arms', 'each', 'sweep', 'attempts'],
+  branch: ['if-else', 'guard', 'route'],
+} as const
+
+export type KindedType = keyof typeof KINDS
+
+export type Kind = (typeof KINDS)[KindedType][number]
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
@@ -44,6 +56,8 @@ export type Knobs = {
 export type DesignNode = {
   id: string
   type: NodeType
+  /** The pattern the block is used for; left out for the plain block (the first of its type's kinds). */
+  kind?: Kind
   title: string
   notes?: string
   knobs?: Knobs
@@ -68,7 +82,55 @@ export type Row = { node: DesignNode; depth: number; parentId: string | undefine
 export type WalkInfo = { parent: DesignNode | undefined; depth: number; index: number }
 
 /** The only types that may hold children. */
-export const CONTAINER_TYPES: readonly NodeType[] = ['pipeline', 'parallel', 'loop', 'loop-until-dry', 'branch', 'sweep', 'phase']
+export const CONTAINER_TYPES: readonly NodeType[] = ['pipeline', 'parallel', 'loop', 'branch', 'phase']
+
+/** The kinds a block type has, the plain one first; none for a type that has no kinds. */
+export function kindsOf(type: NodeType): readonly Kind[] {
+  return (KINDS as Partial<Record<NodeType, readonly Kind[]>>)[type] ?? []
+}
+
+/** The kind a block is with none said: the first of its type's, undefined for a type that has no kinds. */
+export function plainKind(type: NodeType): Kind | undefined {
+  return kindsOf(type)[0]
+}
+
+/** A block's kind, the plain one where it says none; undefined for a type that has no kinds. */
+export function kindOf(node: Pick<DesignNode, 'type' | 'kind'>): Kind | undefined {
+  return node.kind ?? plainKind(node.type)
+}
+
+/** A block as the add list and a message name it: `agent verify`, `loop dry`, and the bare type for a plain block. */
+export function typeName(node: Pick<DesignNode, 'type' | 'kind'>): string {
+  return node.kind === undefined || node.kind === plainKind(node.type) ? node.type : `${node.type} ${node.kind}`
+}
+
+/** The types a design saved before kinds may name: each is a kind of a block now. */
+const OLD_TYPES: Readonly<Record<string, { type: NodeType; kind: Kind }>> = {
+  verify: { type: 'agent', kind: 'verify' },
+  'judge-panel': { type: 'agent', kind: 'judge' },
+  critic: { type: 'agent', kind: 'critic' },
+  sweep: { type: 'parallel', kind: 'sweep' },
+  'loop-until-dry': { type: 'loop', kind: 'dry' },
+}
+
+/**
+ * A block's type and kind as a file or a tool call says them. An old pattern type (`verify`,
+ * `sweep`, …) is read as the block and kind it became. The plain kind is left out; a kind the
+ * type does not have is refused, with the ones it has.
+ */
+export function readType(type: unknown, kind?: unknown): { type: NodeType; kind?: Kind } | { error: string } {
+  const old = typeof type === 'string' ? OLD_TYPES[type] : undefined
+  const block = old?.type ?? type
+  if (!isNodeType(block)) return { error: `unknown type ${JSON.stringify(type)}` }
+  const asked = kind === undefined || kind === null || kind === '' ? old?.kind : kind
+  if (asked === undefined) return { type: block }
+  const kinds = kindsOf(block)
+  const found = kinds.find(one => one === asked)
+  if (found === undefined) {
+    return { error: kinds.length === 0 ? `${aType(block)} block has no kinds` : `${JSON.stringify(asked)} is not a kind of ${block}: ${kinds.join(', ')}` }
+  }
+  return found === kinds[0] ? { type: block } : { type: block, kind: found }
+}
 
 /** Where the `args` block stands, as a refusal says it: every design has one, and nothing stands before it. */
 export const ARGS_PLACE = 'the args block is the first block of the design: at the top level, before every other block'
@@ -190,15 +252,18 @@ function readNodes(raw: unknown, where: string, seen: Set<string>): DesignNode[]
 
 function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
   if (!isRecord(raw)) fail(`${where} must be an object`)
-  const { id, type, title, notes, children } = raw
+  const { id, title, notes, children } = raw
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) fail(`${where}: id must look like "n1"`)
   if (seen.has(id)) fail(`duplicate id ${id}`)
   seen.add(id)
-  if (!isNodeType(type)) fail(`${id}: unknown type ${JSON.stringify(type)}`)
+  const read = readType(raw.type, raw.kind)
+  if ('error' in read) fail(`${id}: ${read.error}`)
+  const { type, kind } = read
   if (typeof title !== 'string') fail(`${id}: title must be a string`)
   if (notes !== undefined && typeof notes !== 'string') fail(`${id}: notes must be a string`)
 
   const node: DesignNode = { id, type, title }
+  if (kind !== undefined) node.kind = kind
   if (notes !== undefined) node.notes = notes
   const knobs = readKnobs(raw.knobs, id)
   if (knobs) node.knobs = knobs
@@ -211,7 +276,7 @@ function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
 }
 
 /**
- * Validates shape, version, unique ids, known types and where `args` stands. Never throws.
+ * Validates shape, version, unique ids, known types and kinds, and where `args` stands. Never throws.
  * A design read with no args block (one saved before every design had it) is given an empty one.
  */
 export function parseDesign(json: string): ParseResult {
@@ -241,7 +306,9 @@ export function parseDesign(json: string): ParseResult {
 // Rebuilds every object so keys come out in one fixed order whatever order
 // the design was assembled in.
 function orderedNode(node: DesignNode): Record<string, unknown> {
-  const out: Record<string, unknown> = { id: node.id, type: node.type, title: node.title }
+  const out: Record<string, unknown> = { id: node.id, type: node.type }
+  if (node.kind !== undefined && node.kind !== plainKind(node.type)) out.kind = node.kind
+  out.title = node.title
   if (node.notes !== undefined) out.notes = node.notes
   if (node.knobs) {
     const knobs: Record<string, unknown> = {}

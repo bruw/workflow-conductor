@@ -52,8 +52,9 @@ type Design = {
 type DesignNode = {
   id: string              // stable, short: "n1", "n2"… never reused
   type: NodeType
-  title: string           // human label, e.g. "review"
-  notes?: string          // free text for Claude: anything blocks can't express
+  kind?: Kind             // the pattern it is used for; left out on a plain block (see "Blocks and kinds")
+  title: string           // human label, e.g. "review"; the pane calls it the block's name
+  notes?: string          // free text for Claude: anything blocks can't express; the pane calls it the block's logic
   knobs?: {
     prompt?: string       // intent of the agent prompt, not final wording
     schema?: string       // described in words or as JSON Schema text
@@ -62,20 +63,25 @@ type DesignNode = {
     isolation?: 'worktree'
     agentType?: string
     fanout?: string       // what it fans out over: "changed files", "×4 dimensions"
-    votes?: number        // verify / judge blocks
-    until?: string        // loop blocks: "2 dry rounds", "budget < 50k"
+    votes?: number        // an agent of kind verify or judge
+    until?: string        // a loop's stop condition, in words: "2 dry rounds", "budget < 50k"
     when?: string         // a block directly in a branch: the condition that picks this arm (Redesign v1)
   }
   children?: DesignNode[] // stages inside pipeline/parallel/loop
 }
 type NodeType =
-  // primitives
+  // what a workflow script is written in
   | 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code'
-  // patterns
-  | 'verify' | 'judge-panel' | 'loop-until-dry' | 'sweep' | 'critic'
   // frame (see "Blocks: args, phase, borders by flow")
   | 'args' | 'phase'
+type Kind =               // by type; the first of each row is the plain block and is not written
+  | 'task' | 'scout' | 'check' | 'verify' | 'judge' | 'critic' | 'synthesize' | 'classify'   // agent
+  | 'custom' | 'count' | 'pass' | 'dry' | 'converged' | 'target' | 'budget'                  // loop
+  | 'arms' | 'each' | 'sweep' | 'attempts'                                                   // parallel
+  | 'if-else' | 'guard' | 'route'                                                            // branch
 ```
+
+The five pattern types of before (`verify`, `judge-panel`, `critic`, `sweep`, `loop-until-dry`) are read as the kind each became and written in the new form.
 
 The JSON holds design data only. General conventions and instructions never go in it.
 
@@ -747,3 +753,59 @@ The pixels are in `src/ui/persona.ts`, read off `docs/redesign-v1/claude-conduct
 
 - **Splash:** once a session (`$.state` `splashed`), the pane's first drawing shows it in place of the screen for `SPLASH_MS` 1800 (6 beats of `BEAT_MS` 300) plus 150 ms of rest. The conductor goes idle, ready, conducting, ready, conducting, complete (`SCORE`); six small agents stand in an arc at each side, each half rising on its own beat and all on the last. Under it `◆ Conductor` and `designed for full screen`. `hooks/splash.tsx` counts the beats; `hooks/design.tsx` ends it with one `$.clock.after` and settles the ring. No catcher is drawn under it: keys wait. Under 77 columns or 18 rows the conductor stands alone; under 17 rows there is no splash.
 - **Header:** a 2-row persona (`smallPersona`, `SMALL_W` 10 cells) at the left of the name's row and the goal's first row, which have the rest (`headColumns`). `commit` reads what a change was (`gestureOf`): a block added is `ready`, blocks that changed place `conducting`, held `GESTURE_MS` 900 (`$.state` `persona`). With a run laid over the design and no gesture held: `conducting`/`ready` by the run clock while it runs, `complete` once done (`runPose`).
+
+## Blocks and kinds
+
+Asked for: "a block subtype system that encapsulates key patterns as presets", progressive disclosure in place of every pattern as a block. Built; checked with `claude plugin validate .`, `bunx tsc -p .`, `scripts/render-graph.ts` and a live pane (tmux: the add list both ways, a loop of kind pass with its blocks, a retype, undo). No tests. Where an earlier section names `verify`, `judge-panel`, `critic`, `sweep` or `loop-until-dry` as a type, this section stands.
+
+**The rule.** A block is what a workflow script is written in; a pattern is a **kind** of the block it is made of. Each type's kinds answer one question about it, and the first is the plain block:
+
+| Block | Its kinds answer | Kinds (`KINDS` in model.ts) |
+| --- | --- | --- |
+| agent | what is its job? | task, scout, check, verify, judge, critic, synthesize, classify |
+| loop | when does it stop? | custom, count, pass, dry, converged, target, budget |
+| parallel | what differs between its arms? | arms, each, sweep, attempts |
+| branch | how is its arm picked? | if-else, guard, route |
+
+`pipeline`, `phase`, `code`, `subworkflow`, `args` have none. A pattern that spans several blocks (judge panel: attempts, judge, synthesize) is a template, not a kind: `judge` is the scoring vote alone. Voting is the `votes` knob of the two voting kinds, not a kind.
+
+**The model.** `DesignNode.kind?`, validated against its type (`readType`: a kind the type does not have is refused with the ones it has); the plain kind is never stored (`plainKind`, `kindOf`). `OLD_TYPES` maps the five old pattern types to their block and kind, in `parseDesign` and in the tool for Claude alike. No version bump: an old file parses, and is written in the new form on its next save. `typeName` is a block in words (`agent verify`, `loop` for a plain one); `types/index.d.ts` mirrors `kind`.
+
+**Fields are the type's, the same for every kind** (`KNOBS_BY_TYPE` in teach.ts). The user's rule: a kind must not bring inputs of its own; one free-text field per thing a block says.
+
+| Block | Text fields | Chips |
+| --- | --- | --- |
+| agent | name, logic, prompt, output, agent type | model, effort; votes on verify and judge only (`offers`, `VOTING_KINDS`) |
+| code | name, logic, output | |
+| subworkflow | name, logic, prompt, output | |
+| args | name, logic, output | |
+| pipeline, parallel | name, logic, once per | |
+| loop | name, logic, stop condition | |
+| branch | name, logic; each arm: condition | |
+| phase | name | |
+
+- The pane's words are labels (`FIELD_LABEL`, `fieldWord`): name = `title`, logic = `notes`, output = `schema`, once per = `fanout`, stop condition = `until`, condition = `when`. The file's keys did not change. Lints, the message row (`n5 changed: logic`) and the card's marks use the words; a container's header says `· stop: …`.
+- Dropped from what a type offers: `fanout` on an agent (fan-out is said on a pipeline or a parallel), `schema` on containers (a container hands on what its last block makes), `model` and `effort` on a sweep and a dry loop (their agents are blocks inside). A knob a block carries anyway still shows (`knobsOf`).
+- No `max` knob: a loop's bound is part of its one stop condition (`the check passes, at most 3 rounds`).
+
+**What a kind is** (`KIND_TEACH: Record<Kind, KindTeach>`): `hint`, `when`, `card` (teaching), `script` (one line in the script's terms, for the hand-off and `guide`), and three presets:
+
+- `fill`: knobs a new block of the kind gets (`fillOf`): verify `votes 3` and `{ refuted: boolean, reason }`; judge `votes 3` and a scores shape; scout and classify a shape and `effort low`; check `{ ok, failures }`; critic `{ gaps }`; every loop kind but custom its stop condition; sweep and attempts their `fanout`.
+- `hints`: what the empty fields are for (`placeholderOf(block, field, parent)`: the kind's, else the type's (`TYPE_HINTS`: the code block's logic names dedup, filter, top-K, merge, which replaced the code kinds first proposed), else `FIELD_PLACEHOLDER`). A branch's `when` hint is shown on its arms.
+- `starter`: the blocks a new, empty container starts with: loop pass (an attempt, a check), loop dry (a finder with an output shape, a dedup `code`).
+
+`addNode(design, { type, kind?, title?, bare? })` applies fill and starter in one edit (one undo step); `bare` leaves the starter out (the tool for Claude brings its own blocks). `retypeNode(design, id, type, kind?)` changes both: a knob still as the old kind filled it goes, the new kind fills what is not set, a typed value is never lost, and a container left empty gets the new kind's starter. `retypeBlock` renames a block still called after its old type or kind (`defaultTitle`).
+
+**The add list** (`pickerMatches` → `PickRow[]`, `pickBlock`, `typePicker` in session.ts):
+- With nothing typed: the eight blocks of `PALETTE` (no keywords any more), in the two groups. A block that has kinds is `opens` (drawn `AGENT ▸`; the marked one lists its kinds): Enter sets `picker.block` and the list shows that block's kinds, the plain one first, under `· which agent?`; `b` goes back (`PICKER_BACK`).
+- With something typed (in either list): `searchBlocks`, every block and kind whose full name (`pickName`: `agent verify`) holds the text, a kind's own prefix first, then the name's, then the rest. Names only, by the user's decision: no keywords, no subsequence match.
+- **`w` `s` `b` are keys only while they are not a name.** They are taken as keys while the filter is empty, but `scout`, `sweep`, `synthesize`, `subworkflow`, `budget`, `branch` start with them. The keys taken are kept (`picker.nav`), and when they and the next character start a block's or a kind's name (`startsName`) they become the filter's `lead`. Found live: giving them back to the field (a new `Input` with `sw` as its value) left the cursor after the first character, so the next letter landed inside (`sew`). So the field is not rewritten: the lead is drawn as text before it, the field keeps what was typed in it, and `filterText` puts the two together. A field emptied takes the lead with it.
+- A retype (`Type` row) lists the block's own kinds first, then the other blocks it may become.
+
+**Lints by kind** (lints.ts): rule 1 lets a `parallel` off when what follows is `code`, a judge or a synthesize; rule 3 fires on any loop with no stop condition but the kind dry (`needsStop`; a plain loop is still let off by a bound in its words); rule 6 lets off the kinds whose name is the task (`needsBrief`, `SELF_BRIEFED`: verify, judge, critic); rules 7 and 8 read `kind`; rule 9 tells a plain parallel to add blocks and one of kind each, sweep or attempts to say what it runs once per; rule 11 does not tell a guard to add an arm. The card's `Instruction [not set]` and `Stop [not set]` use the same two functions.
+
+**The graph:** `typeLabel` (`AGENT verify`, `LOOP dry`) on cards, headers, collapsed cards and the detail pane's heading; a name still the type's or the kind's is left out. Kinds take their type's accent (the five old accents are gone from `ACCENT`). `childFlow`: `parallel` and `branch` are stacks. `edgeKind`: a barrier after a pipeline, a parallel, a fan-out or votes above one.
+
+**Hand-off and the tool for Claude:** the outline says `n6 agent verify "…"`; the instructions list each kind the design uses with its `script` line (`HANDOFF_MAX_LINES` 80). The tool's block has `kind`; its description names the kinds per type and the board's words for the fields, and what each kind means is on `kind` in the schema, as the knobs are on `knobs`: the description is 3,846 characters (it was 4,401, past the engine's cut at 4,096). `update` takes `type` and `kind` (a type said again leaves the kind; `kind: ""` makes the block plain); a new block from `add` or `write` gets its kind's fill under the knobs it came with; `guide` has every kind's card.
+
+**Not exercised:** a model turn (Claude adding or changing kinds through the tool, a hand-off of a design that has them); the stacked and inline layouts of the add list's two steps.

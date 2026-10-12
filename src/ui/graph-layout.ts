@@ -12,8 +12,10 @@
 // The layout says the words too (what is on a border, in a row, how it is cut
 // to fit) as segments with a role; the paint only gives each role its look.
 
-import { canHoldChildren, flatten, isBlank } from '../design/model'
+import { needsBrief, needsStop } from '../design/lints'
+import { canHoldChildren, flatten, isBlank, plainKind } from '../design/model'
 import type { Design, DesignNode, NodeType, Row } from '../design/model'
+import { defaultTitle } from '../design/teach'
 import { ARGS_STAY, addPlace, quickKnob } from '../design/ops'
 import type { Place, QuickKnob } from '../design/ops'
 import { cappedLines, clip, moreLines } from './text'
@@ -77,7 +79,7 @@ export type SegRole =
   | 'title'
   /** `×4`: bold. */
   | 'fan'
-  /** `· each: …`, `· until: …`, `· 2–4 of 9`, `N blocks`, `o: open`: dim. */
+  /** `· each: …`, `· stop: …`, `· 2–4 of 9`, `N blocks`, `o: open`: dim. */
   | 'fact'
   /** `haiku low` at the right of a leaf's first row. */
   | 'meta'
@@ -230,7 +232,7 @@ export function samePlace(a: Place | null | undefined, b: Place | null | undefin
 
 /** How a container arranges what it holds: stages chained down the flow, or arms stacked across it. */
 export function childFlow(type: NodeType | undefined): Flow {
-  return type === 'parallel' || type === 'sweep' || type === 'branch' ? 'stack' : 'chain'
+  return type === 'parallel' || type === 'branch' ? 'stack' : 'chain'
 }
 
 /** What a card says under its name: the block's notes, or with none what its prompt asks. */
@@ -282,11 +284,11 @@ export function drawnOpen(depth: number, width: number): boolean {
 /** The most cells a model's name takes on a card: a model named in full is cut. */
 const KNOB_MAX = 14
 
-/** The quick knobs a type has, each with the digit that steps it (`stepKnob` in ops.ts): `1` model, `2` effort, `3` votes. */
-export function quickKnobs(type: NodeType): { key: string; knob: QuickKnob }[] {
+/** The quick knobs a block has by its type and kind, each with the digit that steps it (`stepKnob` in ops.ts): `1` model, `2` effort, `3` votes. */
+export function quickKnobs(node: Pick<DesignNode, 'type' | 'kind'>): { key: string; knob: QuickKnob }[] {
   const out: { key: string; knob: QuickKnob }[] = []
   for (const slot of [1, 2, 3]) {
-    const knob = quickKnob({ type }, slot)
+    const knob = quickKnob(node, slot)
     if (knob !== undefined) out.push({ key: String(slot), knob })
   }
   return out
@@ -305,7 +307,7 @@ function chipSegs(node: DesignNode, knob: QuickKnob, key: string): Seg[] {
 
 /** Every quick knob of a block as chips, two cells between two. */
 function chipsOf(node: DesignNode): Seg[] {
-  return quickKnobs(node.type).flatMap((quick, i) => [...(i > 0 ? [{ text: '  ', role: 'rule' as const }] : []), ...chipSegs(node, quick.knob, quick.key)])
+  return quickKnobs(node).flatMap((quick, i) => [...(i > 0 ? [{ text: '  ', role: 'rule' as const }] : []), ...chipSegs(node, quick.knob, quick.key)])
 }
 
 /**
@@ -319,7 +321,7 @@ function fanMark(node: Pick<DesignNode, 'knobs'>): string {
   return count === undefined ? '×n' : count > 1 ? `×${count}` : ''
 }
 
-const MANY: readonly NodeType[] = ['pipeline', 'parallel', 'sweep', 'judge-panel']
+const MANY: readonly NodeType[] = ['pipeline', 'parallel']
 
 /** What a block hands on is what its last block does, where it is a phase: a phase only frames. */
 function lastOf(node: DesignNode): DesignNode {
@@ -330,8 +332,8 @@ function lastOf(node: DesignNode): DesignNode {
 /**
  * The arrow leaving `from` inside `parent` (undefined at the top level; for a phase, the container the phase stands
  * in). Stages of a pipeline hand each item on with no barrier. Anywhere else the next block starts when `from` is
- * done: a barrier when `from` yields many results (a fan-out, votes, a pipeline, a parallel, a sweep, a panel), a
- * plain hand-off when it yields one.
+ * done: a barrier when `from` yields many results (a fan-out, votes, a pipeline, a parallel), a plain hand-off
+ * when it yields one.
  */
 function edgeKind(parent: NodeType | undefined, from: DesignNode): EdgeKind {
   if (parent === 'pipeline') return 'stream'
@@ -341,8 +343,8 @@ function edgeKind(parent: NodeType | undefined, from: DesignNode): EdgeKind {
 
 /** What a block needs and lacks, said in its place before `[not set]`: an agent's brief, a loop's stop. */
 function missingOf(node: DesignNode): string {
-  if (node.type === 'agent' && cardText(node) === '') return 'Instruction'
-  if (node.type === 'loop' && clean(node.knobs?.until ?? '') === '') return 'Stop'
+  if (needsBrief(node) && cardText(node) === '') return 'Instruction'
+  if (needsStop(node) && clean(node.knobs?.until ?? '') === '') return 'Stop'
   return ''
 }
 
@@ -381,19 +383,29 @@ function armWidth(arm: Arm): number {
 /** The problem mark: on a card's top border, left of its id. The detail pane says what the problem is. */
 const BADGE = ' ! '
 
-/** `TYPE / Title ×4` in at most `room` cells: the type whole, then the title cut, then the fan-out's mark when there is room left. */
-function nameSegs(type: string, title: string, fan: string, room: number, prefix: string = ''): Seg[] {
+/** A block's type as a card says it, with its kind where it is not the plain one: `AGENT`, `AGENT verify`, `LOOP dry`. */
+export function typeLabel(block: Pick<DesignNode, 'type' | 'kind'>): string {
+  return `${block.type.toUpperCase()}${block.kind === undefined || block.kind === plainKind(block.type) ? '' : ` ${block.kind}`}`
+}
+
+/** Whether a block still has the name it was added with (its kind's, or its type's): a card then says the type alone. */
+function unnamed(block: Pick<DesignNode, 'type' | 'kind'>, title: string): boolean {
+  return title === '' || title.toLowerCase() === defaultTitle(block)
+}
+
+/** `TYPE kind / Title ×4` in at most `room` cells: the type and kind whole, then the title cut, then the fan-out's mark when there is room left. */
+function nameSegs(block: Pick<DesignNode, 'type' | 'kind'>, title: string, fan: string, room: number, prefix: string = ''): Seg[] {
   const segs: Seg[] = []
   let left = room
   if (prefix !== '' && left > prefix.length + 2) {
     segs.push({ text: prefix, role: 'sep' })
     left -= prefix.length
   }
-  const word = clip(type.toUpperCase(), left)
+  const word = clip(typeLabel(block), left)
   if (word === '') return segs
   segs.push({ text: word, role: 'type' })
   left -= word.length
-  const named = title !== '' && title.toLowerCase() !== type
+  const named = !unnamed(block, title)
   if (named && left >= 5) {
     const keep = fan !== '' && left - 3 - (fan.length + 1) >= Math.min(title.length, 8) ? fan.length + 1 : 0
     const text = clip(title, left - 3 - keep)
@@ -517,15 +529,15 @@ function leafBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
   // Row 1: `TYPE / Title`, and at the right what is set of the model and effort, or (selected) the chips.
   const chips = selected && !ctx.locked ? chipsOf(node) : []
   const meta = [knobs.model, knobs.effort].filter(one => one !== undefined && one !== '').map(one => clip(clean(one ?? ''), KNOB_MAX)).join(' ')
-  const nameMin = node.type.length + (title === '' || title.toLowerCase() === node.type ? 0 : 3 + Math.min(title.length, 8))
+  const nameMin = typeLabel(node).length + (unnamed(node, title) ? 0 : 3 + Math.min(title.length, 8))
   let right: Seg[] = chips.length > 0 ? chips : meta === '' ? [] : [{ text: meta, role: 'meta' }]
   // Chips that do not fit beside the whole name get the next row (the selected card says its title in full);
   // a model and effort that do not fit beside a name cut short are left to the detail pane.
-  const nameAll = node.type.length + (title === '' || title.toLowerCase() === node.type ? 0 : 3 + title.length) + (fan === '' ? 0 : fan.length + 1)
+  const nameAll = typeLabel(node).length + (unnamed(node, title) ? 0 : 3 + title.length) + (fan === '' ? 0 : fan.length + 1)
   const beside = right.length === 0 || (chips.length > 0 ? nameAll : nameMin) + 2 + segsWidth(right) <= inner
   if (!beside) right = []
   const room = inner - (right.length > 0 ? segsWidth(right) + 2 : 0)
-  rows.push({ left: nameSegs(node.type, title, fan, room), right })
+  rows.push({ left: nameSegs(node, title, fan, room), right })
   if (selected && !beside && chips.length > 0) {
     // One space between chips when two do not fit; then as many as do.
     const tight = segsWidth(chips) <= inner ? chips : chips.map(seg => (seg.role === 'rule' ? { ...seg, text: ' ' } : seg))
@@ -566,8 +578,8 @@ function collapsedBox(node: DesignNode, w: number, depth: number, parent: Design
   const kin = node.children ?? []
   const inside = insideOf(node)
   const count = `${inside} ${inside === 1 ? 'block' : 'blocks'}`
-  const fits = node.type.length + 4 + count.length <= inner
-  const rows: CardRow[] = [{ left: nameSegs(node.type, clean(node.title), fanMark(node), inner - (fits ? count.length + 2 : 0), '▸ '), right: fits ? [{ text: count, role: 'fact' }] : [] }]
+  const fits = typeLabel(node).length + 4 + count.length <= inner
+  const rows: CardRow[] = [{ left: nameSegs(node, clean(node.title), fanMark(node), inner - (fits ? count.length + 2 : 0), '▸ '), right: fits ? [{ text: count, role: 'fact' }] : [] }]
   const titles = kin.length === 0 ? EMPTY : kin.map(child => clean(child.title) || child.type).join(childFlow(node.type) === 'chain' ? ' → ' : ' | ')
   const hint = OPEN_HINT.length + 6 <= inner
   rows.push({ left: [{ text: clip(titles, inner - (hint ? OPEN_HINT.length + 2 : 0)), role: 'note' }], right: hint ? [{ text: OPEN_HINT, role: 'fact' }] : [] })
@@ -575,14 +587,14 @@ function collapsedBox(node: DesignNode, w: number, depth: number, parent: Design
   return { node, kind: 'collapsed', w, h: 4, depth, index, parentId: parent?.id, top, rows, inside, kids: [], first: 0, lead: 0, gap: 0 }
 }
 
-/** A container's header on its top border: `TYPE / Title ×4 · each: … · until: … · 2–4 of 9`, with what fits `room`. */
+/** A container's header on its top border: `TYPE kind / Title ×4 · each: … · stop: … · 2–4 of 9`, with what fits `room`. */
 function headSegs(node: DesignNode, room: number, range: string): Seg[] {
   const title = clean(node.title)
   const fanout = clean(node.knobs?.fanout ?? '')
   const fan = fanMark(node)
   // The carousel's window is said before any knob: it is the one fact found nowhere else.
-  const kept = range !== '' && room - (range.length + 3) >= node.type.length + Math.min(title.length + 3, 9) ? range.length + 3 : 0
-  const segs = nameSegs(node.type, title, fan === '×n' ? '' : fan, room - kept)
+  const kept = range !== '' && room - (range.length + 3) >= typeLabel(node).length + Math.min(title.length + 3, 9) ? range.length + 3 : 0
+  const segs = nameSegs(node, title, fan === '×n' ? '' : fan, room - kept)
   let left = room - kept - segsWidth(segs)
   const fact = (label: string, text: string, whole: boolean = false): void => {
     if (text === '' || left < label.length + 3 + (whole ? text.length : Math.min(text.length, 6))) return
@@ -591,7 +603,7 @@ function headSegs(node: DesignNode, room: number, range: string): Seg[] {
     left -= words.length
   }
   if (fanout !== '') fact('each: ', eachOf(node))
-  fact('until: ', clean(node.knobs?.until ?? ''))
+  fact('stop: ', clean(node.knobs?.until ?? ''))
   if (fan === '×n') fact('', 'count unknown', true)
   if (kept > 0) segs.push({ text: ` · ${range}`, role: 'fact' })
   return segs
@@ -639,7 +651,7 @@ function openBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
     // Tops aligned. Bottoms too where an arm is within ARM_GROW_MAX rows of the tallest: a shorter one keeps its own height, not stretched hollow.
     for (const kid of kids) if (body - kid.h <= ARM_GROW_MAX) kid.h = body
   }
-  const headMin = node.type.length + Math.min(clean(node.title).length + 3, 9)
+  const headMin = typeLabel(node).length + Math.min(clean(node.title).length + 3, 9)
   const top = topRow(node, w, armOf(node, parent, index), ctx.problems[node.id] ?? 0, room => headSegs(node, room, range), headMin, node.id === ctx.selectedId && !ctx.locked ? chipsOf(node) : [], headMin + (range === '' ? 0 : range.length + 3))
   return { node, kind: 'open', w, h: 2 + rows.length + lead + body, depth, index, parentId: parent?.id, top, rows, inside: insideOf(node), kids, first, lead, gap }
 }
@@ -883,7 +895,7 @@ export function layoutGraph(design: Design, options: GraphOptions): GraphLayout 
     const parent = root.parentId === undefined ? undefined : index.byId.get(root.parentId)?.node
     const frame = openBox(root.node, columns, 0, parent, root.index, ctx)
     // The frame says nothing of the arm it is in the view above: there is no arm beside it here.
-    frame.top = topRow(root.node, columns, null, ctx.problems[root.node.id] ?? 0, room => headSegs(root.node, room, rangeOf(ctx.carousels[root.node.id])), root.node.type.length, root.node.id === selectedId && !ctx.locked ? chipsOf(root.node) : [], root.node.type.length + 12 + rangeOf(ctx.carousels[root.node.id]).length)
+    frame.top = topRow(root.node, columns, null, ctx.problems[root.node.id] ?? 0, room => headSegs(root.node, room, rangeOf(ctx.carousels[root.node.id])), typeLabel(root.node).length, root.node.id === selectedId && !ctx.locked ? chipsOf(root.node) : [], root.node.type.length + 12 + rangeOf(ctx.carousels[root.node.id]).length)
     put(frame, 0, 0)
     height = frame.h
     ;({ crumbs, level } = crumbsFor(design, [...ancestors(index, root.node.id), root.node], columns))

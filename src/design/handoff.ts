@@ -2,15 +2,16 @@
 // the conventions that tie a run back to it (label, phase, meta.name) are
 // stated here and nowhere else, never in the design JSON. Pure TypeScript.
 
-import { canHoldChildren, flatten } from './model'
-import type { Design } from './model'
+import { typeName, canHoldChildren, flatten, plainKind } from './model'
+import type { Design, Kind } from './model'
+import { KIND_TEACH } from './teach'
 
 export type Handoff = { text: string; context: string[] }
 
 /** Outline rows shown before the rest is left to the file. */
 export const OUTLINE_MAX = 34
 /** The most lines the instructions may take, outline included. */
-export const HANDOFF_MAX_LINES = 65
+export const HANDOFF_MAX_LINES = 80
 
 /** The knobs an outline row names in brackets. `when` is not among them: an arm's condition is said before its row. */
 const KNOB_KEYS = ['model', 'effort', 'isolation', 'agentType', 'schema', 'fanout', 'votes', 'until'] as const
@@ -29,16 +30,28 @@ function armWords(design: Design, row: { node: { knobs?: { when?: string } }; pa
   return arms > 1 && row.index === arms - 1 ? 'ELSE: ' : 'IF (no condition set): '
 }
 
-/** One row per block, indented by nesting: `n3 verify "title" [votes=3] (has notes)`; an arm of a branch opens with its condition, `IF no findings: n8 agent "…"`. */
+/** One row per block, indented by nesting: `n3 agent verify "title" [votes=3] (has notes)`; an arm of a branch opens with its condition, `IF no findings: n8 agent "…"`. */
 export function outline(design: Design): string[] {
   const rows = flatten(design)
   const lines = rows.slice(0, OUTLINE_MAX).map(row => {
     const knobs = KNOB_KEYS.filter(key => row.node.knobs?.[key] !== undefined).map(key => `${key}=${clip(String(row.node.knobs?.[key]))}`)
     const tail = [knobs.length > 0 ? `[${knobs.join(' ')}]` : '', row.node.notes ? '(has notes)' : ''].filter(Boolean).join(' ')
-    return `${'  '.repeat(row.depth + 1)}${armWords(design, row)}${row.node.id} ${row.node.type} "${row.node.title}"${tail ? ` ${tail}` : ''}`
+    return `${'  '.repeat(row.depth + 1)}${armWords(design, row)}${row.node.id} ${typeName(row.node)} "${row.node.title}"${tail ? ` ${tail}` : ''}`
   })
   if (rows.length > OUTLINE_MAX) lines.push(`  … ${rows.length - OUTLINE_MAX} more blocks: see the file`)
   return lines.length > 0 ? lines : ['  (no blocks)']
+}
+
+/** The kinds a design uses, each once in the order it first names them, with what each is in the script: `   - agent verify: …`. */
+function kindLines(design: Design): string[] {
+  const seen = new Set<Kind>()
+  const lines: string[] = []
+  for (const { node } of flatten(design)) {
+    if (node.kind === undefined || node.kind === plainKind(node.type) || seen.has(node.kind)) continue
+    seen.add(node.kind)
+    lines.push(`   - ${typeName(node)}: ${KIND_TEACH[node.kind].script}.`)
+  }
+  return lines
 }
 
 /** What `r` puts in the prompt box, and what a hand-off submits: the person adds what to run it on. The sentence also tells the mod which design a prompt hands off. */
@@ -73,14 +86,15 @@ export function buildHandoff(design: Design, designPath: string): Handoff {
     '',
     `1. Read the design file: ${designPath}`,
     '   It is a SPEC, not a program. Implement it as a real Workflow script and run it with the Workflow tool.',
-    '   Each node has a type (the primitive or pattern to use), a title, optional `notes` and `knobs`.',
+    '   Each node has a type (the primitive to use), where it says one a `kind` (the pattern it is used for),',
+    '   a title, optional `notes` and `knobs`.',
     '   `notes` and `knobs` express intent; where the design leaves a gap, resolve it sensibly toward the goal.',
     "   A block's `prompt` knob is the intent for that agent's prompt, not its wording: write the real prompt from it.",
     '',
     '2. Mapping rules. The run view reads them back, so follow them exactly:',
     '   - Label: every agent() call sets label: "<nodeId>: <short text>", where nodeId is the id of the design',
     `     node the agent belongs to, e.g. "${example}". For an agent inside a container (pipeline, parallel,`,
-    "     loop, branch, sweep, phase), use the INNERMOST design node's id, not the container's.",
+    "     loop, branch, phase), use the INNERMOST design node's id, not the container's.",
     '   - Phase: each TOP-LEVEL design node (the `args` block left out) gets one phase titled "<nodeId> <title>". List',
     '     them in meta.phases in design order, and pass that title as `phase` on every agent() under that node.',
     phases.length > 0 ? `     Here: meta.phases = [${phases.join(', ')}]` : '     Here: the design has no nodes yet; say so instead of inventing a workflow.',
@@ -93,11 +107,12 @@ export function buildHandoff(design: Design, designPath: string): Handoff {
     '   The `args` block (always the first) is the input: read the script\'s `args` as its notes and `schema` say, check it',
     '   first thing, and take the values from the user\'s request. With neither set, the workflow takes no input.',
     '   A `phase` block only frames its blocks: they run in order where it stands, as if it were not there.',
+    ...(kindLines(design).length > 0 ? ["   A block's `kind` is the pattern to write, and its knobs and notes say the particulars. The kinds in this design:", ...kindLines(design)] : []),
     '',
     '4. After launching, say in one or two lines how the nodes mapped to stages, and name anything in the',
     '   design that could not be honoured.',
     '',
-    `Outline (id type "title", indented by nesting, an arm of a branch after its IF … / ELSE; ${count} ${count === 1 ? 'node' : 'nodes'}):`,
+    `Outline (id type [kind] "title", indented by nesting, an arm of a branch after its IF … / ELSE; ${count} ${count === 1 ? 'node' : 'nodes'}):`,
     ...outline(design),
   ]
 

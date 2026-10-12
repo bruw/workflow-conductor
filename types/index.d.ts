@@ -5,7 +5,12 @@
 
 export type ConductorDesignNode = {
   id: string
-  type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'verify' | 'judge-panel' | 'loop-until-dry' | 'sweep' | 'critic' | 'args' | 'phase'
+  type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'args' | 'phase'
+  kind?:
+    | 'task' | 'scout' | 'check' | 'verify' | 'judge' | 'critic' | 'synthesize' | 'classify'
+    | 'custom' | 'count' | 'pass' | 'dry' | 'converged' | 'target' | 'budget'
+    | 'arms' | 'each' | 'sweep' | 'attempts'
+    | 'if-else' | 'guard' | 'route'
   title: string
   notes?: string
   knobs?: {
@@ -32,7 +37,7 @@ export type ConductorDesignUi = {
   selectedId: string | null
   help: number
   notice: string | null
-  picker: { at: { parentId?: string; index: number }; query: string; retypeId?: string; anchorId?: string; where?: 'after' | 'inside' | 'before'; pick?: number } | null
+  picker: { at: { parentId?: string; index: number }; query: string; retypeId?: string; anchorId?: string; where?: 'after' | 'inside' | 'before'; pick?: number; block?: ConductorDesignNode['type']; nav?: string; lead?: string } | null
   confirmId: string | null
   viewRootId: string | null
   carousels: Record<string, number>

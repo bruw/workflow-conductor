@@ -1,8 +1,9 @@
-// Teaching content for every node type, and the palette the add list
-// searches. Facts follow the Workflow script reference. Pure TypeScript.
+// Teaching content for every block type and every kind of one, what a kind
+// fills in, and the palette the add list searches. Facts follow the Workflow
+// script reference. Pure TypeScript.
 
-import { EFFORTS } from './model'
-import type { Knobs, NodeType } from './model'
+import { EFFORTS, KINDS, kindOf, kindsOf, plainKind } from './model'
+import type { Kind, Knobs, NodeType } from './model'
 
 export type Teach = {
   /** One character, for the plain list drawn where a surface has no `Client`. */
@@ -20,7 +21,7 @@ export type Teach = {
 /** The add list's two groups: the blocks that do work themselves, and the ones that hold blocks. */
 export type PaletteGroup = 'work' | 'holds'
 
-export type PaletteEntry = { type: NodeType; group: PaletteGroup; keywords: string[] }
+export type PaletteEntry = { type: NodeType; group: PaletteGroup }
 
 /** Each group's heading in the add list, in the order the groups are listed. */
 export const PALETTE_GROUPS: readonly { group: PaletteGroup; heading: string }[] = [
@@ -38,6 +39,7 @@ export const TEACH: Record<NodeType, Teach> = {
     when: 'a step needs reading or judgment: search, review, write, decide',
     card: [
       'One subagent with its own context. Its final text is the return value.',
+      'Its kind says its job: scout, check, verify, judge, critic, synthesize, classify.',
       'Set a schema to force structured output: you get a validated object back, no parsing.',
       'Leave model and effort unset to inherit the session; low effort suits mechanical stages.',
       'Worktree isolation is expensive: only for agents that edit files in parallel.',
@@ -74,11 +76,11 @@ export const TEACH: Record<NodeType, Teach> = {
     glyph: '↻',
     name: 'loop',
     hint: 'Repeats its blocks until a count, a condition or the budget is reached',
-    when: 'you cannot tell up front how many rounds it takes; always set until',
+    when: 'you cannot tell up front how many rounds it takes; say when it stops',
     card: [
       'A plain while loop around one or more steps.',
       'Use to accumulate toward a target (10 findings) or to scale depth to a token budget.',
-      'Always state until. A budget guard must also check that a budget was set at all.',
+      'Always say its stop condition; its kind names the usual ones (count, pass, dry, converged, target, budget).',
       'An unbounded loop runs to the cap of 1000 agents per run.',
     ],
   },
@@ -122,68 +124,6 @@ export const TEACH: Record<NodeType, Teach> = {
       'No file access, no clock and no randomness inside a script.',
     ],
   },
-  verify: {
-    glyph: '◇',
-    name: 'verify',
-    hint: 'Independent checkers try to disprove each result; survivors stay',
-    when: 'a wrong result costs more than checking it: after any finder',
-    card: [
-      'Each voter is prompted to refute the claim and to say refuted when unsure.',
-      'A finding survives only if a majority fail to refute it.',
-      'Use after any finder: it stops plausible but wrong findings from surviving.',
-      'Give voters distinct lenses (correctness, security, repro) when a claim can fail several ways.',
-      'Cost: votes × findings agents. 1 vote for a quick check, 3 to 5 for a thorough one.',
-    ],
-  },
-  'judge-panel': {
-    glyph: '▽',
-    name: 'judge-panel',
-    hint: 'Several attempts at one task; judges score them, the best one wins',
-    when: 'many answers are possible and a first try is rarely the best',
-    card: [
-      'Generate several attempts from different angles: MVP-first, risk-first, user-first.',
-      'Parallel judges score them; synthesize from the winner and graft in the best of the rest.',
-      'Use when the solution space is wide. Beats iterating on a single attempt.',
-      'Waiting for all results is right here: the judges need every attempt at once.',
-      'Cost: attempts + judges + one synthesis.',
-    ],
-  },
-  'loop-until-dry': {
-    glyph: '∞',
-    name: 'loop-until-dry',
-    hint: 'Keeps searching until some rounds in a row find nothing new',
-    when: 'you do not know how many there are to find: bugs, edge cases',
-    card: [
-      'Repeats a round of finders until K consecutive rounds return nothing new.',
-      'Use for discovery of unknown size: bugs, issues, edge cases. Fixed counts miss the tail.',
-      'Dedup against everything seen, not only what was confirmed, or it never converges.',
-      'Cost is open-ended: set until (say 2 dry rounds) and consider a budget guard.',
-    ],
-  },
-  sweep: {
-    glyph: '◎',
-    name: 'sweep',
-    hint: 'Several searchers at once, each looking a different way',
-    when: 'one way of searching would miss things',
-    card: [
-      'Parallel agents that each search differently: by container, content, entity or time.',
-      'Use when one search angle will not find everything.',
-      'Each searcher is blind to the others, so results overlap: dedup in code afterwards.',
-      'Cost: one agent per angle.',
-    ],
-  },
-  critic: {
-    glyph: '◐',
-    name: 'critic',
-    hint: 'One agent at the end asks what is missing; gaps become more work',
-    when: 'before the final write-up of research, review or audit work',
-    card: [
-      'One agent at the end that asks what is missing.',
-      'It looks for a search angle not run, a claim unverified, a source unread.',
-      'Use before synthesis on research, review and audit work.',
-      'What it finds becomes the next round of work. Give it a schema so the gaps can be acted on.',
-    ],
-  },
   args: {
     glyph: '⇢',
     name: 'args',
@@ -213,9 +153,300 @@ export const TEACH: Record<NodeType, Teach> = {
   },
 }
 
-/** `use when: a step needs reading or judgment…`: the line under a type's hint, in the detail pane and the add list. */
-export function useWhen(type: NodeType): string {
-  return `use when: ${TEACH[type].when}`
+/** A block as it is named and looked up: its type, and its kind where it says one. */
+export type BlockRef = { type: NodeType; kind?: Kind }
+
+/** The free-text fields of a block: its notes and the knobs typed as text. */
+export type TextField = 'notes' | 'prompt' | 'when' | 'fanout' | 'until' | 'schema' | 'agentType'
+
+/** A block a new container of some kind starts with. */
+export type Starter = { type: NodeType; kind?: Kind; title: string; notes?: string; knobs?: Knobs }
+
+export type KindTeach = {
+  /** One line, at most HINT_MAX characters, in plain words: what a block of this kind does. */
+  hint: string
+  /** One line, at most HINT_MAX characters: the situation that calls for it. */
+  when: string
+  /** Three to five short lines: what it is, when to use it, cost or gotcha. */
+  card: string[]
+  /** One line in the script's terms: what the hand-off tells Claude the kind means. */
+  script: string
+  /** The knobs a new block of this kind is given: what the pattern needs to be itself. */
+  fill?: Knobs
+  /** What its empty fields are for, shown in the field. `when` is said on a branch and shown on its arms. */
+  hints?: Partial<Record<TextField, string>>
+  /** The blocks a new, empty container of this kind starts with. */
+  starter?: readonly Starter[]
+}
+
+/** The plain kind of a type says what the type says. */
+function plain(type: NodeType, script: string, hints?: KindTeach['hints']): KindTeach {
+  return { hint: TEACH[type].hint, when: TEACH[type].when, card: TEACH[type].card, script, ...(hints ? { hints } : {}) }
+}
+
+/**
+ * Every kind: what it means, what it fills in and what it starts with. A kind adds no field
+ * and takes none away: a block's fields are its type's (`KNOBS_BY_TYPE`). The one exception
+ * is `votes`, which only the two voting kinds of agent have (`VOTING_KINDS`).
+ */
+export const KIND_TEACH: Record<Kind, KindTeach> = {
+  // agent: what is its job?
+  task: plain('agent', 'one agent() call'),
+  scout: {
+    hint: 'Lists the work: the items a later block runs once per',
+    when: 'the work-list is not known up front: files, sites, dimensions',
+    card: [
+      'One cheap agent that finds what there is to do and returns it as a list.',
+      'A pipeline or a parallel after it fans out over that list: name it in their "once per".',
+      'Its output is a shape, so the list arrives as objects and not as prose.',
+      'Low effort suits it: the work is mechanical.',
+    ],
+    script: 'one agent() whose schema is the work-list; the fan-out after it maps over that list',
+    fill: { schema: '{ items: [{ id, what }] }', effort: 'low' },
+    hints: { prompt: 'what to list, e.g. every site that needs the change' },
+  },
+  check: {
+    hint: 'An exact pass or fail: runs the tests, the typecheck, a rule',
+    when: 'the result can be checked exactly, and a loop or a branch reads it',
+    card: [
+      'One agent that runs an objective check and reports ok or the failures: tests, typecheck, lint, a diff.',
+      'It does not judge quality: for a claim that needs doubting use verify, for a choice use judge.',
+      'A loop of kind pass ends each round with it; a branch can skip work on its verdict.',
+      'Its output is a shape, so the code that reads `ok` gets a boolean.',
+    ],
+    script: 'one agent() returning { ok, failures }; the code after it tests `ok`',
+    fill: { schema: '{ ok: boolean, failures: [] }' },
+    hints: { prompt: 'what must hold, e.g. typecheck and tests pass' },
+  },
+  verify: {
+    hint: 'Independent checkers try to disprove each result; survivors stay',
+    when: 'a wrong result costs more than checking it: after any finder',
+    card: [
+      'Each voter is prompted to refute the claim and to say refuted when unsure.',
+      'A finding survives only if a majority fail to refute it.',
+      'Use after any finder: it stops plausible but wrong findings from surviving.',
+      'Give voters distinct lenses (correctness, security, repro) when a claim can fail several ways.',
+      'Cost: votes × findings agents. 1 vote for a quick check, 3 to 5 for a thorough one.',
+    ],
+    script: '`votes` agents in a parallel(), each told to refute the result and to say refuted when unsure; keep it when a majority fail to refute',
+    fill: { votes: 3, schema: '{ refuted: boolean, reason }' },
+    hints: { prompt: 'what to try to refute, e.g. this finding against the code' },
+  },
+  judge: {
+    hint: 'Judges score the candidates before it; the best one wins',
+    when: 'several attempts exist and one has to be picked',
+    card: [
+      'Parallel judges score every candidate against the same criteria; the highest total wins.',
+      'Put the attempts before it (a parallel of kind attempts) and a synthesize after it.',
+      'Waiting for all results is right here: the judges need every candidate at once.',
+      'Cost: one agent per vote.',
+    ],
+    script: '`votes` judges in a parallel(), each scoring every candidate; sum the scores in code and take the highest',
+    fill: { votes: 3, schema: '{ scores: [{ candidate, score, why }] }' },
+    hints: { prompt: 'the criteria to score on, e.g. correctness, simplicity, risk' },
+  },
+  critic: {
+    hint: 'One agent at the end asks what is missing; gaps become more work',
+    when: 'before the final write-up of research, review or audit work',
+    card: [
+      'One agent at the end that asks what is missing.',
+      'It looks for a search angle not run, a claim unverified, a source unread.',
+      'Use before synthesis on research, review and audit work.',
+      'What it finds becomes the next round of work: its output is a shape, so the gaps can be acted on.',
+    ],
+    script: 'one agent() listing what is missing; its gaps are the next round of work',
+    fill: { schema: '{ gaps: [{ what, how_to_fill }] }' },
+    hints: { prompt: 'what complete means here, e.g. every angle searched' },
+  },
+  synthesize: {
+    hint: 'Merges every result before it into one answer',
+    when: 'many results must become one: the write-up at the end',
+    card: [
+      'One agent that reads all the results at once and writes one thing from them: the reduce step.',
+      'It needs every result together, so waiting for all of them before it is right.',
+      'Say what to merge and what to drop: duplicates, the order, what was left out.',
+      'Runs once, whatever the fan-out before it.',
+    ],
+    script: 'one agent() after a barrier, given every result (nulls filtered out), writing one answer',
+    hints: { prompt: 'what to write from all the results', schema: 'free text: the answer itself; a shape only if a block reads it' },
+  },
+  classify: {
+    hint: 'Labels its input with one of a few names; a branch routes on it',
+    when: 'different inputs need different handling: triage, routing',
+    card: [
+      'One cheap agent that sorts its input into one of the labels you name.',
+      'A branch of kind route after it picks the arm that carries the label.',
+      'Its output is a shape, so the branch compares a value and not prose.',
+      'Low effort suits it.',
+    ],
+    script: 'one agent() whose schema is one label out of a fixed list; a branch after it switches on the label',
+    fill: { schema: '{ label }', effort: 'low' },
+    hints: { prompt: 'the labels to choose from, e.g. bug, feature, question' },
+  },
+
+  // loop: when does it stop?
+  custom: plain('loop', 'a while loop with the stop condition as written', { until: 'e.g. 3 rounds · the check passes · 2 dry rounds · budget < 50k' }),
+  count: {
+    hint: 'Repeats its blocks a fixed number of rounds',
+    when: 'you know how many passes it takes: three rounds of refinement',
+    card: ['A for loop: the same blocks, a set number of times.', 'Each round is given what the round before made.', 'Bounded by nature: the cost is the rounds times what a round costs.'],
+    script: 'for (let round = 0; round < N; round++), each round given the result of the last',
+    fill: { until: '3 rounds' },
+  },
+  pass: {
+    hint: 'Repeats until the check at the end of a round passes',
+    when: 'the work can be checked exactly: fix, test, fix again',
+    card: [
+      'A round does the work and ends with a check; the loop stops when the check says ok.',
+      'What the check found is handed to the next round, so each try starts from the failures.',
+      'Say the most rounds it may take: a check that never passes runs to the cap of 1000 agents.',
+      'The last block of a round needs an output shape the stop test can read ({ ok }).',
+    ],
+    script: 'loop while the round\'s last block says `ok` is false, up to the stated rounds; hand its failures to the next round',
+    fill: { until: 'the check passes, at most 3 rounds' },
+    starter: [
+      { type: 'agent', title: 'attempt', notes: 'Does the work. From the second round on it is given what the check found.' },
+      { type: 'agent', kind: 'check', title: 'check', notes: 'Says whether the attempt holds; its failures start the next round.' },
+    ],
+  },
+  dry: {
+    hint: 'Keeps searching until some rounds in a row find nothing new',
+    when: 'you do not know how many there are to find: bugs, edge cases',
+    card: [
+      'Repeats a round of finders until K consecutive rounds return nothing new.',
+      'Use for discovery of unknown size: bugs, issues, edge cases. Fixed counts miss the tail.',
+      'Dedup against everything seen, not only what was confirmed, or it never converges.',
+      'Cost is open-ended: say how many dry rounds end it, and consider a budget as well.',
+    ],
+    script: 'while (dry < K): run the round, dedup against everything seen (not only what was confirmed), count a round with nothing new as dry',
+    fill: { until: '2 rounds in a row find nothing new' },
+    starter: [
+      { type: 'agent', title: 'find', notes: 'One round of finding. Told what was already found, so it looks elsewhere.', knobs: { schema: '{ found: [{ id, what }] }' } },
+      { type: 'code', title: 'dedup', notes: 'Drop what any earlier round found: only the new ones count. None new makes the round dry.' },
+    ],
+  },
+  converged: {
+    hint: 'Repeats until a round changes nothing against the one before',
+    when: 'each round refines the last: draft, critique, revise',
+    card: [
+      'Each round improves on the last result; the loop stops when a round leaves it as it was.',
+      'Plain code compares the two results: give the last block an output shape it can compare.',
+      'Say the most rounds it may take: a result that keeps changing never converges.',
+    ],
+    script: 'keep the last round\'s result and stop when the new one equals it (compared in code), up to the stated rounds',
+    fill: { until: 'the result is the same as last round, at most 5 rounds' },
+  },
+  target: {
+    hint: 'Repeats until enough has been collected',
+    when: 'you need a set number of results: 10 findings, 5 candidates',
+    card: ['Each round adds what it found to one list; the loop stops when the list is long enough.', 'Dedup each round against the list, or the same result is counted twice.', 'A target that cannot be met runs to the cap of 1000 agents: consider a budget as well.'],
+    script: 'while (collected.length < N): push each round\'s results onto `collected`',
+    fill: { until: '10 items collected' },
+  },
+  budget: {
+    hint: 'Repeats while the token budget of the turn lasts',
+    when: 'depth should follow the budget the user gave ("+500k")',
+    card: [
+      'Runs rounds for as long as the turn\'s token budget has room for another.',
+      'With no budget given there is nothing to run against: the loop then does a single round.',
+      'The budget is shared with everything else in the turn.',
+    ],
+    script: 'while (budget.total && budget.remaining() > N); with no budget set, run one round',
+    fill: { until: 'budget below 50k tokens' },
+  },
+
+  // parallel: what differs between its arms?
+  arms: plain('parallel', 'parallel() of the blocks inside, one thunk each', { fanout: 'leave empty: the blocks inside run side by side' }),
+  each: {
+    hint: 'Runs the same blocks once per item, and waits for all',
+    when: 'one job, many items, and the next step needs every result',
+    card: [
+      'What it holds runs once for each item, all at the same time; the next step starts when all are done.',
+      'Say the items in "once per": the list a scout made, the changed files.',
+      'When no step needs all results together, a pipeline does the same without the wait.',
+    ],
+    script: 'parallel(items.map(item => () => …)): a barrier',
+    hints: { fanout: 'the items, e.g. changed files, ×4 dimensions' },
+  },
+  sweep: {
+    hint: 'Several searchers at once, each looking a different way',
+    when: 'one way of searching would miss things',
+    card: [
+      'Parallel agents that each search differently: by container, content, entity or time.',
+      'Use when one search angle will not find everything.',
+      'Each searcher is blind to the others, so results overlap: dedup in code afterwards.',
+      'Cost: one agent per angle.',
+    ],
+    script: 'parallel() of one searcher per angle, each given its angle and blind to the others; dedup their results in code',
+    fill: { fanout: '4 search angles: by container, by content, by entity, by time' },
+  },
+  attempts: {
+    hint: 'Several independent tries at one task, each from its own angle',
+    when: 'a first answer is rarely the best one: a judge picks after',
+    card: [
+      'The same task done several times at once, each try from a different angle and blind to the others.',
+      'Put a judge after it to score the tries, and a synthesize after that to build on the winner.',
+      'Beats iterating on a single try when many answers are possible.',
+      'Cost: one agent per try.',
+    ],
+    script: 'parallel() of N agents on the same task, each given one angle and blind to the others',
+    fill: { fanout: '×3 angles: MVP-first, risk-first, user-first' },
+  },
+
+  // branch: how is its arm picked?
+  'if-else': plain('branch', 'if / else if / else on an earlier result', { when: 'e.g. no findings; leave the last arm empty for the else' }),
+  guard: {
+    hint: 'Runs what it holds only if a condition holds; else skips it',
+    when: 'a step is wasted on an empty result: nothing found, skip the checks',
+    card: [
+      'An if with no else: its one arm runs when its condition holds, and nothing runs when it does not.',
+      'Typical use: zero findings, so skip verification entirely.',
+      'The deciding result should come from a block with an output shape, so the test is exact.',
+      'Costs no tokens.',
+    ],
+    script: 'if (condition) { … } with no else',
+    hints: { when: 'when it runs, e.g. any findings; otherwise nothing runs' },
+  },
+  route: {
+    hint: 'Picks the arm whose label an earlier block chose',
+    when: 'a classifier sorted the input and each sort has its own steps',
+    card: [
+      'A switch: each arm carries one label, and the arm whose label was chosen runs.',
+      'Put an agent of kind classify before it; the arms\' conditions are its labels.',
+      'The last arm may leave its condition empty: it takes every other label.',
+      'Costs no tokens.',
+    ],
+    script: 'switch on the label of the classify block before it; a last arm with no condition is the default',
+    hints: { when: 'the label that picks this arm, e.g. bug' },
+  },
+}
+
+/** What a block says of itself: its kind's words, or its type's for a type that has no kinds. */
+export function teachOf(block: BlockRef): Pick<KindTeach, 'hint' | 'when' | 'card'> {
+  const kind = kindOf(block)
+  return kind === undefined ? TEACH[block.type] : KIND_TEACH[kind]
+}
+
+/** `use when: a step needs reading or judgment…`: the line under a block's hint, in the detail pane and the add list. */
+export function useWhen(block: BlockRef): string {
+  return `use when: ${teachOf(block).when}`
+}
+
+/** The knobs a new block of this type and kind is given. */
+export function fillOf(block: BlockRef): Knobs {
+  const kind = kindOf(block)
+  return kind === undefined ? {} : (KIND_TEACH[kind].fill ?? {})
+}
+
+/** The blocks a new, empty container of this type and kind starts with. */
+export function starterOf(block: BlockRef): readonly Starter[] {
+  const kind = kindOf(block)
+  return kind === undefined ? [] : (KIND_TEACH[kind].starter ?? [])
+}
+
+/** The title a new block gets: its kind's name, or its type's for a plain block. */
+export function defaultTitle(block: BlockRef): string {
+  return block.kind === undefined || block.kind === plainKind(block.type) ? block.type : block.kind
 }
 
 /** What each knob says, in a phrase: the one place the knobs are explained in words (Claude reads it; see chat.ts). */
@@ -226,39 +457,46 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
   effort: `${EFFORTS.join(', ')}; unset inherits`,
   isolation: '"worktree", only for agents that edit files in parallel',
   agentType: 'a subagent type to run as',
-  fanout: 'the items it runs once per, with a count when known: "changed files", "×4 dimensions" (no leading "each")',
-  votes: 'a whole number, for verify and judge-panel',
-  until: 'when a loop stops: "2 dry rounds", "budget < 50k"',
+  fanout: 'on a pipeline or parallel: the items it runs once per, with a count when known: "changed files", "×4 dimensions" (no leading "each")',
+  votes: 'a whole number, on an agent of kind verify or judge',
+  until: 'a loop\'s stop condition, in words: "2 dry rounds", "the check passes, at most 3 rounds"',
   when: 'on a block directly in a branch: the condition that picks this arm, "no findings"; the last arm with none is the else',
 }
 
 /**
- * Which knobs make sense on which type: the one place that says so. The
- * detail pane offers a field for each one typed as text, the card a chip for
- * model, effort and votes; a text knob a block carries anyway (set from chat
- * or by hand in the file) is offered after them. `isolation` has no control:
+ * Which knobs a type has: the one place that says so, and the same for every kind of the
+ * type. The detail pane offers a field for each one typed as text, the card a chip for model,
+ * effort and votes; a knob a block carries anyway (set from chat, by hand in the file, or
+ * before the fields were made the same) is offered after them. `isolation` has no control:
  * Claude sets it, and the detail pane only says where it is set.
  *
- * Reasoning: a knob the script passes to `agent()` (prompt, model, effort,
- * agentType, isolation) belongs to the types that spawn agents; `votes` to the
- * two voting patterns; `until` to the loops; `fanout` to whatever can run once
- * per item; `schema` to anything that hands a result on.
+ * Reasoning: a block that does work says what it is told (`prompt`) and what it hands on
+ * (`schema`); a block that holds blocks says its one rule: what it runs once per (`fanout`)
+ * or when it stops (`until`). A branch's rule is on its arms (`when`). A container hands on
+ * what its last block makes, so it has no `schema` of its own.
  */
 export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
-  agent: ['prompt', 'fanout', 'schema', 'agentType', 'model', 'effort', 'isolation'],
-  verify: ['prompt', 'fanout', 'schema', 'agentType', 'model', 'effort', 'votes'],
-  'judge-panel': ['prompt', 'fanout', 'schema', 'model', 'effort', 'votes'],
-  critic: ['prompt', 'schema', 'agentType', 'model', 'effort'],
-  pipeline: ['fanout', 'schema'],
-  parallel: ['fanout', 'schema'],
-  sweep: ['fanout', 'schema', 'model', 'effort'],
-  loop: ['until', 'schema'],
-  'loop-until-dry': ['until', 'fanout', 'schema', 'model', 'effort'],
-  branch: ['schema'],
+  agent: ['prompt', 'schema', 'agentType', 'model', 'effort', 'isolation'],
   code: ['schema'],
   subworkflow: ['prompt', 'schema'],
   args: ['schema'],
+  pipeline: ['fanout'],
+  parallel: ['fanout'],
+  loop: ['until'],
+  branch: [],
   phase: [],
+}
+
+/** The kinds of agent whose name already says the task: they are not asked for a brief. */
+export const SELF_BRIEFED: readonly Kind[] = ['verify', 'judge', 'critic']
+
+/** The kinds of agent that vote: the only blocks with a `votes` knob. */
+export const VOTING_KINDS: readonly Kind[] = ['verify', 'judge']
+
+/** Whether a block has a knob by its type and kind, whatever it carries. */
+export function offers(block: BlockRef, knob: keyof Knobs): boolean {
+  if (knob === 'votes') return block.type === 'agent' && block.kind !== undefined && VOTING_KINDS.includes(block.kind)
+  return KNOBS_BY_TYPE[block.type].includes(knob)
 }
 
 /** Whether the detail pane offers a block's notes: a phase is its title and no more, so only notes it already carries are shown. */
@@ -267,35 +505,40 @@ export function hasNotes(node: { type: NodeType; notes?: string }): boolean {
 }
 
 /**
- * The knobs of a block: its type's, then any other it has set.
+ * The knobs of a block: its type's (with `votes` on a voting agent), then any other it has set.
  * `when` belongs to no type: it is offered (after the prompt) to a block that stands
  * directly in a `branch`, which `parentType` says.
  */
-export function knobsOf(node: { type: NodeType; knobs?: Knobs }, parentType?: NodeType): (keyof Knobs)[] {
-  const own = KNOBS_BY_TYPE[node.type]
+export function knobsOf(node: BlockRef & { knobs?: Knobs }, parentType?: NodeType): (keyof Knobs)[] {
+  const own: readonly (keyof Knobs)[] = offers(node, 'votes') ? [...KNOBS_BY_TYPE[node.type], 'votes'] : KNOBS_BY_TYPE[node.type]
   const listed: readonly (keyof Knobs)[] = parentType !== 'branch' ? own : own[0] === 'prompt' ? ['prompt', 'when', ...own.slice(1)] : ['when', ...own]
   const extra = (Object.keys(node.knobs ?? {}) as (keyof Knobs)[]).filter(key => !listed.includes(key) && node.knobs?.[key] !== undefined)
   return [...listed, ...extra]
 }
 
 /**
- * How a free-text field is named beside the field, so each reads with no
- * context. `notes` and `prompt` are both prose: notes say what the block does,
- * for whoever reads the design; the prompt is what the agent is to be told.
+ * How a field is named beside it, in the pane's words and in every message: a block has a
+ * name and its logic; the knobs typed as text are named for what they say. The file keeps
+ * its own keys (`title`, `notes`, `schema`, `fanout`, `until`, `when`).
  */
 export const FIELD_LABEL = {
-  title: 'title',
-  notes: 'notes (what it does)',
-  prompt: 'prompt (tell the agent)',
-  fanout: 'fanout (once per)',
-  until: 'until (stop when)',
-  when: 'when (this arm runs if)',
-  schema: 'schema (out)',
-  agentType: 'agentType',
+  title: 'name',
+  notes: 'logic',
+  prompt: 'prompt',
+  fanout: 'once per',
+  until: 'stop condition',
+  when: 'condition',
+  schema: 'output',
+  agentType: 'agent type',
 } as const
 
+/** A field's name as a message says it: the label where it has one (`logic`, `stop condition`), else the knob's own name (`votes`). */
+export function fieldWord(field: string): string {
+  return (FIELD_LABEL as Readonly<Record<string, string>>)[field] ?? field
+}
+
 export const FIELD_PLACEHOLDER = {
-  notes: 'for whoever reads the design: what this block does and why',
+  notes: 'what this block does and why, for whoever reads the design',
   prompt: 'the intent of its prompt; Claude writes the wording',
   fanout: 'e.g. changed files, ×4 dimensions',
   until: 'e.g. 2 dry rounds, 10 findings, budget < 50k',
@@ -304,21 +547,31 @@ export const FIELD_PLACEHOLDER = {
   agentType: 'the default subagent; name another to change it, e.g. Explore',
 } as const
 
+/** What a type's empty fields are for where the type has no kinds to say it. */
+const TYPE_HINTS: Partial<Record<NodeType, Partial<Record<TextField, string>>>> = {
+  code: { notes: 'what it computes, e.g. dedup by ref · keep unrefuted · top 5 by score · merge lists' },
+}
+
+/**
+ * What an empty field of a block says it is for: its kind's hint, else its type's, else the
+ * field's own. An arm's `when` is hinted by the branch it stands in (`parent`).
+ */
+export function placeholderOf(block: BlockRef, field: TextField, parent?: BlockRef): string {
+  const from = field === 'when' ? parent : block
+  const kind = from === undefined ? undefined : kindOf(from)
+  return (kind === undefined ? undefined : KIND_TEACH[kind].hints?.[field]) ?? TYPE_HINTS[block.type]?.[field] ?? FIELD_PLACEHOLDER[field]
+}
+
 /** The add list's order: the blocks that do work, then the ones that hold blocks. `args` is not in it: every design has that block, and no second. */
 export const PALETTE: PaletteEntry[] = [
-  { type: 'agent', group: 'work', keywords: ['subagent', 'prompt', 'task', 'step', 'schema', 'call'] },
-  { type: 'code', group: 'work', keywords: ['js', 'javascript', 'transform', 'dedup', 'filter', 'flatten', 'script', 'group', 'reduce', 'merge', 'aggregate'] },
-  { type: 'verify', group: 'work', keywords: ['adversarial', 'disprove', 'checkers', 'refute', 'skeptic', 'votes', 'check', 'confirm'] },
-  { type: 'critic', group: 'work', keywords: ['completeness', 'missing', 'gaps', 'review', 'what else'] },
-  { type: 'judge-panel', group: 'work', keywords: ['judge panel', 'judges', 'score', 'attempts', 'winner', 'tournament', 'rank'] },
-  { type: 'subworkflow', group: 'work', keywords: ['workflow', 'nested', 'child', 'reuse', 'saved'] },
-  { type: 'pipeline', group: 'holds', keywords: ['stages', 'stream', 'chain', 'map', 'per item', 'no barrier', 'default'] },
-  { type: 'parallel', group: 'holds', keywords: ['barrier', 'concurrent', 'same time', 'together', 'fan-out', 'fanout', 'wait', 'join'] },
-  { type: 'sweep', group: 'holds', keywords: ['multi-modal', 'search', 'angles', 'modes', 'broad', 'coverage'] },
-  { type: 'branch', group: 'holds', keywords: ['if', 'else', 'condition', 'switch', 'early exit', 'skip'] },
-  { type: 'loop', group: 'holds', keywords: ['while', 'repeat', 'until', 'budget', 'iterate', 'count'] },
-  { type: 'loop-until-dry', group: 'holds', keywords: ['loop until dry', 'until dry', 'dry', 'exhaustive', 'discovery', 'converge', 'rounds', 'tail'] },
-  { type: 'phase', group: 'holds', keywords: ['group', 'wrapper', 'frame', 'section', 'stage', 'part', 'label'] },
+  { type: 'agent', group: 'work' },
+  { type: 'code', group: 'work' },
+  { type: 'subworkflow', group: 'work' },
+  { type: 'pipeline', group: 'holds' },
+  { type: 'parallel', group: 'holds' },
+  { type: 'loop', group: 'holds' },
+  { type: 'branch', group: 'holds' },
+  { type: 'phase', group: 'holds' },
 ]
 
 /** The group a type is listed in. */
@@ -326,45 +579,45 @@ export function groupOf(type: NodeType): PaletteGroup {
   return PALETTE.find(entry => entry.type === type)?.group ?? 'work'
 }
 
-// How well `query` matches `text`, 0 for no match. An exact match beats a
-// prefix, a prefix beats a word start, that beats a substring, and a plain
-// in-order subsequence scores lowest, less the further its letters spread.
-function score(query: string, text: string): number {
-  if (text === query) return 100
-  if (text.startsWith(query)) return 80
-  const at = text.indexOf(query)
-  if (at > 0) return /[\s-]/.test(text.charAt(at - 1)) ? 70 : 60
+/** A block in the add list, named in full: `agent verify`, `loop custom`, and the bare type for a type that has no kinds. */
+export function pickName(block: BlockRef): string {
+  const kind = kindOf(block)
+  return kind === undefined ? block.type : `${block.type} ${kind}`
+}
 
-  let from = 0
-  let first = -1
-  let last = -1
-  for (const char of query) {
-    const found = text.indexOf(char, from)
-    if (found < 0) return 0
-    if (first < 0) first = found
-    last = found
-    from = found + 1
-  }
-  return Math.max(1, 30 - (last - first + 1 - query.length))
+/** Every block the add list can add, in its order: each type with each of its kinds, the plain one first. */
+export function allBlocks(): BlockRef[] {
+  return PALETTE.flatMap((entry): BlockRef[] => {
+    const kinds = kindsOf(entry.type)
+    return kinds.length === 0 ? [{ type: entry.type }] : kinds.map(kind => ({ type: entry.type, kind }))
+  })
 }
 
 /**
- * Types matching `query`, best first. A match is a subsequence of the type id,
- * its name or a keyword. An empty query lists the whole palette in order.
+ * The blocks whose name holds what was typed, at the block's level or the kind's: `ver` finds
+ * `agent verify` and `loop converged`, `loop` every kind of loop. A name that starts with it
+ * comes first (the kind's, then the block's), then the rest, each in the list's own order.
+ * Names only: nothing else about a block is searched. An empty query matches nothing here:
+ * the list then shows the blocks, not their kinds.
  */
-export function fuzzy(query: string): NodeType[] {
-  const wanted = query.trim().toLowerCase()
-  if (wanted === '') return PALETTE.map(entry => entry.type)
+export function searchBlocks(query: string): BlockRef[] {
+  const wanted = query.trim().toLowerCase().replace(/\s+/g, ' ')
+  if (wanted === '') return []
+  const rank = (block: BlockRef): number => {
+    const kind = kindOf(block)
+    if ((kind ?? block.type).startsWith(wanted)) return 0
+    if (pickName(block).startsWith(wanted)) return 1
+    return pickName(block).includes(wanted) ? 2 : -1
+  }
+  return allBlocks()
+    .map((block, order) => ({ block, order, rank: rank(block) }))
+    .filter(one => one.rank >= 0)
+    .sort((a, b) => a.rank - b.rank || a.order - b.order)
+    .map(one => one.block)
+}
 
-  const ranked = PALETTE.map((entry, order) => {
-    const names = [entry.type, TEACH[entry.type].name.toLowerCase()]
-    const byName = Math.max(...names.map(text => score(wanted, text)))
-    const byKeyword = Math.max(0, ...entry.keywords.map(text => score(wanted, text.toLowerCase())))
-    // A name match outranks an equally good keyword match.
-    return { type: entry.type, order, score: Math.max(byName > 0 ? byName + 5 : 0, byKeyword) }
-  })
-  return ranked
-    .filter(one => one.score > 0)
-    .sort((a, b) => b.score - a.score || a.order - b.order)
-    .map(one => one.type)
+/** Whether what was typed is how a block's or a kind's name starts: `sw` (sweep), `sc` (scout). */
+export function startsName(text: string): boolean {
+  const wanted = text.toLowerCase()
+  return wanted !== '' && [...PALETTE.map(entry => entry.type as string), ...Object.values(KINDS).flat()].some(name => name.startsWith(wanted))
 }

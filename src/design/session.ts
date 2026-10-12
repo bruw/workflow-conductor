@@ -15,11 +15,12 @@ import { fmtDuration, fmtTokens } from '../ui/rail'
 import { clip, wrapText } from '../ui/text'
 import { REDO_HINT, UNDO_HINT } from './history'
 import { agentsCount, lint, preflight } from './lints'
-import { NODE_TYPES, blockCount, canHoldChildren, emptyDesign, findNode, flatten, isBlank, parseDesign, toKebab } from './model'
+import { NODE_TYPES, blockCount, canHoldChildren, emptyDesign, findNode, flatten, isBlank, kindsOf, parseDesign, toKebab, typeName } from './model'
 import type { Design, DesignNode, NodeType } from './model'
 import { addNode, addPlace, moveNode, placeFor, removeNode, retypeNode, stepKnob, updateNode } from './ops'
 import type { NodePatch, OpResult, Place } from './ops'
-import { TEACH, fuzzy, useWhen } from './teach'
+import { PALETTE, defaultTitle, fieldWord, searchBlocks, startsName, teachOf, useWhen } from './teach'
+import type { BlockRef } from './teach'
 import type { Template } from './templates'
 import { TEMPLATES } from './templates'
 
@@ -52,7 +53,12 @@ export type DesignUi = {
    * knows the block it was opened on (`anchorId`) and which side of it the place is (`where`): `n` again goes round them.
    * With `retypeId` it picks that block's type instead.
    */
-  picker: { at: Place; query: string; retypeId?: string; anchorId?: string; where?: AddWhere; pick?: number } | null
+  /**
+   * The add list. `block`: the type whose kinds it lists while nothing is typed (a block was opened); `nav`: the keys
+   * typed since it opened, kept in case they turn out to start a name; `lead`: the ones that did, which open `query`
+   * and are not in the filter's field (`typePicker`).
+   */
+  picker: { at: Place; query: string; retypeId?: string; anchorId?: string; where?: AddWhere; pick?: number; block?: NodeType; nav?: string; lead?: string } | null
   /** The container a first delete asked about; a second one on it removes it. */
   confirmId: string | null
   /** The container opened as the view (`o`): the graph shows only it. Null at the root. */
@@ -519,19 +525,22 @@ export function patchNode(design: Design | null, ui: DesignUi, id: string, patch
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, editing: false, freshId: null }, changed: false }
   // A field was sent: the typing is over.
-  const fields = [...(patch.title !== undefined ? ['title'] : []), ...('notes' in patch ? ['notes'] : []), ...Object.keys(patch.knobs ?? {})]
+  const fields = [...(patch.title !== undefined ? ['title'] : []), ...('notes' in patch ? ['notes'] : []), ...Object.keys(patch.knobs ?? {})].map(fieldWord)
   return settle(design, { ...ui, editing: false, freshId: null }, updateNode(design, id, patch), ui.selectedId, `${id} changed${fields.length > 0 && fields.length <= 3 ? `: ${fields.join(', ')}` : ''}`, context)
 }
 
-/** A type picked for a block: the block becomes another type, keeping its title, notes, knobs and what it holds. */
-export function retypeBlock(design: Design | null, ui: DesignUi, id: string, type: NodeType, context: RunContext = {}): Step {
+/**
+ * A type and kind picked for a block: the block becomes that, keeping its name, its logic, what it holds and every
+ * knob that was typed (`retypeNode` says what a kind's own knobs do).
+ */
+export function retypeBlock(design: Design | null, ui: DesignUi, id: string, to: BlockRef, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, editing: false, freshId: null }, changed: false }
   const node = findNode(design, id)
-  const retyped = retypeNode(design, id, type)
-  // A block still called after its old type (the title it was added with) takes the new type's name.
-  const renamed = !retyped.error && node && node.type !== type && node.title === node.type ? updateNode(retyped.design, id, { title: type }) : retyped
-  return settle(design, { ...ui, editing: false, freshId: null, picker: null }, renamed, ui.selectedId, `${id} is now ${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`, context)
+  const retyped = retypeNode(design, id, to.type, to.kind)
+  // A block still called after its old type or kind (the name it was added with) takes the new one's.
+  const renamed = !retyped.error && node && node.title === defaultTitle(node) && defaultTitle(to) !== node.title ? updateNode(retyped.design, id, { title: defaultTitle(to) }) : retyped
+  return settle(design, { ...ui, editing: false, freshId: null, picker: null }, renamed, ui.selectedId, `${id} is now ${typeName(to)}`, context)
 }
 
 /** The types a block may become: all of them but `args`, or only containers while it holds blocks. The args block becomes nothing else. */
@@ -599,14 +608,16 @@ export function cyclePlace(design: Design, ui: DesignUi): DesignUi {
   return { ...ui, picker: { ...picker, where, at: placeBy(design, node.id, where) } }
 }
 
-/** The add list's heading: `New block after n4 Deep read` (the legend says the key that changes the place), `Type of n4 Deep read (now pipeline)`. */
+/** The add list's heading: `New block after n4 Deep read` (the legend says the key that changes the place), `Type of n4 Deep read (now agent verify)`; `· which loop?` while it lists a block's kinds. */
 export function addHeading(design: Design, picker: NonNullable<DesignUi['picker']>): string {
   const retyped = picker.retypeId === undefined ? undefined : findNode(design, picker.retypeId)
-  if (retyped) return `Type of ${blockName(retyped)} (now ${retyped.type})`
+  // A block was opened: the list is of its kinds.
+  const kinds = picker.block !== undefined && picker.query === '' ? ` · which ${picker.block}?` : ''
+  if (retyped) return `Type of ${blockName(retyped)} (now ${typeName(retyped)})${kinds}`
   const node = picker.anchorId === undefined ? undefined : findNode(design, picker.anchorId)
-  if (node) return `New block ${picker.where ?? 'after'} ${blockName(node)}`
+  if (node) return `New block ${picker.where ?? 'after'} ${blockName(node)}${kinds}`
   const place = placeLabel(design, picker.at)
-  return place === FIRST_BLOCK ? 'The first block' : `New block ${place}`
+  return `${place === FIRST_BLOCK ? 'The first block' : `New block ${place}`}${kinds}`
 }
 
 function confirmText(design: Design, id: string): string {
@@ -728,23 +739,51 @@ export function openRetype(design: Design | null, ui: DesignUi, id: string, cont
   return { design, ui: { ...ui, notice: null, confirmId: null, editing: false, freshId: null, describing: false, help: 0, picker: { at: { index: 0 }, query: '', retypeId: id } }, changed: false }
 }
 
-/** The types the open add list shows for what was typed, best first: every type, or the ones the block may become. */
-export function pickerMatches(design: Design | null, picker: NonNullable<DesignUi['picker']>): NodeType[] {
+/** A row of the add list: a block to add, or (`opens`) a block type whose kinds the list shows next. */
+export type PickRow = BlockRef & { opens?: boolean }
+
+/**
+ * The rows the open add list shows. With something typed: every block whose name holds it, at the block's
+ * level or the kind's, each named in full (`agent verify`). With nothing typed: the blocks, and one that has
+ * kinds opens on them (`opens`); once a block was opened, its kinds. A block being retyped lists its own kinds
+ * first, and only what it may become.
+ */
+export function pickerMatches(design: Design | null, picker: NonNullable<DesignUi['picker']>): PickRow[] {
   const retyped = picker.retypeId === undefined || design === null ? undefined : findNode(design, picker.retypeId)
   const allowed = picker.retypeId === undefined ? null : retypeChoices(retyped ?? { type: 'agent' })
-  return fuzzy(picker.query).filter(type => allowed === null || allowed.includes(type))
+  const may = (row: BlockRef): boolean => allowed === null || allowed.includes(row.type)
+  const kinds = (type: NodeType): PickRow[] => kindsOf(type).map(kind => ({ type, kind }))
+  if (picker.query.trim() !== '') return searchBlocks(picker.query).filter(may)
+  if (picker.block !== undefined) return kinds(picker.block)
+  const blocks: PickRow[] = PALETTE.map((entry): PickRow => (kindsOf(entry.type).length > 0 ? { type: entry.type, opens: true } : { type: entry.type })).filter(may)
+  return retyped ? [...kinds(retyped.type), ...blocks.filter(row => row.type !== retyped.type)] : blocks
 }
 
 /** The keys the add list keeps for itself while nothing is typed in its filter: up, down, and the place. */
 export const PICKER_KEYS = 'wsn'
-/** The key that closes the add list, wherever it is typed: no type's name holds it. */
+/** One more while it lists a block's kinds: back to the blocks. */
+export const PICKER_BACK = 'b'
+/** The key that closes the add list, wherever it is typed: no block's or kind's name holds it. */
 export const PICKER_CLOSE = 'x'
 
+/** The add list with no key remembered. */
+function forgetNav(picker: NonNullable<DesignUi['picker']>): NonNullable<DesignUi['picker']> {
+  const { nav: _nav, lead: _lead, ...rest } = picker
+  return rest
+}
+
 /**
- * What was typed into the add list's filter since it was last read (`text`, with `whole` the filter's text
- * without the keys already taken from it). While the filter is empty `w` / `s` move the mark and `n` changes
- * the place (on a list a key opened on a block); any other character starts the filter, and from there every
- * character narrows it. `x` closes the list, always. `taken` counts the characters used as keys.
+ * What the add list's filter says now (`whole`: all of its text, without the keys already taken from it).
+ * While the filter is empty `w` / `s` move the mark, `n` changes the place (on a
+ * list a key opened on a block) and `b` goes back from a block's kinds to the blocks; any other character
+ * starts the filter, and from there every character narrows it. `x` closes the list, always. `taken` counts
+ * the characters used as keys.
+ *
+ * Names start with those letters too (`sweep`, `scout`, `budget`), so the keys just taken are remembered: when
+ * they and the next character are how a block's or a kind's name starts, they were the filter all along. They
+ * then open the filter's text as its `lead`: the field they were typed in no longer holds them (it was drawn
+ * anew when they were taken as keys), so the pane says them before the field, and whoever reads the field puts
+ * them before its text (`filterText`).
  */
 export function typePicker(design: Design | null, ui: DesignUi, whole: string): { ui: DesignUi; taken: number } {
   if (!ui.picker) return { ui, taken: 0 }
@@ -752,35 +791,64 @@ export function typePicker(design: Design | null, ui: DesignUi, whole: string): 
   let next = ui
   let query = whole
   let taken = 0
-  while (ui.picker.query === '' && query !== '' && PICKER_KEYS.includes(query.charAt(0))) {
+  let lead = ''
+  while (ui.picker.query === '' && query !== '') {
     const key = query.charAt(0)
     const picker = next.picker ?? ui.picker
-    const last = Math.max(0, pickerMatches(design, picker).length - 1)
-    if (key === 'n') {
+    const run = picker.nav ?? ''
+    if (run !== '' && startsName(`${run}${key}`)) {
+      lead = run
+      break
+    }
+    if (key === PICKER_BACK && picker.block !== undefined) {
+      const { block: _block, ...blocks } = picker
+      next = { ...next, picker: { ...blocks, pick: 0, nav: `${run}${key}` } }
+    } else if (!PICKER_KEYS.includes(key)) break
+    else if (key === 'n') {
       const cycled = design === null ? next : cyclePlace(design, next)
       // On a list with no block to go round, `n` is a letter like any other.
-      if (cycled === next) break
-      next = cycled
-    } else next = { ...next, picker: { ...picker, pick: Math.max(0, Math.min(last, (picker.pick ?? 0) + (key === 's' ? 1 : -1))) } }
+      if (cycled === next || !cycled.picker) break
+      next = { ...cycled, picker: forgetNav(cycled.picker) }
+    } else {
+      const last = Math.max(0, pickerMatches(design, picker).length - 1)
+      next = { ...next, picker: { ...picker, nav: `${run}${key}`, pick: Math.max(0, Math.min(last, (picker.pick ?? 0) + (key === 's' ? 1 : -1))) } }
+    }
     query = query.slice(1)
     taken++
   }
   const picker = next.picker ?? ui.picker
-  return { ui: query === picker.query ? next : { ...next, picker: { ...picker, query, pick: 0 } }, taken }
+  const text = `${lead}${query}`
+  if (text === picker.query) return { ui: next, taken }
+  // A lead stays for as long as the text goes on from it.
+  const kept = lead !== '' ? lead : picker.lead !== undefined && text.length > picker.lead.length && text.startsWith(picker.lead) ? picker.lead : ''
+  return { ui: { ...next, picker: { ...forgetNav(picker), query: text, pick: 0, ...(kept === '' ? {} : { lead: kept }) } }, taken }
 }
 
-/** Adds from the open add list: `type` when a match was pressed, else the marked match for what was typed. */
-export function pickBlock(design: Design | null, ui: DesignUi, choice: { type?: NodeType } = {}, context: RunContext = {}): Step {
+/**
+ * All of the filter's text, from what its field holds (less the keys taken from it): the lead goes before it.
+ * A field emptied takes the lead with it, so the filter can be cleared by deleting.
+ */
+export function filterText(ui: DesignUi, field: string): string {
+  return field === '' ? '' : `${ui.picker?.lead ?? ''}${field}`
+}
+
+/**
+ * Enter or a press in the open add list: `choice` when a row was pressed, else the marked row for what was typed.
+ * A block that has kinds opens on them; any other row is added (or, on a block being retyped, becomes its type).
+ */
+export function pickBlock(design: Design | null, ui: DesignUi, choice: Partial<PickRow> = {}, context: RunContext = {}): Step {
   if (!design || ui.status !== 'ready' || !ui.picker) return { design, ui, changed: false }
   if (context.locked) return { design, ui: { ...ui, picker: null, notice: LOCK_NOTICE }, changed: false }
   const picker = ui.picker
-  const type = choice.type ?? pickerMatches(design, picker)[picker.pick ?? 0]
-  if (type === undefined) return { design, ui: { ...ui, notice: 'no block matches that' }, changed: false }
-  if (picker.retypeId !== undefined) return retypeBlock(design, ui, picker.retypeId, type, context)
-  const result = addNode(design, { type }, picker.at)
+  const row: PickRow | undefined = choice.type !== undefined ? { ...choice, type: choice.type } : pickerMatches(design, picker)[picker.pick ?? 0]
+  if (row === undefined) return { design, ui: { ...ui, notice: 'no block matches that' }, changed: false }
+  if (row.opens) return { design, ui: { ...ui, notice: null, picker: { ...forgetNav(picker), block: row.type, query: '', pick: 0 } }, changed: false }
+  const block: BlockRef = row.kind === undefined ? { type: row.type } : { type: row.type, kind: row.kind }
+  if (picker.retypeId !== undefined) return retypeBlock(design, ui, picker.retypeId, block, context)
+  const result = addNode(design, block, picker.at)
   // The place is said as the block got it: args go first whatever was asked, and nothing goes before them.
-  const at = placeFor(design, type, picker.at)
-  const step = settle(design, ui, result, result.id ?? ui.selectedId, after => `added ${result.id ?? ''} ${type} ${placeLabel(after, at).replace(/ \(at the end\)$/, '')}`, context)
+  const at = placeFor(design, block.type, picker.at)
+  const step = settle(design, ui, result, result.id ?? ui.selectedId, after => `added ${result.id ?? ''} ${typeName(block)} ${placeLabel(after, at).replace(/ \(at the end\)$/, '')}`, context)
   // The new block is selected and its title is the next thing typed.
   return step.changed ? { ...step, ui: { ...step.ui, picker: null, editing: true, freshId: result.id ?? null, drafting: false } } : step
 }
@@ -824,9 +892,9 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['w a s d', 'move the selection'],
   ['Shift+W S', 'move the block one place up / down, into and out of the containers on its way'],
   ['Shift+A D', 'swap an arm with the one beside it'],
-  ['Enter  e', 'edit: the ring goes to the title. In a field Tab walks the fields, Enter saves and returns to the graph, Esc saves and hands the keys to the prompt'],
+  ['Enter  e', 'edit: the ring goes to the name. In a field Tab walks the fields, Enter saves and returns to the graph, Esc saves and hands the keys to the prompt'],
   ['Tab', 'the same field, by the ring\'s own step'],
-  ['n  +', 'a new block after this one; n again in the list: inside, before'],
+  ['n  +', 'a new block after this one: pick a block, then its kind, or type either name; n again in the list: inside, before'],
   ['x', 'delete (a container that holds blocks asks: x again); closes the add list and these pages'],
   ['1 2 3', 'step the model, the effort, the votes (the chips on the selected card)'],
   ['o  b', 'open the selected container as the view / back up one level'],
@@ -872,13 +940,13 @@ export const START_HELP: readonly string[] = [
 ]
 
 /** One help page as rows no wider than `columns`: its title, then paragraphs or a table. `page` counts from 1; `start` is the start screen's first page. */
-export function helpPage(page: number, type: NodeType | undefined, file: string, columns: number, start: boolean = false): HelpRow[] {
+export function helpPage(page: number, block: BlockRef | undefined, file: string, columns: number, start: boolean = false): HelpRow[] {
   const width = Math.max(12, columns)
   const title = (text: string): HelpRow[] => [{ kind: 'title', text: clip(text, width) }, { kind: 'blank', text: '' }]
   const cap = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1)
   if (start && page === 1) return [...title('Starting a design'), ...paragraphs(START_HELP, width)]
   if (start && page === 4) return [...title('Mouse'), ...paragraphs(MOUSE_HELP, width)]
-  if (page === 1) return type ? [...title(`The ${type} block`), ...paragraphs([`${cap(TEACH[type].hint)}.`, `${cap(useWhen(type))}.`, ...TEACH[type].card], width)] : [...title('The selected block'), ...paragraphs(['Select a block to read about its type.'], width)]
+  if (page === 1) return block ? [...title(`The ${typeName(block)} block`), ...paragraphs([`${cap(teachOf(block).hint)}.`, `${cap(useWhen(block))}.`, ...teachOf(block).card], width)] : [...title('The selected block'), ...paragraphs(['Select a block to read about its type.'], width)]
   if (page === 2) return [...title('What the graph shows'), ...table(LEGEND, width)]
   if (page === 3) return [...title('Keys'), ...table(KEY_HELP, width)]
   return [...title('Mouse and file'), ...paragraphs([...MOUSE_HELP, `This design is saved in ${file}.`], width)]

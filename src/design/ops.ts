@@ -1,9 +1,10 @@
 // Immutable edits on a Design. Every operation returns a new Design, or the
 // same Design plus a reason when the edit is refused. Pure TypeScript.
 
-import { ARGS_PLACE, EFFORTS, aType, argsOf, canHoldChildren, findNode, isNodeType, knobError, nextIdNumber, walk } from './model'
-import type { Design, DesignNode, Knobs, NodeType } from './model'
-import { KNOBS_BY_TYPE } from './teach'
+import { ARGS_PLACE, EFFORTS, aType, argsOf, typeName, canHoldChildren, findNode, isNodeType, knobError, nextIdNumber, readType, walk } from './model'
+import type { Design, DesignNode, Kind, Knobs, NodeType } from './model'
+import { defaultTitle, fillOf, offers, starterOf } from './teach'
+import type { BlockRef, Starter } from './teach'
 
 export type OpResult = { design: Design; error?: string }
 
@@ -98,9 +99,34 @@ export function placeFor(design: Pick<Design, 'nodes'>, type: NodeType, at: Plac
   return at.parentId === undefined && argsOf(design) ? { index: Math.max(1, Number.isFinite(at.index) ? Math.trunc(at.index) : design.nodes.length) } : at
 }
 
-/** Inserts a new node. `at.index` is clamped to the destination list; `args` goes first, and nothing goes before it. */
-export function addNode(design: Design, spec: { type: NodeType; title?: string }, asked: Place): AddResult {
+/** A new block of a type and kind, with what the kind fills in under the knobs it is given. */
+function made(id: string, block: BlockRef, title: string, knobs: Knobs = {}): DesignNode {
+  const node: DesignNode = { id, type: block.type, title }
+  if (block.kind !== undefined) node.kind = block.kind
+  const filled = { ...fillOf(block), ...knobs }
+  if (Object.keys(filled).length > 0) node.knobs = filled
+  if (canHoldChildren(block.type)) node.children = []
+  return node
+}
+
+/** The blocks a container of a kind starts with, numbered from `number` on. */
+function starters(block: BlockRef, number: number): DesignNode[] {
+  return starterOf(block).map((one: Starter, index) => {
+    const read = readType(one.type, one.kind)
+    const node = made(`n${number + index}`, 'error' in read ? { type: one.type } : read, one.title, one.knobs)
+    return one.notes === undefined ? node : { ...node, notes: one.notes }
+  })
+}
+
+/**
+ * Inserts a new node. `at.index` is clamped to the destination list; `args` goes first, and nothing goes before it.
+ * A block of a kind is given what the kind fills in, and a container of a kind that starts with blocks is given
+ * them: all of it one edit. `bare` leaves the starting blocks out, for an edit that brings its own.
+ */
+export function addNode(design: Design, spec: { type: NodeType; kind?: Kind; title?: string; bare?: boolean }, asked: Place): AddResult {
   if (!isNodeType(spec.type)) return refuse(design, `unknown type ${String(spec.type)}`)
+  const block = readType(spec.type, spec.kind)
+  if ('error' in block) return refuse(design, block.error)
   const taken = spec.type === 'args' ? argsOf(design) : undefined
   if (taken) return refuse(design, argsTaken(taken.id))
   const at = placeFor(design, spec.type, asked)
@@ -109,10 +135,11 @@ export function addNode(design: Design, spec: { type: NodeType; title?: string }
 
   const number = nextIdNumber(design)
   const id = `n${number}`
-  const node: DesignNode = { id, type: spec.type, title: spec.title ?? spec.type }
-  if (canHoldChildren(spec.type)) node.children = []
+  const node = made(id, block, spec.title ?? defaultTitle(block))
+  const held = spec.bare ? [] : starters(block, number + 1)
+  if (held.length > 0) node.children = held
   const nodes = editList(design.nodes, at.parentId, list => insertAt(list, at.index, node))
-  return { design: { ...design, nextId: number + 1, nodes }, id }
+  return { design: { ...design, nextId: number + 1 + held.length, nodes }, id }
 }
 
 /** Removes a node and everything nested in it. The `args` block is never removed. */
@@ -183,14 +210,18 @@ export function updateNode(design: Design, id: string, patch: NodePatch): OpResu
 }
 
 /**
- * Changes a node's type and nothing else. A block that holds others can only
+ * Changes a node's type and kind (the plain kind where none is said). A block that holds others can only
  * become another container; the `args` block stays what it is, and no block becomes one.
+ * Its knobs follow the kind and never lose what was typed: a knob still as the old kind filled it in goes,
+ * and the new kind fills in the ones that are not set. A container left empty starts with its new kind's blocks.
  */
-export function retypeNode(design: Design, id: string, type: NodeType): OpResult {
+export function retypeNode(design: Design, id: string, type: NodeType, kind?: Kind): OpResult {
   const node = findNode(design, id)
   if (!node) return refuse(design, `no block ${id}`)
   if (!isNodeType(type)) return refuse(design, `unknown type ${String(type)}`)
-  if (node.type === type) return { design }
+  const block = readType(type, kind)
+  if ('error' in block) return refuse(design, block.error)
+  if (node.type === type && node.kind === block.kind) return { design }
   if (node.type === 'args') return refuse(design, ARGS_KEPT)
   if (type === 'args') {
     const taken = argsOf(design)
@@ -200,9 +231,18 @@ export function retypeNode(design: Design, id: string, type: NodeType): OpResult
     return refuse(design, `${id} holds blocks and ${aType(type)} block cannot hold children: move or remove them first`)
   }
   const next: DesignNode = { ...node, type }
-  if (canHoldChildren(type)) next.children = node.children ?? []
+  if (block.kind !== undefined) next.kind = block.kind
+  else delete next.kind
+  const knobs: Record<string, unknown> = { ...node.knobs }
+  for (const [key, value] of Object.entries(fillOf(node))) if (knobs[key] === value) delete knobs[key]
+  for (const [key, value] of Object.entries(fillOf(block))) knobs[key] ??= value
+  if (Object.keys(knobs).length > 0) next.knobs = knobs as Knobs
+  else delete next.knobs
+  const number = nextIdNumber(design)
+  const held = (node.children?.length ?? 0) > 0 ? [] : starters(block, number)
+  if (canHoldChildren(type)) next.children = held.length > 0 ? held : (node.children ?? [])
   else delete next.children
-  return { design: { ...design, nodes: replace(design.nodes, id, next) } }
+  return { design: { ...design, ...(held.length > 0 ? { nextId: number + held.length } : {}), nodes: replace(design.nodes, id, next) } }
 }
 
 /** The knobs a digit steps on the selected block, and the models the first one goes through. */
@@ -213,9 +253,9 @@ export const VOTES_STEP_MAX = 5
 /** What an unset model or effort reads as. */
 export const INHERIT = 'inherit'
 
-/** Which knob a digit steps on a block: 1 its model, 2 its effort, 3 its votes. Undefined where its type has none. */
-export function quickKnob(node: Pick<DesignNode, 'type'>, slot: number): QuickKnob | undefined {
-  const has = (knob: keyof Knobs): boolean => KNOBS_BY_TYPE[node.type].includes(knob)
+/** Which knob a digit steps on a block: 1 its model, 2 its effort, 3 its votes. Undefined where its type and kind have none. */
+export function quickKnob(node: Pick<DesignNode, 'type' | 'kind'>, slot: number): QuickKnob | undefined {
+  const has = (knob: keyof Knobs): boolean => offers(node, knob)
   if (slot === 1) return has('model') ? 'model' : undefined
   if (slot === 2) return has('effort') ? 'effort' : undefined
   if (slot === 3) return has('votes') ? 'votes' : undefined
@@ -237,7 +277,7 @@ export function stepKnob(design: Design, id: string, slot: number): OpResult & {
   const node = findNode(design, id)
   if (!node) return refuse(design, `no block ${id}`)
   const knob = quickKnob(node, slot)
-  if (knob === undefined) return refuse(design, `${id} is ${/^[aeiou]/.test(node.type) ? 'an' : 'a'} ${node.type}: it has no ${slot === 1 ? 'model' : slot === 2 ? 'effort' : 'votes'}`)
+  if (knob === undefined) return refuse(design, `${id} is ${/^[aeiou]/.test(node.type) ? 'an' : 'a'} ${typeName(node)}: it has no ${slot === 1 ? 'model' : slot === 2 ? 'effort' : 'votes'}`)
   const after = <T>(steps: readonly T[], now: T | undefined): T | undefined => (now === undefined ? steps[0] : steps[steps.indexOf(now) + 1 || steps.length])
   const patch: Partial<Knobs> =
     knob === 'model'

@@ -99,6 +99,10 @@ export type LegendState = {
   placed: boolean
   /** The add list picks a block's type, it adds none. */
   retype: boolean
+  /** The add list's marked row is a block that has kinds: Enter opens them. */
+  opens?: boolean
+  /** The add list shows a block's kinds: `b` goes back to the blocks. */
+  kinds?: boolean
   /** The design holds no block of its own (the args block alone): nothing to run or to review. */
   empty: boolean
   /** The selected block is the args block: it does not move and is not deleted. */
@@ -146,8 +150,9 @@ export function legendItems(state: LegendState): Legend {
       detail: [
         { keys: 'w s', word: 'Choose', core: true },
         ...(state.placed ? [{ keys: 'n', word: 'Change place', core: true }] : []),
+        ...(state.kinds ? [{ keys: 'b', word: 'Blocks', core: true }] : []),
         { keys: 'a-z', word: 'Filter', core: false },
-        { keys: 'Enter', word: state.retype ? 'Set type' : 'Add', core: true },
+        { keys: 'Enter', word: state.opens ? 'Kinds' : state.retype ? 'Set type' : 'Add', core: true },
         { keys: 'x', word: 'Cancel', core: true },
       ],
     }

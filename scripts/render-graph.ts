@@ -23,8 +23,8 @@
 
 import { readFileSync } from 'node:fs'
 import { lint } from '../src/design/lints'
-import { flatten, parseDesign, withArgs } from '../src/design/model'
-import type { Design, DesignNode, Knobs, NodeType } from '../src/design/model'
+import { flatten, parseDesign, readType, withArgs } from '../src/design/model'
+import type { Design, DesignNode, Kind, Knobs, NodeType } from '../src/design/model'
 import type { Place } from '../src/design/ops'
 import { TEMPLATES } from '../src/design/templates'
 import type { NodeRun } from '../src/run/events'
@@ -32,8 +32,12 @@ import { layoutGraph, panTo } from '../src/ui/graph-layout'
 import { paintGraph } from '../src/ui/graph-paint'
 import type { RunOverlay, Span } from '../src/ui/graph-paint'
 
-function node(id: string, type: NodeType, title: string, notes: string, knobs: Knobs = {}, children?: DesignNode[]): DesignNode {
-  const made: DesignNode = { id, type, title }
+// `block` is a type, or a type and a kind: `agent`, `agent verify`.
+function node(id: string, block: NodeType | `${NodeType} ${Kind}`, title: string, notes: string, knobs: Knobs = {}, children?: DesignNode[]): DesignNode {
+  const [type, kind] = block.split(' ')
+  const read = readType(type, kind)
+  if ('error' in read) throw new Error(`${id}: ${read.error}`)
+  const made: DesignNode = { id, ...read, title }
   if (notes !== '') made.notes = notes
   if (Object.keys(knobs).length > 0) made.knobs = knobs
   if (children) made.children = children
@@ -58,7 +62,7 @@ export const STRESS: Record<string, () => Design> = {
         'Every lens runs at once; the writer needs all nine.',
         {},
         ['correctness', 'security', 'performance', 'tests', 'docs', 'api shape', 'migrations', 'observability', 'cost'].map((lens, i) =>
-          node(`n${i + 3}`, i === 4 ? 'verify' : 'agent', lens, `Review the change for ${lens} only.`, { ...(i % 3 === 0 ? { model: 'sonnet' } : {}), ...(i === 4 ? { votes: 3 } : {}), schema: '{ findings: [{ file, claim }] }' }),
+          node(`n${i + 3}`, i === 4 ? 'agent verify' : 'agent', lens, `Review the change for ${lens} only.`, { ...(i % 3 === 0 ? { model: 'sonnet' } : {}), ...(i === 4 ? { votes: 3 } : {}), schema: '{ findings: [{ file, claim }] }' }),
         ),
       ),
       node('n12', 'agent', 'write up', 'One review from all nine lenses.', { model: 'opus', effort: 'high' }),
@@ -72,14 +76,14 @@ export const STRESS: Record<string, () => Design> = {
           node('n4', 'parallel', 'finders', '', {}, [
             node('n5', 'pipeline', 'find and check', '', { fanout: 'candidate files' }, [
               node('n6', 'agent', 'find', 'Look for the defect in this file.', { effort: 'low' }),
-              node('n7', 'loop-until-dry', 'dig', '', { until: '1 dry round' }, [
-                node('n8', 'sweep', 'angles', '', { fanout: '3 angles' }, [node('n9', 'agent', 'probe', 'Try one way to trigger it.', {}), node('n10', 'verify', 'confirm', 'Refute the trigger.', { votes: 2 })]),
+              node('n7', 'loop dry', 'dig', '', { until: '1 dry round' }, [
+                node('n8', 'parallel sweep', 'angles', '', { fanout: '3 angles' }, [node('n9', 'agent', 'probe', 'Try one way to trigger it.', {}), node('n10', 'agent verify', 'confirm', 'Refute the trigger.', { votes: 2 })]),
                 node('n11', 'code', 'dedupe', 'Drop repeats.', {}),
               ]),
             ]),
             node('n12', 'agent', 'grep sweep', 'A cheap textual pass over everything.', { model: 'haiku' }),
           ]),
-          node('n13', 'critic', 'what is missing', 'Name the places nobody looked.', { schema: '{ gaps[] }' }),
+          node('n13', 'agent critic', 'what is missing', 'Name the places nobody looked.', { schema: '{ gaps[] }' }),
         ]),
       ]),
       node('n14', 'agent', 'report', 'Write up what was found, per area.', {}),
@@ -89,9 +93,9 @@ export const STRESS: Record<string, () => Design> = {
     design('research-answer', 'Answer a question from many sources: search, read, check gaps, write up.', [
       node('n1', 'pipeline', 'Deep read', '', { fanout: 'deduped sources' }, [
         node('n2', 'agent', 'Search', 'Find relevant sources.', { model: 'haiku', effort: 'low', schema: 'sources' }),
-        node('n3', 'verify', 'Check claims', 'Try to refute the claims.', { model: 'sonnet', effort: 'high', votes: 2, schema: 'verdict + reason' }),
+        node('n3', 'agent verify', 'Check claims', 'Try to refute the claims.', { model: 'sonnet', effort: 'high', votes: 2, schema: 'verdict + reason' }),
         node('n4', 'agent', 'Read source', 'Extract claims with evidence.', { model: 'sonnet', effort: 'high', schema: 'claims + quotes + confidence' }),
-        node('n5', 'sweep', 'Multi-modal sweep', '', { fanout: '4 search directions' }, []),
+        node('n5', 'parallel sweep', 'Multi-modal sweep', '', { fanout: '4 search directions' }, []),
       ]),
       node('n6', 'branch', 'Choose response', '', {}, [
         node('n7', 'agent', 'Write answer', '', { model: 'opus', effort: 'high', when: 'the claims cover the question' }),
@@ -111,7 +115,7 @@ export const STRESS: Record<string, () => Design> = {
     design('a-design-whose-name-is-much-longer-than-a-design-name-has-any-business-being', LONG, [
       node('n1', 'agent', 'Read every single source from the first page to the last and extract all of the claims', LONG, { model: 'claude-opus-with-a-very-long-custom-model-name', effort: 'xhigh', schema: '{ claims: [{ claim, quote, page, line, confidence, why, agrees_with[], disagrees_with[] }] }', fanout: 'each of the deduped sources that survived the first two filters' }),
       node('n2', 'pipeline', 'A pipeline with a title that goes on and on well past the width of its own border', LONG, { fanout: '×12 of the sources that the reader before it marked as worth a second and slower look', schema: '{ verdicts[] }' }, [
-        node('n3', 'verify', 'Refute each and every claim against the quoted source text, defaulting to refuted', `${LONG}\n\nSecond paragraph: ${LONG}`, { votes: 5, model: 'sonnet', schema: '{ refuted: boolean, reason: string, quote: string }' }),
+        node('n3', 'agent verify', 'Refute each and every claim against the quoted source text, defaulting to refuted', `${LONG}\n\nSecond paragraph: ${LONG}`, { votes: 5, model: 'sonnet', schema: '{ refuted: boolean, reason: string, quote: string }' }),
         node('n4', 'branch', 'Decide what happens to the claim next, by its verdict', '', {}, [
           node('n5', 'agent', 'Keep', 'Supercalifragilisticexpialidocious-and-then-some-unbroken-word-that-cannot-wrap-anywhere-at-all', { when: 'at least two of the three checkers failed to refute it and the quote is verbatim in the source' }),
           node('n6', 'code', 'Drop it and log why it was dropped', '', {}),

@@ -2,8 +2,9 @@
 // structural or keyword heuristic, stated above the rule. Each one prefers
 // missing a case to raising a false alarm. Lints never block anything.
 
-import { blockCount, canHoldChildren, flatten, walk } from './model'
+import { KINDS, blockCount, typeName, canHoldChildren, flatten, kindOf, walk } from './model'
 import type { Design, DesignNode } from './model'
+import { KIND_TEACH, SELF_BRIEFED, placeholderOf } from './teach'
 
 export type LintRule =
   | 'barrier-not-needed'
@@ -38,6 +39,19 @@ function blank(text: string | undefined): boolean {
   return text === undefined || text.trim() === ''
 }
 
+/** Whether a block is an agent that has to be told its task: every agent but the kinds whose name is the task. */
+export function needsBrief(node: Pick<DesignNode, 'type' | 'kind'>): boolean {
+  return node.type === 'agent' && !(node.kind !== undefined && SELF_BRIEFED.includes(node.kind))
+}
+
+/** Whether a loop has to say when it stops: every loop but the kind `dry`, whose pattern is its bound. */
+export function needsStop(node: Pick<DesignNode, 'type' | 'kind'>): boolean {
+  return node.type === 'loop' && node.kind !== 'dry'
+}
+
+/** A stop condition to name as the example, by the loop's kind: what the kind fills in. */
+const LOOP_STOPS: Readonly<Record<string, string | undefined>> = Object.fromEntries(KINDS.loop.map(kind => [kind, KIND_TEACH[kind].fill?.until]))
+
 // The node whose output a sibling placed right after `node` receives: the
 // node itself, or the last stage of a pipeline, parallel, sweep or loop.
 function producer(node: DesignNode): DesignNode {
@@ -53,9 +67,7 @@ function receiver(node: DesignNode): DesignNode {
 }
 
 /** Containers whose blocks run one after the other: a block in one receives what the block before it made. */
-const CHAINS: readonly string[] = ['pipeline', 'loop', 'loop-until-dry', 'phase']
-/** Leaves whose result is a model's answer: free text unless a schema is set. */
-const ANSWERS: readonly string[] = ['agent', 'verify', 'judge-panel', 'critic']
+const CHAINS: readonly string[] = ['pipeline', 'loop', 'phase']
 
 /**
  * Whether anything reaches `node` to work on. It does when a block stands before
@@ -72,7 +84,7 @@ function hasInput(design: Design, id: string): boolean {
     if (chained && row.index > 0) return true
     if (parent === undefined) return false
     if (!blank(parent.node.knobs?.fanout)) return true
-    if ((parent.node.type === 'loop' || parent.node.type === 'loop-until-dry') && (parent.node.children?.length ?? 0) > 1) return true
+    if (parent.node.type === 'loop' && (parent.node.children?.length ?? 0) > 1) return true
     row = parent
   }
   return false
@@ -87,13 +99,14 @@ export function lint(design: Design): Lint[] {
     const previous = siblings[info.index - 1]
 
     // 1. Barrier not needed. Heuristic: a `parallel` node directly followed by
-    // a sibling that is neither a `code` node nor a `judge-panel` (both work on
-    // the full set by nature) and whose title, notes and prompt carry no word
+    // a sibling that is neither a `code` node nor an agent of kind judge or
+    // synthesize (all three work on the full set by nature) and whose title, notes and prompt carry no word
     // about working across items (dedup, merge, compare, all, rank, …).
     // A parallel with nothing after it returns its results and is left alone.
     // A phase after it is looked into (its first block is the sibling), and an empty one is left alone.
     const taker = next ? receiver(next) : undefined
-    if (node.type === 'parallel' && taker && taker.type !== 'phase' && taker.type !== 'code' && taker.type !== 'judge-panel' && !CROSS_ITEM.test(words(taker))) {
+    const wholeSet = taker !== undefined && (taker.type === 'code' || taker.kind === 'judge' || taker.kind === 'synthesize')
+    if (node.type === 'parallel' && taker && taker.type !== 'phase' && !wholeSet && !CROSS_ITEM.test(words(taker))) {
       lints.push({
         nodeId: node.id,
         rule: 'barrier-not-needed',
@@ -113,14 +126,17 @@ export function lint(design: Design): Lint[] {
       })
     }
 
-    // 3. Unbounded loop. Heuristic: a `loop` node with an empty `until` knob
-    // whose title, notes and prompt mention no bound (until, budget, max,
-    // rounds, limit, …). `loop-until-dry` is exempt: the pattern is its bound.
-    if (node.type === 'loop' && blank(node.knobs?.until) && !BOUNDED.test(words(node))) {
+    // 3. Unbounded loop. A `loop` node with an empty stop condition (`until`).
+    // A plain loop is let off when its title, notes and prompt mention a bound
+    // (until, budget, max, rounds, limit, …: a heuristic); a loop of a kind has
+    // its stop condition filled in, so an empty one was emptied. The kind `dry`
+    // is exempt: the pattern is its bound.
+    const stops = kindOf(node)
+    if (node.type === 'loop' && blank(node.knobs?.until) && (stops === 'custom' ? !BOUNDED.test(words(node)) : stops !== 'dry')) {
       lints.push({
         nodeId: node.id,
         rule: 'loop-unbounded',
-        message: 'loop has no until: say when it stops (a count, dry rounds or a budget guard), or it runs to the 1000-agent cap',
+        message: `loop has no stop condition: say when it stops (${stops === 'custom' ? 'a count, dry rounds, a check that passes or a budget' : `e.g. "${LOOP_STOPS[stops ?? 'custom'] ?? '3 rounds'}"`}), or it runs to the 1000-agent cap`,
       })
     }
 
@@ -133,7 +149,7 @@ export function lint(design: Design): Lint[] {
         lints.push({
           nodeId: source.id,
           rule: 'code-input-no-schema',
-          message: `"${node.title}" is code reading this agent's output, which is free text without a schema: set a schema to get a validated object`,
+          message: `"${node.title}" is code reading this agent's output, which is free text with no output set: set its output to get a validated object`,
         })
       }
     }
@@ -155,26 +171,27 @@ export function lint(design: Design): Lint[] {
 
     // 6. An agent nobody briefed. Structural: an `agent` block with neither
     // notes nor a prompt knob. Its title is all Claude has to write a prompt from.
-    if (node.type === 'agent' && blank(node.notes) && blank(node.knobs?.prompt)) {
+    // The kinds whose name is the brief (verify, judge, critic) are left alone.
+    if (needsBrief(node) && blank(node.notes) && blank(node.knobs?.prompt)) {
       lints.push({
         nodeId: node.id,
         rule: 'agent-no-brief',
-        message: 'agent has no notes and no prompt, so only its title says what it does: write its task in notes, or what to tell it in prompt',
+        message: 'agent has no logic and no prompt, so only its name says what it does: write its task in logic, or what to tell it in prompt',
       })
     }
 
-    // 7. A vote with no count. Structural: a `verify` or `judge-panel` whose
-    // `votes` knob is unset.
-    if ((node.type === 'verify' || node.type === 'judge-panel') && node.knobs?.votes === undefined) {
+    // 7. A vote with no count. Structural: an agent of kind verify or judge
+    // whose `votes` knob is unset.
+    if ((node.kind === 'verify' || node.kind === 'judge') && node.knobs?.votes === undefined) {
       lints.push({
         nodeId: node.id,
         rule: 'no-votes',
-        message: `${node.type} has no votes, so how many ${node.type === 'verify' ? 'checkers look at each result' : 'judges score the attempts'} is left to chance: set votes (1 is a quick check, 3 a majority)`,
+        message: `${node.kind} has no votes, so how many ${node.kind === 'verify' ? 'checkers look at each result' : 'judges score the attempts'} is left to chance: set votes (1 is a quick check, 3 a majority)`,
       })
     }
 
     // 8. A verify with nothing to verify. Structural: see `hasInput`.
-    if (node.type === 'verify' && !hasInput(design, node.id)) {
+    if (node.kind === 'verify' && !hasInput(design, node.id)) {
       lints.push({
         nodeId: node.id,
         rule: 'verify-nothing-before',
@@ -182,35 +199,40 @@ export function lint(design: Design): Lint[] {
       })
     }
 
-    // 9. One branch side by side with nothing. Structural: a `parallel` or
-    // `sweep` holding exactly one block, where neither it nor that block states
-    // a fan-out (one block run once per item is a real use of both).
+    // 9. One block side by side with nothing. Structural: a `parallel` holding
+    // exactly one block, where neither it nor that block states a fan-out (one
+    // block run once per item is a real use of it). A plain parallel is told to
+    // add the other blocks; one of a kind that runs its block several times
+    // (each, sweep, attempts) only lacks what it runs once per.
     const only = node.children?.length === 1 ? node.children[0] : undefined
-    if ((node.type === 'parallel' || node.type === 'sweep') && only && blank(node.knobs?.fanout) && blank(only.knobs?.fanout)) {
+    if (node.type === 'parallel' && only && blank(node.knobs?.fanout) && blank(only.knobs?.fanout)) {
       lints.push({
         nodeId: node.id,
         rule: 'single-branch',
-        message: `${node.type} holds one block, so nothing runs side by side: add the other ${node.type === 'sweep' ? 'searchers' : 'blocks'} (n adds a block, n again: inside), set fanout to run it once per item, or take "${only.title}" out and delete the ${node.type}`,
+        message:
+          kindOf(node) === 'arms'
+            ? `parallel holds one block, so nothing runs side by side: add the other blocks (n adds a block, n again: inside), set once per to run it once per item, or take "${only.title}" out and delete the parallel`
+            : `${typeName(node)} does not say what "${only.title}" runs once per, so it runs once: set once per (${placeholderOf(node, 'fanout').replace(/^the items, /, '')})`,
       })
     }
 
     // 10. A loop nothing decides. Structural: the last block of a round (the
     // last stage, followed into containers) is what the stop test reads. The
-    // lint fires when that block is a model's answer with no `schema` (free
-    // text: `until` has nothing exact to test), or when it is a `critic` and
-    // the loop states no `until` (its gaps start another round, every round).
+    // lint fires when that block is an agent with no `schema` (free text: the
+    // stop condition has nothing exact to test), or when it is a critic and
+    // the loop states no stop condition (its gaps start another round, every round).
     // A round that ends in `code`, a `branch` or a subworkflow is left alone.
-    if ((node.type === 'loop' || node.type === 'loop-until-dry') && (node.children?.length ?? 0) > 0) {
+    if (node.type === 'loop' && (node.children?.length ?? 0) > 0) {
       const last = producer(node)
-      const free = ANSWERS.includes(last.type) && blank(last.knobs?.schema)
-      const endless = last.type === 'critic' && blank(node.knobs?.until)
+      const free = last.type === 'agent' && blank(last.knobs?.schema)
+      const endless = last.kind === 'critic' && blank(node.knobs?.until)
       if (free || endless) {
         lints.push({
           nodeId: node.id,
           rule: 'loop-no-decider',
           message: free
-            ? `nothing decides the next round: the round ends with "${last.title}" (${last.id}), whose result is free text. Give ${last.id} a schema the stop test can read (e.g. { found: [...] }), or end the round with a code block that counts`
-            : `nothing decides the next round: "${last.title}" (${last.id}) ends each round with new gaps and the loop has no until. Say when it stops (e.g. until: no gaps, or 3 rounds)`,
+            ? `nothing decides the next round: the round ends with "${last.title}" (${last.id}), whose result is free text. Give ${last.id} an output the stop test can read (e.g. { found: [...] }), or end the round with a code block that counts`
+            : `nothing decides the next round: "${last.title}" (${last.id}) ends each round with new gaps and the loop has no stop condition. Say when it stops (e.g. no gaps, or 3 rounds)`,
         })
       }
     }
@@ -218,15 +240,18 @@ export function lint(design: Design): Lint[] {
     // 11. An arm nothing picks. Structural: a block directly in a `branch` with
     // no `when`, unless it is the last of several arms (the else). The graph
     // writes `IF [not set]` on the same arms.
+    // A guard has one arm by design: it is not told to add another.
     const arms = info.parent?.type === 'branch' ? siblings.length : 0
     if (arms > 0 && blank(node.knobs?.when) && (info.index < arms - 1 || arms === 1)) {
       lints.push({
         nodeId: node.id,
         rule: 'arm-no-when',
         message:
-          arms === 1
-            ? `the only arm of branch ${info.parent?.id ?? ''} has no condition, so nothing says when it runs: set when (e.g. "no findings"), and add the arm for when it does not hold`
-            : `this arm of branch ${info.parent?.id ?? ''} has no condition, so nothing says when it runs: set when (e.g. "no findings"); only the last arm may go without one, as the else`,
+          arms > 1
+            ? `this arm of branch ${info.parent?.id ?? ''} has no condition, so nothing says when it runs: set condition (e.g. "no findings"); only the last arm may go without one, as the else`
+            : info.parent?.kind === 'guard'
+              ? `the arm of guard ${info.parent.id} has no condition, so nothing says when it runs: set condition (e.g. "any findings"); when it does not hold, nothing runs`
+              : `the only arm of branch ${info.parent?.id ?? ''} has no condition, so nothing says when it runs: set condition (e.g. "no findings"), and add the arm for when it does not hold`,
       })
     }
   })
@@ -252,18 +277,17 @@ function leastAgents(node: DesignNode): number {
   const times = statedCount(node.knobs?.fanout)
   if (canHoldChildren(node.type)) {
     const kids = (node.children ?? []).map(leastAgents)
-    // One path of a branch runs: the cheapest. An empty sweep or dry loop still spawns its own searchers.
+    // One path of a branch runs: the cheapest. An empty sweep or dry loop (one saved before these held their agents as blocks) still spawns its own searchers.
     if (node.type === 'branch') return kids.length > 0 ? Math.min(...kids) : 0
     const inside = kids.reduce((sum, one) => sum + one, 0)
-    if (kids.length === 0) return node.type === 'sweep' || node.type === 'loop-until-dry' ? times : 0
+    if (kids.length === 0) return node.kind === 'sweep' || node.kind === 'dry' ? times : 0
     // Branches side by side: the count may name the branches drawn (`×2 angles`, two searchers) or items each
     // of them runs for. The floor holds for both readings. Stages in a row run once per item.
-    if (node.type === 'parallel' || node.type === 'sweep') return Math.max(inside, times)
+    if (node.type === 'parallel') return Math.max(inside, times)
     return inside * times
   }
   if (node.type === 'code' || node.type === 'subworkflow' || node.type === 'args') return 0
-  if (node.type === 'verify' || node.type === 'judge-panel') return times * (node.knobs?.votes ?? 1)
-  return times
+  return times * (node.knobs?.votes ?? 1)
 }
 
 /** Why the count of agents cannot be known from the drawing: what each kind of open end is, and how many blocks have it. */
@@ -274,7 +298,7 @@ function unknownsOf(design: Design): Unknowns {
   for (const { node } of flatten(design)) {
     // A fan-out said in words (`changed files`) names no number.
     if (node.knobs?.fanout && !/^\s*[×x]?\s*\d+\b/.test(node.knobs.fanout)) out.fanouts++
-    if ((node.type === 'loop' || node.type === 'loop-until-dry') && (node.children?.length ?? 0) > 0) out.loops++
+    if (node.type === 'loop' && (node.children?.length ?? 0) > 0) out.loops++
     if (node.type === 'subworkflow') out.subworkflows++
   }
   return out

@@ -6,7 +6,7 @@ import { UNDO_HINT, remember, travel } from '../src/design/history'
 import type { History } from '../src/design/history'
 import { lint, preflightLine, problemFields, problemParts } from '../src/design/lints'
 import { buildHandoff, handoffPrompt, handoffTarget, reviewPrompt } from '../src/design/handoff'
-import { emptyDesign, findNode, flatten, isBlank, parseDesign, serializeDesign } from '../src/design/model'
+import { emptyDesign, findNode, flatten, isBlank, kindsOf, parseDesign, serializeDesign, typeName } from '../src/design/model'
 import type { Design, DesignNode, NodeType } from '../src/design/model'
 import { nextIdNumber, quickKnob } from '../src/design/ops'
 import type { NodePatch } from '../src/design/ops'
@@ -65,17 +65,19 @@ import {
   savedLine,
   startDesign,
   startEntries,
+  filterText,
   typePicker,
   viewRootOf,
   withoutKeys,
 } from '../src/design/session'
-import type { DesignUi, GraphBox, RunContext, SavedDesign, Step, TextKnob } from '../src/design/session'
-import { FIELD_LABEL, FIELD_PLACEHOLDER, PALETTE_GROUPS, TEACH, groupOf, hasNotes, knobsOf, useWhen } from '../src/design/teach'
+import type { DesignUi, GraphBox, PickRow, RunContext, SavedDesign, Step, TextKnob } from '../src/design/session'
+import { FIELD_LABEL, PALETTE_GROUPS, TEACH, groupOf, hasNotes, knobsOf, pickName, placeholderOf, teachOf, useWhen } from '../src/design/teach'
+import type { BlockRef } from '../src/design/teach'
 import { TEMPLATES } from '../src/design/templates'
 import { emptyRunState } from '../src/run/events'
 import { replayDesignEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
-import { NOT_SET, UNMAPPED_ID, canOpen } from '../src/ui/graph-layout'
+import { NOT_SET, UNMAPPED_ID, canOpen, typeLabel } from '../src/ui/graph-layout'
 import { parseGraphMessage } from '../src/ui/graph-model'
 import { ENTER, KEY_OPS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_CORE_W, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendItem } from '../src/ui/keys'
@@ -212,7 +214,7 @@ export const DESIGN_VERBS = /^\s*((design|run|list|draft|delete|rename)(\s|$)|re
 /** The goal is said in at most this many rows under the header (inline: one). */
 const GOAL_ROWS = 2
 const GOAL_LABEL = 'Goal: '
-const EDIT_HINT = 'click a field of the block, or press Tab to reach the title'
+const EDIT_HINT = 'click a field of the block, or press Tab to reach the name'
 /** The graph's region is never asked to be shorter than this while the detail pane, under it, has rows to give. */
 const GRAPH_LEAST_ROWS = 3
 /** Stacked, the detail pane at rest takes this share of the rows between header and footer. */
@@ -363,7 +365,7 @@ const previews: Record<string, Design | null> = {}
  * 2.1.296), so what it holds next is counted from the start again.
  */
 let caught: { element: string; taken: number; sent: string | null } = { element: '', taken: 0, sent: null }
-/** The same for the add list's filter: how many of its characters were keys (`w s n`), not text. */
+/** The same for the add list's filter: how many of its characters were keys (`w s n b`), not text. */
 let picked = { element: '', taken: 0 }
 /** The filter Enter was last pressed in, as `savedField`: what is typed there once the list has closed is for whatever opened next. */
 let pickedField = { element: '', value: '', taken: 0 }
@@ -796,9 +798,11 @@ const saveGoal = async ($: EngineInterface, value: string): Promise<void> => {
 }
 
 /** A choice in the add list: the block is added and its title is the next thing typed; a type picked for a block sends the ring back to the catcher. */
-const pick = async ($: EngineInterface, choice: { type?: NodeType }): Promise<void> => {
+const pick = async ($: EngineInterface, choice: Partial<PickRow>): Promise<void> => {
   await flushDrafts($)
   const step = await commit($, (before, held, context) => pickBlock(before, held, choice, context))
+  // A block opened on its kinds: the filter is drawn anew, empty, for the kinds' list.
+  if (step.ui.picker?.block !== undefined && step.ui.picker.query === '') pickGen++
   const fresh = step.changed && step.ui.editing ? step.ui.freshId : null
   if (fresh !== null) landOn($, () => fieldKey(TITLE_KEY, fresh), `edit: ${EDIT_HINT}`)
   else if (!step.ui.picker) await home($)
@@ -1038,7 +1042,7 @@ const filterKeys = ($: EngineInterface, element: string, value: string): void =>
       const skip = picked.element === element ? Math.min(picked.taken, value.length) : 0
       let taken = 0
       await update($, uiAtom, held => {
-        const typed = typePicker(design, held, value.slice(skip))
+        const typed = typePicker(design, held, filterText(held, value.slice(skip)))
         taken = typed.taken
         return typed.ui
       })
@@ -1899,9 +1903,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       </Box>
     )
     // A help page as rows: its title and which page it is, then paragraphs, or a table whose first column is the key.
-    const helpItems = (page: number, type: NodeType | undefined, width: number, rows: number, start: boolean): Item[] => {
+    const helpItems = (page: number, block: BlockRef | undefined, width: number, rows: number, start: boolean): Item[] => {
       const column = helpColumn(page)
-      return fitHelp(helpPage(page, type, file, width, start), rows).map(row =>
+      return fitHelp(helpPage(page, block, file, width, start), rows).map(row =>
         row.kind === 'title'
           ? {
               rows: 1,
@@ -2081,6 +2085,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       ring: !focused ? 'graph' : ui.picker !== null && !locked ? 'list' : ui.describing && !locked ? 'goal' : ui.editing ? 'fields' : 'graph',
       placed: ui.picker?.anchorId !== undefined && ui.picker.retypeId === undefined,
       retype: ui.picker?.retypeId !== undefined,
+      opens: picking && ui.picker ? pickerMatches(design, ui.picker)[ui.picker.pick ?? 0]?.opens === true : false,
+      kinds: ui.picker?.block !== undefined && ui.picker.query === '',
       empty: isBlank(design),
       fixed: node?.type === 'args',
       helping,
@@ -2118,7 +2124,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
 
     // The fields this block's type calls for (teach.ts says which), in the detail pane's order: the knobs typed as text.
     const parent = node ? flatten(design).find(row => row.node.id === node.id)?.parentId : undefined
-    const knobs = node ? knobsOf(node, parent === undefined ? undefined : findNode(design, parent)?.type) : []
+    const around = parent === undefined ? undefined : findNode(design, parent)
+    const knobs = node ? knobsOf(node, around?.type) : []
     const textKnobs = TEXT_KNOBS.filter(key => knobs.includes(key))
     // A field shows what is being typed in it (a draft) until it is saved: only the block, of the design, it was typed for.
     const typed = (key: string, saved: string): string => (node && drafts.id === node.id && drafts.name === ui.name ? (drafts.values[key] ?? saved) : saved)
@@ -2144,13 +2151,14 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
           // A block just added opens with its title field empty: the default title shows dim and stays if nothing is typed.
           { key: TITLE_KEY, knob: 'title', label: FIELD_LABEL.title, value: typed(TITLE_KEY, ui.freshId === node.id ? '' : node.title), placeholder: node.title },
           // A phase is its title and no more: it has a notes field only for notes it already carries.
-          ...(hasNotes(node) ? [{ key: NOTES_KEY, knob: 'notes', label: FIELD_LABEL.notes, value: typed(NOTES_KEY, node.notes ?? ''), placeholder: FIELD_PLACEHOLDER.notes }] : []),
+          ...(hasNotes(node) ? [{ key: NOTES_KEY, knob: 'notes', label: FIELD_LABEL.notes, value: typed(NOTES_KEY, node.notes ?? ''), placeholder: placeholderOf(node, 'notes') }] : []),
           ...textKnobs.map((knob: TextKnob) => ({
             key: `${KNOB_KEY}${knob}`,
             knob,
             label: FIELD_LABEL[knob],
             value: typed(`${KNOB_KEY}${knob}`, node.knobs?.[knob] ?? ''),
-            placeholder: FIELD_PLACEHOLDER[knob],
+            // What the empty field is for, as the block's kind says it (an arm's condition: as its branch's does).
+            placeholder: placeholderOf(node, knob, around),
           })),
         ]
       : []
@@ -2249,9 +2257,9 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
           el: (
             <Box key="design-heading" flexDirection="row" justifyContent="space-between" height={1}>
               <Text wrap="truncate-end">
-                <Text color={ACCENT[node.type]} bold>{node.type.toUpperCase()}</Text>
+                <Text color={ACCENT[node.type]} bold>{typeLabel(node)}</Text>
                 <Text color={FADED}>{' / '}</Text>
-                <Text bold>{clip(node.title, Math.max(4, detailW - node.type.length - node.id.length - 5 - DOOR_W))}</Text>
+                <Text bold>{clip(node.title, Math.max(4, detailW - typeLabel(node).length - node.id.length - 5 - DOOR_W))}</Text>
               </Text>
               <Box flexDirection="row" flexShrink={0}>
                 <Text color={FADED}>{node.id}</Text>
@@ -2339,7 +2347,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         // The label is drawn first and comes second among the stops (the row runs backward): Tab reaches the picker before its label.
         <Box flexDirection="row-reverse" justifyContent="flex-end" flexShrink={0}>
           {/* The type is picked from the same list a block is added from: every type on a row with what it does, none scrolled away. */}
-          <Button key={TYPE_KEY} plain label={`${target.type} ▾`} onPress={() => retype(target)} />
+          <Button key={TYPE_KEY} plain label={`${typeName(target)} ▾`} onPress={() => retype(target)} />
           <Box width={PICKER_LABEL_W} flexShrink={0}>
             <Button key={`${LABEL_KEY}${TYPE_KEY}`} plain onPress={() => retype(target)}>
               <Text color="suggestion">{'Type'.padEnd(PICKER_LABEL_W)}</Text>
@@ -2378,7 +2386,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const most = level < 4 ? Infinity : (CUTS[level - 4] ?? 1)
       const sections: Item[][] = []
       if (level < 3) {
-        sections.push([label('Meaning'), ...lines(capped(wrapText(`${cap(TEACH[node.type].hint)}.`, detailW), most)), ...lines(capped(wrapText(`${cap(useWhen(node.type))}.`, detailW), most), FADED)])
+        sections.push([label('Meaning'), ...lines(capped(wrapText(`${cap(teachOf(node).hint)}.`, detailW), most)), ...lines(capped(wrapText(`${cap(useWhen(node))}.`, detailW), most), FADED)])
       }
       for (const one of ownProblems) {
         const parts = problemParts(one.message)
@@ -2392,23 +2400,31 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     }
     const INSPECTOR_LEVELS = 4 + CUTS.length
 
-    // The add list: every type on a row, name and hint, in two groups; the marked one opens to all of its hint and when to use it.
-    const NAME_W = Math.max(...matches.map(type => type.length), 0) + 2
-    const typeRow = (type: NodeType, opened: boolean): Item => {
-      const lit = type === marker
-      const hint = `${cap(TEACH[type].hint)}.`
-      const more = lit && opened ? [...wrapText(hint, detailW - 2), ...wrapText(`${cap(useWhen(type))}.`, detailW - 2)] : []
+    // The add list. As it opens: every block on a row, name and hint, in two groups; a block that has kinds says so
+    // (`▸`) and opens on them. With something typed, or a block opened: a row per block and kind, named in full
+    // (`AGENT verify`). The marked row opens to all of its hint and when to use it, and a block to the kinds it has.
+    const rowName = (row: PickRow): string => (row.opens ? `${row.type} ▸` : pickName(row))
+    const NAME_W = Math.max(...matches.map(row => rowName(row).length), 0) + 2
+    const typeRow = (row: PickRow, opened: boolean): Item => {
+      const lit = row === marker
+      // A block's own row says what the block is; a row of one of its kinds what that kind is.
+      const teach = row.opens ? TEACH[row.type] : teachOf(row)
+      const hint = `${cap(teach.hint)}.`
+      const inside = row.opens ? `Kinds: ${kindsOf(row.type).join(' · ')}.` : `${cap(useWhen(row))}.`
+      const more = lit && opened ? [...wrapText(hint, detailW - 2), ...wrapText(inside, detailW - 2)] : []
       const split = lit && opened ? wrapText(hint, detailW - 2).length : 0
+      const [type, ...rest] = rowName(row).split(' ')
       return {
         rows: 1 + more.length,
         el: (
           <Box flexDirection="column" flexShrink={0}>
-            <Button key={`pick:${type}`} plain onPress={() => pick($, { type })}>
+            <Button key={`pick:${row.type}:${row.opens ? '+' : (row.kind ?? '')}`} plain onPress={() => pick($, row)}>
               {[
                 <Text color="claude" bold>{lit ? '▸ ' : '  '}</Text>,
-                <Text color={ACCENT[type]} bold={lit ? true : undefined}>{type.toUpperCase().padEnd(NAME_W)}</Text>,
+                <Text color={ACCENT[row.type]} bold={lit ? true : undefined}>{(type ?? '').toUpperCase()}</Text>,
+                <Text color={row.opens ? FADED : ACCENT[row.type]} bold={lit && !row.opens ? true : undefined}>{`${rest.length > 0 ? ` ${rest.join(' ')}` : ''}`.padEnd(NAME_W - (type ?? '').length)}</Text>,
                 ...(more.length > 0 ? [] : [<Text color={FADED}>{clip(hint, Math.max(0, detailW - 2 - NAME_W))}</Text>]),
-                ...more.flatMap((row, index) => ['\n', <Text color={index < split ? undefined : FADED}>{`  ${row}`}</Text>]),
+                ...more.flatMap((line, index) => ['\n', <Text color={index < split ? undefined : FADED}>{`  ${line}`}</Text>]),
               ]}
             </Button>
           </Box>
@@ -2417,10 +2433,10 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     }
     const addList = (level: number): Item[] => {
       if (!ui.picker) return []
-      // A filter ranks the types, best first: the groups are for the list as it opens.
-      const grouped = ui.picker.query === '' && level < 2
+      // A filter ranks the blocks, best first, and a block's kinds are one list: the groups are for the list as it opens.
+      const grouped = ui.picker.query === '' && ui.picker.block === undefined && ui.picker.retypeId === undefined && level < 2
       const opened = level < 3
-      const groups = grouped ? PALETTE_GROUPS.map(one => ({ heading: one.heading, types: matches.filter(type => groupOf(type) === one.group) })).filter(one => one.types.length > 0) : [{ heading: '', types: matches }]
+      const groups = grouped ? PALETTE_GROUPS.map(one => ({ heading: one.heading, types: matches.filter(row => groupOf(row.type) === one.group) })).filter(one => one.types.length > 0) : [{ heading: '', types: matches }]
       return [
         ...firstLines(addHeading(design, ui.picker), detailW, 2).map(row => line(row, undefined, true)),
         thin,
@@ -2429,14 +2445,18 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
           el: (
             <Box flexDirection="row" height={1}>
               <Box flexShrink={0}>
-                <Text color="suggestion">{'Filter '}</Text>
+                {/* The letters taken as keys before they turned out to start a name: said here, they are not in the field. */}
+                <Text>
+                  <Text color="suggestion">{'Filter '}</Text>
+                  {ui.picker.lead ?? ''}
+                </Text>
               </Box>
-              <Box width={Math.max(8, detailW - 7)}>
+              <Box width={Math.max(8, detailW - 7 - (ui.picker.lead ?? '').length)}>
                 {Input && (
                   <Input
                     key={pickerKey()}
-                    placeholder="type to narrow"
-                    value={ui.picker.query}
+                    placeholder="type a block or a kind"
+                    value={ui.picker.query.slice((ui.picker.lead ?? '').length)}
                     submitLabel=""
                     onInput={(value, input) => filterKeys($, input.element, value)}
                     onSubmit={(value, input) => filterEnter($, input.element, value)}
@@ -2446,8 +2466,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             </Box>
           ),
         },
-        ...(matches.length === 0 ? [line('no block type matches', 'warning')] : []),
-        ...groups.flatMap(group => [...(level < 1 ? [blank] : []), ...(group.heading === '' ? [] : [line(group.heading, FADED)]), ...group.types.map(type => typeRow(type, opened))]),
+        ...(matches.length === 0 ? [line('no block or kind has that in its name', 'warning')] : []),
+        ...groups.flatMap(group => [...(level < 1 ? [blank] : []), ...(group.heading === '' ? [] : [line(group.heading, FADED)]), ...group.types.map(row => typeRow(row, opened))]),
       ]
     }
 
@@ -2516,7 +2536,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // The detail pane's rows. Beside the graph it has all of them. Under it, it has a fixed share at rest, so nothing
     // shifts with the selection; while a field, the add list, the goal or a help page is open it takes what that needs.
     // Hidden, it has none: the graph has them all.
-    const openNeed = picking ? rowsOf(addList(0)) : describing ? rowsOf(goalField()) : helping ? rowsOf(helpItems(ui.help, node?.type, detailW, 99, false)) : rowsOf(inspector(0))
+    const openNeed = picking ? rowsOf(addList(0)) : describing ? rowsOf(goalField()) : helping ? rowsOf(helpItems(ui.help, node, detailW, 99, false)) : rowsOf(inspector(0))
     // Inline, at rest, it is its last row alone: the keys that open it.
     const restRows = dock ? Math.max(Math.min(HINT_ROWS + 1, mainRows), Math.min(mainRows - GRAPH_LEAST_ROWS, Math.floor(mainRows * DETAIL_REST_SHARE))) : 1
     const opened = picking || describing || helping || fielding
@@ -2537,7 +2557,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         : describing
           ? goalField()
           : helping
-            ? helpItems(ui.help, node?.type, detailW, contentRows, false)
+            ? helpItems(ui.help, node, detailW, contentRows, false)
             : node
               ? fit(INSPECTOR_LEVELS, contentRows, inspector)
               : ui.selectedId === UNMAPPED_ID && agents
