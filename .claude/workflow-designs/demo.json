@@ -2,37 +2,43 @@
   "version": 1,
   "name": "demo",
   "description": "Answer a question from many sources: search several ways, read deeply, check for gaps, then write up",
-  "nextId": 27,
+  "nextId": 28,
   "nodes": [
+    {
+      "id": "n27",
+      "type": "args",
+      "name": "args"
+    },
     {
       "id": "n4",
       "type": "pipeline",
-      "title": "deep read",
-      "notes": "Each source is read and checked independently.",
+      "name": "deep read",
+      "logic": "Each source is read and checked independently.",
       "knobs": {
-        "fanout": "deduped sources"
+        "oncePer": "deduped sources"
       },
       "children": [
         {
           "id": "n2",
           "type": "agent",
-          "title": "search",
-          "notes": "One agent per search angle",
+          "name": "search",
+          "logic": "One agent per search angle",
           "knobs": {
             "prompt": "Search for sources on the question using only this angle",
-            "schema": "{ sources: [{ ref, why }] }",
+            "output": "{ sources: [{ ref, why }] }",
             "model": "opus",
             "effort": "low"
           }
         },
         {
           "id": "n6",
-          "type": "verify",
-          "title": "check claims",
-          "notes": "Drop claims the source does not actually support.",
+          "type": "agent",
+          "kind": "verify",
+          "name": "check claims",
+          "logic": "Drop claims the source does not actually support.",
           "knobs": {
             "prompt": "Try to refute each claim against the quoted source",
-            "schema": "{ refuted: boolean, reason }",
+            "output": "{ refuted: boolean, reason }",
             "model": "sonnet",
             "effort": "low",
             "votes": 1
@@ -40,22 +46,23 @@
         },
         {
           "id": "n1",
-          "type": "sweep",
-          "title": "multi-modal sweep",
-          "notes": "Each searcher is blind to the others, so expect overlap between their results.",
+          "type": "parallel",
+          "kind": "sweep",
+          "name": "multi-modal sweep",
+          "logic": "Each searcher is blind to the others, so expect overlap between their results.",
           "knobs": {
-            "fanout": "4 search angles: by container, by content, by entity, by time"
+            "oncePer": "4 search angles: by container, by content, by entity, by time"
           },
           "children": []
         },
         {
           "id": "n5",
           "type": "agent",
-          "title": "read source",
-          "notes": "One reader per source.",
+          "name": "read source",
+          "logic": "One reader per source.",
           "knobs": {
             "prompt": "Read the source in full and extract the claims that bear on the question, with quotes",
-            "schema": "{ claims: [{ claim, quote, confidence }] }"
+            "output": "{ claims: [{ claim, quote, confidence }] }"
           }
         }
       ]
@@ -63,17 +70,17 @@
     {
       "id": "n17",
       "type": "branch",
-      "title": "branch",
+      "name": "branch",
       "children": [
         {
           "id": "n21",
           "type": "loop",
-          "title": "loop",
+          "name": "loop",
           "children": [
             {
               "id": "n22",
               "type": "agent",
-              "title": "agent"
+              "name": "agent"
             }
           ]
         }
@@ -82,12 +89,13 @@
     {
       "id": "n20",
       "type": "agent",
-      "title": "agent"
+      "name": "agent"
     },
     {
       "id": "n23",
-      "type": "verify",
-      "title": "verify",
+      "type": "agent",
+      "kind": "verify",
+      "name": "verify",
       "knobs": {
         "effort": "high",
         "votes": 1
@@ -95,8 +103,9 @@
     },
     {
       "id": "n24",
-      "type": "critic",
-      "title": "critic",
+      "type": "agent",
+      "kind": "critic",
+      "name": "critic",
       "knobs": {
         "model": "sonnet",
         "effort": "high"

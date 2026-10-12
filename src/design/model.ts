@@ -39,18 +39,22 @@ export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
 export type Effort = (typeof EFFORTS)[number]
 
+/** A block's knobs. The text ones are named as the pane's fields are: `oncePer` is "once per", `stopCondition` "stop condition". */
 export type Knobs = {
   prompt?: string
-  schema?: string
+  /** What the block hands on, in words or as JSON Schema text. */
+  output?: string
   model?: string
   effort?: Effort
   isolation?: 'worktree'
   agentType?: string
-  fanout?: string
+  /** On a pipeline or a parallel: the items it runs once per. */
+  oncePer?: string
   votes?: number
-  until?: string
+  /** On a loop: when it stops. */
+  stopCondition?: string
   /** On a block that stands directly in a `branch`: the condition that picks this arm. */
-  when?: string
+  condition?: string
 }
 
 export type DesignNode = {
@@ -58,8 +62,10 @@ export type DesignNode = {
   type: NodeType
   /** The pattern the block is used for; left out for the plain block (the first of its type's kinds). */
   kind?: Kind
-  title: string
-  notes?: string
+  /** The block's name on the graph. */
+  name: string
+  /** Free text: what the block does and why. */
+  logic?: string
   knobs?: Knobs
   children?: DesignNode[]
 }
@@ -104,32 +110,19 @@ export function typeName(node: Pick<DesignNode, 'type' | 'kind'>): string {
   return node.kind === undefined || node.kind === plainKind(node.type) ? node.type : `${node.type} ${node.kind}`
 }
 
-/** The types a design saved before kinds may name: each is a kind of a block now. */
-const OLD_TYPES: Readonly<Record<string, { type: NodeType; kind: Kind }>> = {
-  verify: { type: 'agent', kind: 'verify' },
-  'judge-panel': { type: 'agent', kind: 'judge' },
-  critic: { type: 'agent', kind: 'critic' },
-  sweep: { type: 'parallel', kind: 'sweep' },
-  'loop-until-dry': { type: 'loop', kind: 'dry' },
-}
-
 /**
- * A block's type and kind as a file or a tool call says them. An old pattern type (`verify`,
- * `sweep`, …) is read as the block and kind it became. The plain kind is left out; a kind the
+ * A block's type and kind as a file or a tool call says them. The plain kind is left out; a kind the
  * type does not have is refused, with the ones it has.
  */
 export function readType(type: unknown, kind?: unknown): { type: NodeType; kind?: Kind } | { error: string } {
-  const old = typeof type === 'string' ? OLD_TYPES[type] : undefined
-  const block = old?.type ?? type
-  if (!isNodeType(block)) return { error: `unknown type ${JSON.stringify(type)}` }
-  const asked = kind === undefined || kind === null || kind === '' ? old?.kind : kind
-  if (asked === undefined) return { type: block }
-  const kinds = kindsOf(block)
-  const found = kinds.find(one => one === asked)
+  if (!isNodeType(type)) return { error: `unknown type ${JSON.stringify(type)}` }
+  if (kind === undefined || kind === null || kind === '') return { type }
+  const kinds = kindsOf(type)
+  const found = kinds.find(one => one === kind)
   if (found === undefined) {
-    return { error: kinds.length === 0 ? `${aType(block)} block has no kinds` : `${JSON.stringify(asked)} is not a kind of ${block}: ${kinds.join(', ')}` }
+    return { error: kinds.length === 0 ? `${aType(type)} block has no kinds` : `${JSON.stringify(kind)} is not a kind of ${type}: ${kinds.join(', ')}` }
   }
-  return found === kinds[0] ? { type: block } : { type: block, kind: found }
+  return found === kinds[0] ? { type } : { type, kind: found }
 }
 
 /** Where the `args` block stands, as a refusal says it: every design has one, and nothing stands before it. */
@@ -166,11 +159,11 @@ export function nextIdNumber(design: Pick<Design, 'nodes' | 'nextId'>): number {
 export function withArgs(design: Design): Design {
   if (argsOf(design)) return design
   const number = nextIdNumber(design)
-  return { ...design, nextId: number + 1, nodes: [{ id: `n${number}`, type: 'args', title: 'args' }, ...design.nodes] }
+  return { ...design, nextId: number + 1, nodes: [{ id: `n${number}`, type: 'args', name: 'args' }, ...design.nodes] }
 }
 
-const KNOB_KEYS = ['prompt', 'schema', 'model', 'effort', 'isolation', 'agentType', 'fanout', 'votes', 'until', 'when'] as const
-const TEXT_KNOBS: readonly string[] = ['prompt', 'schema', 'model', 'agentType', 'fanout', 'until', 'when']
+const KNOB_KEYS = ['prompt', 'output', 'model', 'effort', 'isolation', 'agentType', 'oncePer', 'votes', 'stopCondition', 'condition'] as const
+const TEXT_KNOBS: readonly string[] = ['prompt', 'output', 'model', 'agentType', 'oncePer', 'stopCondition', 'condition']
 const ID_PATTERN = /^n(\d+)$/
 
 export function isNodeType(value: unknown): value is NodeType {
@@ -252,19 +245,19 @@ function readNodes(raw: unknown, where: string, seen: Set<string>): DesignNode[]
 
 function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
   if (!isRecord(raw)) fail(`${where} must be an object`)
-  const { id, title, notes, children } = raw
+  const { id, name, logic, children } = raw
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) fail(`${where}: id must look like "n1"`)
   if (seen.has(id)) fail(`duplicate id ${id}`)
   seen.add(id)
   const read = readType(raw.type, raw.kind)
   if ('error' in read) fail(`${id}: ${read.error}`)
   const { type, kind } = read
-  if (typeof title !== 'string') fail(`${id}: title must be a string`)
-  if (notes !== undefined && typeof notes !== 'string') fail(`${id}: notes must be a string`)
+  if (typeof name !== 'string') fail(`${id}: name must be a string`)
+  if (logic !== undefined && typeof logic !== 'string') fail(`${id}: logic must be a string`)
 
-  const node: DesignNode = { id, type, title }
+  const node: DesignNode = { id, type, name }
   if (kind !== undefined) node.kind = kind
-  if (notes !== undefined) node.notes = notes
+  if (logic !== undefined) node.logic = logic
   const knobs = readKnobs(raw.knobs, id)
   if (knobs) node.knobs = knobs
   if (children !== undefined) {
@@ -308,8 +301,8 @@ export function parseDesign(json: string): ParseResult {
 function orderedNode(node: DesignNode): Record<string, unknown> {
   const out: Record<string, unknown> = { id: node.id, type: node.type }
   if (node.kind !== undefined && node.kind !== plainKind(node.type)) out.kind = node.kind
-  out.title = node.title
-  if (node.notes !== undefined) out.notes = node.notes
+  out.name = node.name
+  if (node.logic !== undefined) out.logic = node.logic
   if (node.knobs) {
     const knobs: Record<string, unknown> = {}
     for (const key of KNOB_KEYS) if (node.knobs[key] !== undefined) knobs[key] = node.knobs[key]

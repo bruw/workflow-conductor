@@ -11,19 +11,19 @@ export type ConductorDesignNode = {
     | 'custom' | 'count' | 'pass' | 'dry' | 'converged' | 'target' | 'budget'
     | 'arms' | 'each' | 'sweep' | 'attempts'
     | 'if-else' | 'guard' | 'route'
-  title: string
-  notes?: string
+  name: string
+  logic?: string
   knobs?: {
     prompt?: string
-    schema?: string
+    output?: string
     model?: string
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
     isolation?: 'worktree'
     agentType?: string
-    fanout?: string
+    oncePer?: string
     votes?: number
-    until?: string
-    when?: string
+    stopCondition?: string
+    condition?: string
   }
   children?: ConductorDesignNode[]
 }

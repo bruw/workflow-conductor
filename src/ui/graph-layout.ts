@@ -15,7 +15,7 @@
 import { needsBrief, needsStop } from '../design/lints'
 import { canHoldChildren, flatten, isBlank, plainKind } from '../design/model'
 import type { Design, DesignNode, NodeType, Row } from '../design/model'
-import { defaultTitle } from '../design/teach'
+import { defaultName } from '../design/teach'
 import { ARGS_STAY, addPlace, quickKnob } from '../design/ops'
 import type { Place, QuickKnob } from '../design/ops'
 import { cappedLines, clip, moreLines } from './text'
@@ -237,7 +237,7 @@ export function childFlow(type: NodeType | undefined): Flow {
 
 /** What a card says under its name: the block's notes, or with none what its prompt asks. */
 function cardText(node: DesignNode): string {
-  const notes = (node.notes ?? '').trim()
+  const notes = (node.logic ?? '').trim()
   return notes !== '' ? notes : (node.knobs?.prompt ?? '').trim()
 }
 
@@ -247,9 +247,9 @@ function fanCount(fanout: string | undefined): number | undefined {
   return count ? Number(count[1]) : undefined
 }
 
-/** What a fan-out runs once for: the `fanout` knob without its count (`×4 dimensions` → `dimensions`). */
+/** What a fan-out runs once for: the `oncePer` knob without its count (`×4 dimensions` → `dimensions`). */
 function eachOf(node: Pick<DesignNode, 'knobs'>): string {
-  const fanout = clean(node.knobs?.fanout ?? '')
+  const fanout = clean(node.knobs?.oncePer ?? '')
   const rest = fanout.replace(/^[×x]?\s*\d+\b\s*/, '')
   // The header says `each:` itself: a fan-out typed as "each finding" must not read `each: each finding`.
   return (rest === '' ? fanout.replace(/^[×x]\s*/, '') : rest).replace(/^(for\s+)?each\b[\s:,-]*(of\s+(the\s+)?)?/i, '')
@@ -315,7 +315,7 @@ function chipsOf(node: DesignNode): Seg[] {
  * fan-out in words, '' for none and for one. Votes are never a `×`: they are said in words (`votes 3`).
  */
 function fanMark(node: Pick<DesignNode, 'knobs'>): string {
-  const fanout = node.knobs?.fanout
+  const fanout = node.knobs?.oncePer
   if (!fanout) return ''
   const count = fanCount(fanout)
   return count === undefined ? '×n' : count > 1 ? `×${count}` : ''
@@ -344,7 +344,7 @@ function edgeKind(parent: NodeType | undefined, from: DesignNode): EdgeKind {
 /** What a block needs and lacks, said in its place before `[not set]`: an agent's brief, a loop's stop. */
 function missingOf(node: DesignNode): string {
   if (needsBrief(node) && cardText(node) === '') return 'Instruction'
-  if (needsStop(node) && clean(node.knobs?.until ?? '') === '') return 'Stop'
+  if (needsStop(node) && clean(node.knobs?.stopCondition ?? '') === '') return 'Stop'
   return ''
 }
 
@@ -361,7 +361,7 @@ type Arm = { word: 'IF' | 'ELSE'; when: string }
 
 function armOf(node: DesignNode, parent: DesignNode | undefined, index: number): Arm | null {
   if (parent?.type !== 'branch') return null
-  const when = clean(node.knobs?.when ?? '')
+  const when = clean(node.knobs?.condition ?? '')
   if (when !== '') return { word: 'IF', when }
   // The last arm with no condition is the else; any other one still owes its condition.
   return index === (parent.children?.length ?? 0) - 1 && index > 0 ? { word: 'ELSE', when: '' } : { word: 'IF', when: '' }
@@ -390,7 +390,7 @@ export function typeLabel(block: Pick<DesignNode, 'type' | 'kind'>): string {
 
 /** Whether a block still has the name it was added with (its kind's, or its type's): a card then says the type alone. */
 function unnamed(block: Pick<DesignNode, 'type' | 'kind'>, title: string): boolean {
-  return title === '' || title.toLowerCase() === defaultTitle(block)
+  return title === '' || title.toLowerCase() === defaultName(block)
 }
 
 /** `TYPE kind / Title ×4` in at most `room` cells: the type and kind whole, then the title cut, then the fan-out's mark when there is room left. */
@@ -522,7 +522,7 @@ function leafBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
   const inner = Math.max(1, w - 4)
   const selected = node.id === ctx.selectedId
   const knobs = node.knobs ?? {}
-  const title = clean(node.title)
+  const title = clean(node.name)
   const fan = fanMark(node)
   const rows: CardRow[] = []
 
@@ -552,7 +552,7 @@ function leafBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
 
   // Row 2: what it does, and at the right its votes and what it hands on (for the args block, the input's shape).
   const lacks = missingOf(node)
-  const out = [knobs.votes !== undefined && chips.length === 0 ? `votes ${knobs.votes}` : '', knobs.schema ? `${node.type === 'args' ? 'input' : 'output'}: ${clean(knobs.schema)}` : ''].filter(one => one !== '').join(' · ')
+  const out = [knobs.votes !== undefined && chips.length === 0 ? `votes ${knobs.votes}` : '', knobs.output ? `${node.type === 'args' ? 'input' : 'output'}: ${clean(knobs.output)}` : ''].filter(one => one !== '').join(' · ')
   const idle = node.type === 'args' && firstLine(node) === '' && out === '' ? NO_INPUT : ''
   const said: Seg[] = lacks !== '' ? [{ text: `${lacks} `, role: 'note' }, { text: NOT_SET, role: 'error' }] : idle !== '' ? [{ text: idle, role: 'more' }] : firstLine(node) === '' ? [] : [{ text: firstLine(node), role: 'note' }]
   const capped = selected && lacks === '' ? cappedLines(cardText(node), inner, ctx.noteRows) : { lines: [], more: 0 }
@@ -579,8 +579,8 @@ function collapsedBox(node: DesignNode, w: number, depth: number, parent: Design
   const inside = insideOf(node)
   const count = `${inside} ${inside === 1 ? 'block' : 'blocks'}`
   const fits = typeLabel(node).length + 4 + count.length <= inner
-  const rows: CardRow[] = [{ left: nameSegs(node, clean(node.title), fanMark(node), inner - (fits ? count.length + 2 : 0), '▸ '), right: fits ? [{ text: count, role: 'fact' }] : [] }]
-  const titles = kin.length === 0 ? EMPTY : kin.map(child => clean(child.title) || child.type).join(childFlow(node.type) === 'chain' ? ' → ' : ' | ')
+  const rows: CardRow[] = [{ left: nameSegs(node, clean(node.name), fanMark(node), inner - (fits ? count.length + 2 : 0), '▸ '), right: fits ? [{ text: count, role: 'fact' }] : [] }]
+  const titles = kin.length === 0 ? EMPTY : kin.map(child => clean(child.name) || child.type).join(childFlow(node.type) === 'chain' ? ' → ' : ' | ')
   const hint = OPEN_HINT.length + 6 <= inner
   rows.push({ left: [{ text: clip(titles, inner - (hint ? OPEN_HINT.length + 2 : 0)), role: 'note' }], right: hint ? [{ text: OPEN_HINT, role: 'fact' }] : [] })
   const top = topRow(node, w, armOf(node, parent, index), problemsIn(node, ctx.problems), () => [], 0)
@@ -589,8 +589,8 @@ function collapsedBox(node: DesignNode, w: number, depth: number, parent: Design
 
 /** A container's header on its top border: `TYPE kind / Title ×4 · each: … · stop: … · 2–4 of 9`, with what fits `room`. */
 function headSegs(node: DesignNode, room: number, range: string): Seg[] {
-  const title = clean(node.title)
-  const fanout = clean(node.knobs?.fanout ?? '')
+  const title = clean(node.name)
+  const fanout = clean(node.knobs?.oncePer ?? '')
   const fan = fanMark(node)
   // The carousel's window is said before any knob: it is the one fact found nowhere else.
   const kept = range !== '' && room - (range.length + 3) >= typeLabel(node).length + Math.min(title.length + 3, 9) ? range.length + 3 : 0
@@ -603,7 +603,7 @@ function headSegs(node: DesignNode, room: number, range: string): Seg[] {
     left -= words.length
   }
   if (fanout !== '') fact('each: ', eachOf(node))
-  fact('stop: ', clean(node.knobs?.until ?? ''))
+  fact('stop: ', clean(node.knobs?.stopCondition ?? ''))
   if (fan === '×n') fact('', 'count unknown', true)
   if (kept > 0) segs.push({ text: ` · ${range}`, role: 'fact' })
   return segs
@@ -651,7 +651,7 @@ function openBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
     // Tops aligned. Bottoms too where an arm is within ARM_GROW_MAX rows of the tallest: a shorter one keeps its own height, not stretched hollow.
     for (const kid of kids) if (body - kid.h <= ARM_GROW_MAX) kid.h = body
   }
-  const headMin = typeLabel(node).length + Math.min(clean(node.title).length + 3, 9)
+  const headMin = typeLabel(node).length + Math.min(clean(node.name).length + 3, 9)
   const top = topRow(node, w, armOf(node, parent, index), ctx.problems[node.id] ?? 0, room => headSegs(node, room, range), headMin, node.id === ctx.selectedId && !ctx.locked ? chipsOf(node) : [], headMin + (range === '' ? 0 : range.length + 3))
   return { node, kind: 'open', w, h: 2 + rows.length + lead + body, depth, index, parentId: parent?.id, top, rows, inside: insideOf(node), kids, first, lead, gap }
 }
@@ -681,7 +681,7 @@ function crumbsFor(design: Design, trail: readonly DesignNode[], columns: number
   // The level stands one cell in, two cells before the first crumb.
   const lead = level === '' ? 0 : 1 + level.length + 2
   const room = columns - lead
-  let parts: { id: string | null | undefined; text: string }[] = [{ id: null, text: design.name }, ...trail.map(node => ({ id: node.id, text: `${node.id} ${clean(node.title)}`.trim() }))]
+  let parts: { id: string | null | undefined; text: string }[] = [{ id: null, text: design.name }, ...trail.map(node => ({ id: node.id, text: `${node.id} ${clean(node.name)}`.trim() }))]
   const width = (): number => parts.reduce((sum, part) => sum + part.text.length + CRUMB_PAD * 2, 0) + CRUMB_SEP.length * (parts.length - 1)
   // Too long: the crumbs in the middle go first, then the names are cut.
   while (width() > room && parts.length > 3) parts = [...parts.slice(0, 1), { id: undefined, text: '…' }, ...parts.slice(parts[1]?.id === undefined ? 3 : 2)]
@@ -760,7 +760,7 @@ export function layoutGraph(design: Design, options: GraphOptions): GraphLayout 
 
   const put = (box: Box, x: number, y: number): void => {
     const flow = box.kind === 'leaf' ? null : childFlow(box.node.type)
-    const card: GraphCard = { x, y, w: box.w, h: box.h, id: box.node.id, type: box.node.type, kind: box.kind, title: clean(box.node.title), depth: box.depth, parentId: box.parentId, index: box.index, selected: box.node.id === selectedId, flow, inside: box.inside, top: box.top, rows: box.rows }
+    const card: GraphCard = { x, y, w: box.w, h: box.h, id: box.node.id, type: box.node.type, kind: box.kind, title: clean(box.node.name), depth: box.depth, parentId: box.parentId, index: box.index, selected: box.node.id === selectedId, flow, inside: box.inside, top: box.top, rows: box.rows }
     cards.push(card)
     // Where each chip was written (on the top border of a container, in a row of a leaf), for a press on it.
     for (const [i, row] of [box.top, ...box.rows].entries()) {

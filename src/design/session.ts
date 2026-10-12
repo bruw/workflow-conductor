@@ -19,7 +19,7 @@ import { NODE_TYPES, blockCount, canHoldChildren, emptyDesign, findNode, flatten
 import type { Design, DesignNode, NodeType } from './model'
 import { addNode, addPlace, moveNode, placeFor, removeNode, retypeNode, stepKnob, updateNode } from './ops'
 import type { NodePatch, OpResult, Place } from './ops'
-import { PALETTE, defaultTitle, fieldWord, searchBlocks, startsName, teachOf, useWhen } from './teach'
+import { PALETTE, defaultName, fieldWord, searchBlocks, startsName, teachOf, useWhen } from './teach'
 import type { BlockRef } from './teach'
 import type { Template } from './templates'
 import { TEMPLATES } from './templates'
@@ -124,7 +124,7 @@ export function freeName(taken: readonly string[]): string {
 /** What the tracker is told of a design handed off: its name, its block ids in design order, and their titles (the status line names the running one). */
 export function handoffOf(name: string, design: Design): { name: string; nodeIds: string[]; titles: Record<string, string> } {
   const rows = flatten(design)
-  return { name, nodeIds: rows.map(row => row.node.id), titles: Object.fromEntries(rows.map(row => [row.node.id, row.node.title])) }
+  return { name, nodeIds: rows.map(row => row.node.id), titles: Object.fromEntries(rows.map(row => [row.node.id, row.node.name])) }
 }
 
 /** The room the graph is drawn in: its region's columns and rows. The keys walk the layout made for it. */
@@ -421,13 +421,13 @@ export function crumbs(design: Design, rootId: string | null): { id: string; tit
   if (rootId === null) return []
   const rows = flatten(design)
   const out: { id: string; title: string }[] = []
-  for (let row = rows.find(one => one.node.id === rootId); row; row = row.parentId === undefined ? undefined : rows.find(one => one.node.id === row?.parentId)) out.unshift({ id: row.node.id, title: row.node.title })
+  for (let row = rows.find(one => one.node.id === rootId); row; row = row.parentId === undefined ? undefined : rows.find(one => one.node.id === row?.parentId)) out.unshift({ id: row.node.id, title: row.node.name })
   return out
 }
 
 /** A block as a message names it: `n4 Deep read`. */
-export function blockName(node: { id: string; title: string }): string {
-  return `${node.id} ${clip(node.title, 24)}`
+export function blockName(node: { id: string; name: string }): string {
+  return `${node.id} ${clip(node.name, 24)}`
 }
 
 /**
@@ -525,7 +525,7 @@ export function patchNode(design: Design | null, ui: DesignUi, id: string, patch
   if (!design || ui.status !== 'ready') return { design, ui, changed: false }
   if (context.locked) return { design, ui: { ...ui, notice: LOCK_NOTICE, editing: false, freshId: null }, changed: false }
   // A field was sent: the typing is over.
-  const fields = [...(patch.title !== undefined ? ['title'] : []), ...('notes' in patch ? ['notes'] : []), ...Object.keys(patch.knobs ?? {})].map(fieldWord)
+  const fields = [...(patch.name !== undefined ? ['name'] : []), ...('logic' in patch ? ['logic'] : []), ...Object.keys(patch.knobs ?? {})].map(fieldWord)
   return settle(design, { ...ui, editing: false, freshId: null }, updateNode(design, id, patch), ui.selectedId, `${id} changed${fields.length > 0 && fields.length <= 3 ? `: ${fields.join(', ')}` : ''}`, context)
 }
 
@@ -539,7 +539,7 @@ export function retypeBlock(design: Design | null, ui: DesignUi, id: string, to:
   const node = findNode(design, id)
   const retyped = retypeNode(design, id, to.type, to.kind)
   // A block still called after its old type or kind (the name it was added with) takes the new one's.
-  const renamed = !retyped.error && node && node.title === defaultTitle(node) && defaultTitle(to) !== node.title ? updateNode(retyped.design, id, { title: defaultTitle(to) }) : retyped
+  const renamed = !retyped.error && node && node.name === defaultName(node) && defaultName(to) !== node.name ? updateNode(retyped.design, id, { name: defaultName(to) }) : retyped
   return settle(design, { ...ui, editing: false, freshId: null, picker: null }, renamed, ui.selectedId, `${id} is now ${typeName(to)}`, context)
 }
 
@@ -682,7 +682,7 @@ export function applyOp(design: Design | null, ui: DesignUi, op: KeyOp, context:
         return { design, ui: { ...calm, confirmId: node.id, notice: confirmText(design, node.id) }, changed: false }
       }
       // A single block goes at once: `u` brings it back.
-      return settle(design, calm, removeNode(design, node.id), afterRemoval(design, node.id), `deleted ${node.id} "${clip(node.title, 24)}"${held > 0 ? ` and what it held` : ''}`, context)
+      return settle(design, calm, removeNode(design, node.id), afterRemoval(design, node.id), `deleted ${node.id} "${clip(node.name, 24)}"${held > 0 ? ` and what it held` : ''}`, context)
     }
     case 'knob1':
     case 'knob2':
@@ -854,7 +854,7 @@ export function pickBlock(design: Design | null, ui: DesignUi, choice: Partial<P
 }
 
 /** The knobs typed as text, each in a field of its own in the detail pane; model, effort and votes are stepped on the card. */
-export const TEXT_KNOBS = ['prompt', 'when', 'fanout', 'until', 'schema', 'agentType'] as const
+export const TEXT_KNOBS = ['prompt', 'condition', 'oncePer', 'stopCondition', 'output', 'agentType'] as const
 export type TextKnob = (typeof TEXT_KNOBS)[number]
 
 /** What an empty graph says while Claude drafts the design. */

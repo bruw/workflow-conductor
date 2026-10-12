@@ -122,7 +122,7 @@ The workflow runs top to bottom. The graph never pans sideways: it is laid out f
 - A block that holds none is a card with a light rounded border and its id on the top border. Row 1: `TYPE kind / Name` (`AGENT verify / check claims`; the kind is left out on a plain block, and the name while it is still the type's or the kind's) and, at the right, its model and effort where they are set. Row 2: the first line of its notes (of its prompt when it has no notes) and, at the right, `votes N` and `output: <schema>`, cut with `…`. A card with nothing for row 2 is three rows tall.
 - What a block needs and lacks is said in its place, in the error colour: `Instruction [not set]` (an agent with neither logic nor a prompt), `Stop [not set]` (a loop with no stop condition), `IF [not set]` (an arm of a branch with no condition).
 - A container is a box in its type's colour around its blocks, and its line says how it runs them: **dashed** for a chain (pipeline, loop: one block after the other), **dotted** for a stack (parallel, branch: side by side). A **phase** has no outline: it stands on a ground of its own, a step off the pane's (a phase in a phase goes back to the pane's). Its top border is its header: `TYPE / Title`, `×4` for a fan-out with a stated count, then what fits of `· each: …`, `· until: …`, `· count unknown` (a fan-out that states no number). An empty container says `empty` where its blocks would stand; its `[+]` is on its bottom border.
-- **The selected card** has a heavy border in the accent colour (heavy dashes or dots on a chain or a stack, a plain heavy line on a phase). A selected block shows all its notes, wrapped (up to a third of the graph's rows, 8 at most, then `… N more lines`), and its **chips** in place of the model and effort: `1 model  2 effort  3 votes 2`. A chip shows its digit and the knob's value, or the knob's name, dim, while the knob is not set. A selected sweep or loop-until-dry carries its chips on its top border where they fit.
+- **The selected card** has a heavy border in the accent colour (heavy dashes or dots on a chain or a stack, a plain heavy line on a phase). A selected block shows all its logic, wrapped (up to a third of the graph's rows, 8 at most, then `… N more lines`), and its **chips** in place of the model and effort: `1 model  2 effort  3 votes 2`. A chip shows its digit and the knob's value, or the knob's name, dim, while the knob is not set. A selected sweep or loop-until-dry carries its chips on its top border where they fit.
 - ` ! ` in inverse error colour marks a block that has a problem: on the top border, just left of the id, on a card and on a container alike. A collapsed container carries it when a block inside it has one. It is a mark, not a count: the detail pane says what the problems are.
 - `↓` between two blocks hands each result on as it arrives; `all ⇓` waits for all results first.
 - `[+]` adds a block there, and every one is always drawn: between two blocks of a chain on the arrow's row, right of the arrow; at the end of a container's list (a chain's or a stack's) in the middle of its bottom border; at the end of the top level on a row of its own, under the arrows. At rest a `[+]` is faded. The active one is Claude orange and bold: the place `n` would add at right now, and the one under the pointer. (None is lit for `n` while the keys are in the prompt.) The place the add list is open for reads `[+] Add block here`.
@@ -132,7 +132,7 @@ The workflow runs top to bottom. The graph never pans sideways: it is laid out f
 
 - The top level, `pipeline` and `loop` are chains: their blocks one under the other, each as wide as the list, one arrow row between two.
 - `parallel` and `branch` are stacks: their blocks (arms) side by side at equal widths, as tall as the tallest, with `∥` (they run at the same time) or `OR` (one of them runs) between two. No arrows between arms.
-- **An arm of a branch says its condition** on its top border: `IF <when>`, from the block's `when` knob. The last arm with no `when` reads `ELSE`; any other arm with none reads `IF [not set]` and carries a problem. `when` is a field of the detail pane, offered only to a block that stands directly in a branch.
+- **An arm of a branch says its condition** on its top border: `IF <condition>`, from the block's `condition` knob. The last arm with none reads `ELSE`; any other arm with none reads `IF [not set]` and carries a problem. `Condition` is a field of the detail pane, offered only to a block that stands directly in a branch.
 
 ```
 ┌─ BRANCH / Choose response ────────────────────────────────────────────────────────────────── n6 ─┐
@@ -227,16 +227,16 @@ For the selected block, from the top:
 
 | Field | For | Shown on |
 | --- | --- | --- |
-| `Name` | the block's name on the graph (`title` in the file) | every block |
-| `Logic` | what the block does and why, for whoever reads the design (`notes` in the file) | every block but a phase (a phase is its name and no more) |
+| `Name` | the block's name on the graph | every block |
+| `Logic` | what the block does and why, for whoever reads the design | every block but a phase (a phase is its name and no more) |
 | `Prompt` | the agent: the intent of its prompt (Claude writes the wording) | agent, subworkflow |
-| `Condition` | the condition that picks this arm; empty on the last arm for the else (`when`) | a block directly in a branch |
-| `Once per` | what it runs once per, with a count when known: `×4 dimensions` (`fanout`) | pipeline, parallel |
-| `Stop condition` | when a loop stops, in your own words (`until`) | loop |
-| `Output` | what the block hands on, in words or as JSON Schema text (`schema`) | agent, code, subworkflow, args |
+| `Condition` | the condition that picks this arm; empty on the last arm for the else | a block directly in a branch |
+| `Once per` | what it runs once per, with a count when known: `×4 dimensions` | pipeline, parallel |
+| `Stop condition` | when a loop stops, in your own words | loop |
+| `Output` | what the block hands on, in words or as JSON Schema text | agent, code, subworkflow, args |
 | `Agent type` | a subagent type to run as | agent |
 
-A block's fields are its type's, the same for every kind of it: a kind adds no field. An empty field says what it is for, in the kind's words (a loop of kind pass: `the check passes, at most 3 rounds`), and a new block of a kind has the fields its pattern needs filled in already. A container hands on what its last block makes, so it has no output of its own.
+A block's fields are its type's, the same for every kind of it: a kind adds no field. The design file names them with the same words: `name`, `logic`, and under `knobs` `prompt`, `output`, `oncePer`, `stopCondition`, `condition`, `agentType`. An empty field says what it is for, in the kind's words (a loop of kind pass: `the check passes, at most 3 rounds`), and a new block of a kind has the fields its pattern needs filled in already. A container hands on what its last block makes, so it has no output of its own.
 
 5. Its type and kind, on a row of its own (`Type`, then `agent verify ▾`): a press opens the list of blocks and kinds. The model, the effort and the votes have no picker here: the chips on the card step them. A block whose file sets `isolation: worktree` shows a read-only line, `Isolation  worktree`: the pane has no control for it, Claude sets or drops it when asked.
 6. **Run**, while a run's results show: the block's agents.
@@ -314,7 +314,7 @@ What a kind does:
 - **Two kinds start with blocks**, in the same edit (one undo): a loop of kind pass holds an attempt and a check, a loop of kind dry a finder and a dedup step.
 - **It tells Claude what to write**: the hand-off says each kind the design uses in the script's terms.
 
-Votes are a knob of the two voting kinds of agent (verify, judge), not a kind of their own. In the file a kind is the block's `kind` (left out on a plain block). A design saved before kinds is read as it was meant: `verify`, `judge-panel` and `critic` are kinds of agent, `sweep` a kind of parallel, `loop-until-dry` the kind dry of loop; it is written in the new form the next time it is saved.
+Votes are a knob of the two voting kinds of agent (verify, judge), not a kind of their own. In the file a kind is the block's `kind` (left out on a plain block).
 
 ### Problems
 
@@ -332,7 +332,7 @@ Conductor checks the design as you build and never blocks anything. A block that
 - a loop whose round ends in nothing the stop test can read
 - an arm of a branch with no condition (only the last arm may go without one, as the else)
 
-**Two blocks that do no work.** `args` is the workflow's input: what it is run on, in notes, and its shape in `schema` (shown on the card as `input: …`). Every design has it, always as its first block: a new design opens with it, a design saved without one is given an empty one when it is read, and it is not in the add list. It is not deleted, does not move and becomes no other type, and nothing goes above it. Left empty it reads `no input`, which is no problem: the workflow then takes none. `phase` is a titled group: it holds any block, has no knobs, and its blocks run one after the other where it stands, as if it were not there. It costs no nesting level (a container in a phase is drawn open as deep as it would be without it).
+**Two blocks that do no work.** `args` is the workflow's input: what it is run on, in its logic, and its shape in its output (shown on the card as `input: …`). Every design has it, always as its first block: a new design opens with it, a design saved without one is given an empty one when it is read, and it is not in the add list. It is not deleted, does not move and becomes no other type, and nothing goes above it. Left empty it reads `no input`, which is no problem: the workflow then takes none. `phase` is a titled group: it holds any block, has no knobs, and its blocks run one after the other where it stands, as if it were not there. It costs no nesting level (a container in a phase is drawn open as deep as it would be without it).
 
 ## Watching a run
 

@@ -7,55 +7,56 @@
     {
       "id": "n6",
       "type": "args",
-      "title": "args",
-      "notes": "What to review: a branch, a pull request or a path. With none, the current diff.",
+      "name": "args",
+      "logic": "What to review: a branch, a pull request or a path. With none, the current diff.",
       "knobs": {
-        "schema": "{ target? }"
+        "output": "{ target? }"
       }
     },
     {
       "id": "n1",
       "type": "agent",
-      "title": "scout diff",
-      "notes": "Cheap and mechanical. Its list of dimensions is the work-list for the pipeline.",
+      "name": "scout diff",
+      "logic": "Cheap and mechanical. Its list of dimensions is the work-list for the pipeline.",
       "knobs": {
         "prompt": "Read the diff and split the review into dimensions (bugs, security, performance, tests), each with the files it concerns",
-        "schema": "{ dimensions: [{ name, focus, files[] }] }",
+        "output": "{ dimensions: [{ name, focus, files[] }] }",
         "effort": "low"
       }
     },
     {
       "id": "n7",
       "type": "agent",
-      "title": "W"
+      "name": "W"
     },
     {
       "id": "n2",
       "type": "pipeline",
-      "title": "review",
-      "notes": "Each dimension flows through both stages on its own; a fast dimension starts verifying while slow ones still review.",
+      "name": "review",
+      "logic": "Each dimension flows through both stages on its own; a fast dimension starts verifying while slow ones still review.",
       "knobs": {
-        "fanout": "×4 dimensions"
+        "oncePer": "×4 dimensions"
       },
       "children": [
         {
           "id": "n3",
           "type": "agent",
-          "title": "review",
-          "notes": "One reviewer per dimension.",
+          "name": "review",
+          "logic": "One reviewer per dimension.",
           "knobs": {
             "prompt": "Review the diff for this dimension only and report concrete findings with evidence",
-            "schema": "{ findings: [{ file, line, severity, claim, evidence }] }"
+            "output": "{ findings: [{ file, line, severity, claim, evidence }] }"
           }
         },
         {
           "id": "n4",
-          "type": "verify",
-          "title": "verify findings",
-          "notes": "Each skeptic tries to refute a finding and defaults to refuted when unsure. Keep a finding only if at least 2 of 3 fail to refute it.",
+          "type": "agent",
+          "kind": "verify",
+          "name": "verify findings",
+          "logic": "Each skeptic tries to refute a finding and defaults to refuted when unsure. Keep a finding only if at least 2 of 3 fail to refute it.",
           "knobs": {
             "prompt": "Try to refute this finding against the actual code",
-            "schema": "{ refuted: boolean, reason }",
+            "output": "{ refuted: boolean, reason }",
             "votes": 3
           }
         }
@@ -64,8 +65,8 @@
     {
       "id": "n5",
       "type": "agent",
-      "title": "synthesize",
-      "notes": "Runs once over all surviving findings: merge duplicates, order by severity, say what was dropped.",
+      "name": "synthesize",
+      "logic": "Runs once over all surviving findings: merge duplicates, order by severity, say what was dropped.",
       "knobs": {
         "prompt": "Write one review from the confirmed findings of every dimension"
       }

@@ -75,7 +75,7 @@ export function replayDesignEvents(design: Design, name: string = design.name): 
   const phaseOf = new Map<string, string>()
   let phase = ''
   for (const row of rows) {
-    if (row.depth === 0) phase = `${row.node.id} ${row.node.title}`
+    if (row.depth === 0) phase = `${row.node.id} ${row.node.name}`
     phaseOf.set(row.node.id, phase)
   }
   const strayId = `n${rows.reduce((max, row) => Math.max(max, idNumber(row.node.id)), 0) + 90}`
@@ -95,7 +95,7 @@ export function replayDesignEvents(design: Design, name: string = design.name): 
 
   for (const [at, { node }] of leaves.entries()) {
     const count = replayAgents(node.knobs, node.id)
-    const agents = Array.from({ length: count }, (_, k) => run(`replay-${node.id}-${k + 1}`, `${node.id}: ${node.title} ${k + 1}`, phaseOf.get(node.id), !(node.id === failing && k === 1)))
+    const agents = Array.from({ length: count }, (_, k) => run(`replay-${node.id}-${k + 1}`, `${node.id}: ${node.name} ${k + 1}`, phaseOf.get(node.id), !(node.id === failing && k === 1)))
     // One stray beside the first leaf, one beside the last.
     const stray = at === 0 ? strays[0] : at === leaves.length - 1 ? strays[1] : undefined
     if (stray !== undefined) agents.push(run(`replay-stray-${at === 0 ? 1 : 2}`, stray, undefined, true))

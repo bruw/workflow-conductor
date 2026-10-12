@@ -71,7 +71,7 @@ import {
   withoutKeys,
 } from '../src/design/session'
 import type { DesignUi, GraphBox, PickRow, RunContext, SavedDesign, Step, TextKnob } from '../src/design/session'
-import { FIELD_LABEL, PALETTE_GROUPS, TEACH, groupOf, hasNotes, knobsOf, pickName, placeholderOf, teachOf, useWhen } from '../src/design/teach'
+import { FIELD_LABEL, PALETTE_GROUPS, TEACH, fieldWord as fieldLabel, groupOf, hasLogic, knobsOf, pickName, placeholderOf, teachOf, useWhen } from '../src/design/teach'
 import type { BlockRef } from '../src/design/teach'
 import { TEMPLATES } from '../src/design/templates'
 import { emptyRunState } from '../src/run/events'
@@ -104,8 +104,8 @@ const GOAL_KEY = 'goal'
 const SPLASH_KEY = 'splash'
 /** Under the splash's scene. */
 const SPLASH_NOTE = 'designed for full screen'
-const TITLE_KEY = 'design-title'
-const NOTES_KEY = 'design-notes'
+const NAME_KEY = 'design-name'
+const LOGIC_KEY = 'design-logic'
 /** The add list's filter: `design-add:<n>`, drawn under a new `n` to empty it of the keys it took. */
 const PICKER_KEY = 'design-add'
 /**
@@ -142,10 +142,10 @@ let fieldsDrawn = false
 /** Whether the ring on this element means a field is being typed in. */
 const isField = (element: string | undefined): boolean => {
   const base = baseOf(element ?? '')
-  return base === TITLE_KEY || base === NOTES_KEY || base.startsWith(KNOB_KEY)
+  return base === NAME_KEY || base === LOGIC_KEY || base.startsWith(KNOB_KEY)
 }
-/** A field as a message names it: `notes`, `fanout`. */
-const fieldWord = (base: string): string => (base === TITLE_KEY ? 'title' : base === NOTES_KEY ? 'notes' : base === DESC_KEY ? 'goal' : base.slice(KNOB_KEY.length))
+/** A field as a message names it: `logic`, `once per`. */
+const fieldWord = (base: string): string => (base === DESC_KEY ? 'goal' : fieldLabel(base === NAME_KEY ? 'name' : base === LOGIC_KEY ? 'logic' : base.slice(KNOB_KEY.length)))
 /**
  * The key catcher: where the ring rests while no field is open. An Input, so it is given every printable key with its
  * case (a Button's hotkey cannot see Shift). It is the pane's first focus stop, always: the engine keeps the ring by
@@ -295,8 +295,8 @@ const noDrafts = (): Drafts => ({ name: '', id: null, values: {}, goal: null })
 let drafts: Drafts = noDrafts()
 const hasDrafts = (): boolean => drafts.goal !== null || (drafts.id !== null && Object.keys(drafts.values).length > 0)
 /** What one field's text changes of its block. */
-const fieldPatch = (node: { title: string }, base: string, value: string): NodePatch =>
-  base === TITLE_KEY ? { title: value.trim() || node.title } : base === NOTES_KEY ? { notes: value.trim() } : ({ knobs: { [base.slice(KNOB_KEY.length)]: value.trim() } } as NodePatch)
+const fieldPatch = (node: { name: string }, base: string, value: string): NodePatch =>
+  base === NAME_KEY ? { name: value.trim() || node.name } : base === LOGIC_KEY ? { logic: value.trim() } : ({ knobs: { [base.slice(KNOB_KEY.length)]: value.trim() } } as NodePatch)
 /** Where the pane's last drawing sat: a drawing sets it. */
 let paneShape = ''
 /** The focus stops of the last drawing, in words: when they change under a ring at rest, the ring is put back on the catcher. */
@@ -462,7 +462,7 @@ const flushDrafts = ($: EngineInterface): Promise<string | null> => {
         record(ui.name, design, step.what)
         design = step.design
         said.push(step.what ?? `${node.id} changed`)
-        titled = patch.title !== undefined
+        titled = patch.name !== undefined
       }
     }
     if (said.length === 0) return null
@@ -557,7 +557,7 @@ const landOn = ($: EngineInterface, target: () => string, hint: string): void =>
  * Opens the fields of the selected block for typing, the ring on `base` (the title when none is named): what `e`
  * does, for the ways that are not a key (Tab from the catcher, a click on a field at rest).
  */
-const openFields = async ($: EngineInterface, base: string = TITLE_KEY): Promise<void> => {
+const openFields = async ($: EngineInterface, base: string = NAME_KEY): Promise<void> => {
   const ui = await read($, uiAtom)
   const design = await read($, designAtom)
   const node = design === null || ui.selectedId === null ? undefined : findNode(design, ui.selectedId)
@@ -804,7 +804,7 @@ const pick = async ($: EngineInterface, choice: Partial<PickRow>): Promise<void>
   // A block opened on its kinds: the filter is drawn anew, empty, for the kinds' list.
   if (step.ui.picker?.block !== undefined && step.ui.picker.query === '') pickGen++
   const fresh = step.changed && step.ui.editing ? step.ui.freshId : null
-  if (fresh !== null) landOn($, () => fieldKey(TITLE_KEY, fresh), `edit: ${EDIT_HINT}`)
+  if (fresh !== null) landOn($, () => fieldKey(NAME_KEY, fresh), `edit: ${EDIT_HINT}`)
   else if (!step.ui.picker) await home($)
 }
 
@@ -877,14 +877,14 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   if (!ui.handed && !locked) {
     if (ui.editing && node) {
       const mine = drafts.id === node.id && drafts.name === ui.name
-      const text = (mine ? drafts.values[TITLE_KEY] : undefined) ?? (ui.freshId === node.id ? '' : node.title)
-      if (key === ENTER) await saveField($, node.id, TITLE_KEY, text)
+      const text = (mine ? drafts.values[NAME_KEY] : undefined) ?? (ui.freshId === node.id ? '' : node.name)
+      if (key === ENTER) await saveField($, node.id, NAME_KEY, text)
       else {
         // The title's field may be drawn already, without this letter: the letter is kept beside it, after the text it
         // opened with and before what was typed in the field itself since, until the typing pauses.
-        const pin = pins[fieldKey(TITLE_KEY, node.id)]
+        const pin = pins[fieldKey(NAME_KEY, node.id)]
         if (pin) pin.head += key
-        drafts = { name: ui.name, id: node.id, goal: drafts.name === ui.name ? drafts.goal : null, values: { ...(mine ? drafts.values : {}), [TITLE_KEY]: pin ? `${pin.value}${pin.head}${pin.tail}` : `${text}${key}` } }
+        drafts = { name: ui.name, id: node.id, goal: drafts.name === ui.name ? drafts.goal : null, values: { ...(mine ? drafts.values : {}), [NAME_KEY]: pin ? `${pin.value}${pin.head}${pin.tail}` : `${text}${key}` } }
       }
 
       return true
@@ -930,7 +930,7 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
     return false
   }
   const editId = op === 'edit' && step.ui.editing ? step.ui.selectedId : null
-  if (editId !== null) landOn($, () => fieldKey(TITLE_KEY, editId), `edit: ${EDIT_HINT}`)
+  if (editId !== null) landOn($, () => fieldKey(NAME_KEY, editId), `edit: ${EDIT_HINT}`)
   if (op === 'goal' && step.ui.describing) {
     descGen++
     landOn($, descKey, 'goal: press Tab to reach the field')
@@ -1616,7 +1616,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const held = await read($, uiAtom)
     if (held.status === 'ready' && held.editing !== inDetail && (inDetail || person)) await update($, uiAtom, ui => ({ ...ui, editing: inDetail, freshId: inDetail ? ui.freshId : null }))
     // The person's Tab from the catcher: the fields open, and the ring goes on to the title. (A field at rest it came to rest on: that field.)
-    if ((door && !leaves) || rest !== null) await openFields($, rest ?? TITLE_KEY)
+    if ((door && !leaves) || rest !== null) await openFields($, rest ?? NAME_KEY)
     // The goal's field closes when the person moves the ring off it.
     if (held.status === 'ready' && held.describing && !isDescField(e.element) && person && !goalAsked) await update($, uiAtom, ui => ({ ...ui, describing: false }))
     await keepSaid($, flushed)
@@ -2148,10 +2148,10 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const named = new Set(ownProblems.flatMap(one => problemFields(one.rule)))
     const texts: { key: string; knob: string; label: string; value: string; placeholder: string }[] = node
       ? [
-          // A block just added opens with its title field empty: the default title shows dim and stays if nothing is typed.
-          { key: TITLE_KEY, knob: 'title', label: FIELD_LABEL.title, value: typed(TITLE_KEY, ui.freshId === node.id ? '' : node.title), placeholder: node.title },
-          // A phase is its title and no more: it has a notes field only for notes it already carries.
-          ...(hasNotes(node) ? [{ key: NOTES_KEY, knob: 'notes', label: FIELD_LABEL.notes, value: typed(NOTES_KEY, node.notes ?? ''), placeholder: placeholderOf(node, 'notes') }] : []),
+          // A block just added opens with its name field empty: the default name shows dim and stays if nothing is typed.
+          { key: NAME_KEY, knob: 'name', label: FIELD_LABEL.name, value: typed(NAME_KEY, ui.freshId === node.id ? '' : node.name), placeholder: node.name },
+          // A phase is its name and no more: it has a logic field only for logic it already carries.
+          ...(hasLogic(node) ? [{ key: LOGIC_KEY, knob: 'logic', label: FIELD_LABEL.logic, value: typed(LOGIC_KEY, node.logic ?? ''), placeholder: placeholderOf(node, 'logic') }] : []),
           ...textKnobs.map((knob: TextKnob) => ({
             key: `${KNOB_KEY}${knob}`,
             knob,
@@ -2259,7 +2259,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
               <Text wrap="truncate-end">
                 <Text color={ACCENT[node.type]} bold>{typeLabel(node)}</Text>
                 <Text color={FADED}>{' / '}</Text>
-                <Text bold>{clip(node.title, Math.max(4, detailW - typeLabel(node).length - node.id.length - 5 - DOOR_W))}</Text>
+                <Text bold>{clip(node.name, Math.max(4, detailW - typeLabel(node).length - node.id.length - 5 - DOOR_W))}</Text>
               </Text>
               <Box flexDirection="row" flexShrink={0}>
                 <Text color={FADED}>{node.id}</Text>
@@ -2573,7 +2573,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         .slice(0, graphRows)
         .map(row => (
           <Text color={row.node.id === ui.selectedId ? 'claude' : undefined} bold={row.node.id === ui.selectedId ? true : undefined} wrap="truncate-end">
-            {`${row.node.id === ui.selectedId ? GLYPH.diamond : ' '} ${'  '.repeat(row.depth)}${TEACH[row.node.type].glyph} ${row.node.id}  ${row.node.title}`}
+            {`${row.node.id === ui.selectedId ? GLYPH.diamond : ' '} ${'  '.repeat(row.depth)}${TEACH[row.node.type].glyph} ${row.node.id}  ${row.node.name}`}
           </Text>
         )),
     )

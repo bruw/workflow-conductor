@@ -3,7 +3,7 @@
 
 import { ARGS_PLACE, EFFORTS, aType, argsOf, typeName, canHoldChildren, findNode, isNodeType, knobError, nextIdNumber, readType, walk } from './model'
 import type { Design, DesignNode, Kind, Knobs, NodeType } from './model'
-import { defaultTitle, fillOf, offers, starterOf } from './teach'
+import { defaultName, fillOf, offers, starterOf } from './teach'
 import type { BlockRef, Starter } from './teach'
 
 export type OpResult = { design: Design; error?: string }
@@ -13,7 +13,7 @@ export type AddResult = OpResult & { id?: string }
 
 export type Place = { parentId?: string; index: number }
 
-export type NodePatch = { title?: string; notes?: string; knobs?: Partial<Knobs> }
+export type NodePatch = { name?: string; logic?: string; knobs?: Partial<Knobs> }
 
 type Spot = { node: DesignNode; parent: DesignNode | undefined; index: number; siblings: readonly DesignNode[] }
 
@@ -88,7 +88,7 @@ function argsTaken(id: string): string {
 }
 
 /** What deleting the `args` block, or making it another block, is refused with. */
-export const ARGS_KEPT = 'the args block stays: every design has it, first. Clear its notes and schema for a workflow that takes no input'
+export const ARGS_KEPT = 'the args block stays: every design has it, first. Clear its logic and output for a workflow that takes no input'
 
 /**
  * The place a block of `type` really gets when `at` is asked for: `args` goes first whatever was asked,
@@ -100,8 +100,8 @@ export function placeFor(design: Pick<Design, 'nodes'>, type: NodeType, at: Plac
 }
 
 /** A new block of a type and kind, with what the kind fills in under the knobs it is given. */
-function made(id: string, block: BlockRef, title: string, knobs: Knobs = {}): DesignNode {
-  const node: DesignNode = { id, type: block.type, title }
+function made(id: string, block: BlockRef, name: string, knobs: Knobs = {}): DesignNode {
+  const node: DesignNode = { id, type: block.type, name }
   if (block.kind !== undefined) node.kind = block.kind
   const filled = { ...fillOf(block), ...knobs }
   if (Object.keys(filled).length > 0) node.knobs = filled
@@ -113,8 +113,8 @@ function made(id: string, block: BlockRef, title: string, knobs: Knobs = {}): De
 function starters(block: BlockRef, number: number): DesignNode[] {
   return starterOf(block).map((one: Starter, index) => {
     const read = readType(one.type, one.kind)
-    const node = made(`n${number + index}`, 'error' in read ? { type: one.type } : read, one.title, one.knobs)
-    return one.notes === undefined ? node : { ...node, notes: one.notes }
+    const node = made(`n${number + index}`, 'error' in read ? { type: one.type } : read, one.name, one.knobs)
+    return one.logic === undefined ? node : { ...node, logic: one.logic }
   })
 }
 
@@ -123,7 +123,7 @@ function starters(block: BlockRef, number: number): DesignNode[] {
  * A block of a kind is given what the kind fills in, and a container of a kind that starts with blocks is given
  * them: all of it one edit. `bare` leaves the starting blocks out, for an edit that brings its own.
  */
-export function addNode(design: Design, spec: { type: NodeType; kind?: Kind; title?: string; bare?: boolean }, asked: Place): AddResult {
+export function addNode(design: Design, spec: { type: NodeType; kind?: Kind; name?: string; bare?: boolean }, asked: Place): AddResult {
   if (!isNodeType(spec.type)) return refuse(design, `unknown type ${String(spec.type)}`)
   const block = readType(spec.type, spec.kind)
   if ('error' in block) return refuse(design, block.error)
@@ -135,7 +135,7 @@ export function addNode(design: Design, spec: { type: NodeType; kind?: Kind; tit
 
   const number = nextIdNumber(design)
   const id = `n${number}`
-  const node = made(id, block, spec.title ?? defaultTitle(block))
+  const node = made(id, block, spec.name ?? defaultName(block))
   const held = spec.bare ? [] : starters(block, number + 1)
   if (held.length > 0) node.children = held
   const nodes = editList(design.nodes, at.parentId, list => insertAt(list, at.index, node))
@@ -174,8 +174,8 @@ export function moveNode(design: Design, id: string, to: Place): OpResult {
 }
 
 /**
- * Changes title, notes and knobs. Knobs merge key by key; a knob set to
- * undefined or '' is cleared, and so are notes set to ''. Id and type are fixed.
+ * Changes name, logic and knobs. Knobs merge key by key; a knob set to
+ * undefined or '' is cleared, and so is logic set to ''. Id and type are fixed.
  */
 export function updateNode(design: Design, id: string, patch: NodePatch): OpResult {
   const node = findNode(design, id)
@@ -183,14 +183,14 @@ export function updateNode(design: Design, id: string, patch: NodePatch): OpResu
   const loose: Record<string, unknown> = patch
   if (loose.id !== undefined && loose.id !== node.id) return refuse(design, 'id cannot be changed')
   if (loose.type !== undefined && loose.type !== node.type) return refuse(design, 'type cannot be changed')
-  if (patch.title !== undefined && typeof patch.title !== 'string') return refuse(design, 'title must be a string')
-  if (patch.notes !== undefined && typeof patch.notes !== 'string') return refuse(design, 'notes must be a string')
+  if (patch.name !== undefined && typeof patch.name !== 'string') return refuse(design, 'name must be a string')
+  if (patch.logic !== undefined && typeof patch.logic !== 'string') return refuse(design, 'logic must be a string')
 
   const next: DesignNode = { ...node }
-  if (patch.title !== undefined) next.title = patch.title
-  if ('notes' in patch) {
-    if (patch.notes) next.notes = patch.notes
-    else delete next.notes
+  if (patch.name !== undefined) next.name = patch.name
+  if ('logic' in patch) {
+    if (patch.logic) next.logic = patch.logic
+    else delete next.logic
   }
   if (patch.knobs) {
     const knobs: Record<string, unknown> = { ...node.knobs }

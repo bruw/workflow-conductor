@@ -14,7 +14,7 @@ import { FLASH_MS } from '../ui/graph-model'
 import { UNDO_HINT } from './history'
 import { DESIGN_DIR, carryUi, initialUi } from './session'
 import type { DesignUi } from './session'
-import { FIELD_LABEL, KIND_TEACH, KNOB_HELP, TEACH, defaultTitle, fillOf } from './teach'
+import { KIND_TEACH, KNOB_HELP, TEACH, defaultName, fillOf } from './teach'
 
 /** The tool's short name; the model calls it as `mcp__conductor__design`. */
 export const TOOL_NAME = 'design'
@@ -46,11 +46,6 @@ function kindLine(): string {
   return (Object.keys(KINDS) as (keyof typeof KINDS)[]).map(type => `${type}: ${namedKinds(type).map(kind => `${kind} = ${KIND_TEACH[kind].hint}`).join('; ')}`).join('. ')
 }
 
-/** The board's words for the fields, beside the keys they are in the file: lints and messages use the words. */
-function fieldWords(): string {
-  return (['title', 'notes', 'schema', 'fanout', 'until', 'when'] as const).map(key => `${FIELD_LABEL[key]} = ${key}`).join(', ')
-}
-
 function knobLine(): string {
   return Object.entries(KNOB_HELP)
     .map(([key, help]) => `${key} (${help})`)
@@ -62,10 +57,10 @@ export function toolDescription(): string {
   return [
     `Reads and edits the user's Conductor workflow design: the board of blocks they see, saved at ${DESIGN_DIR_HINT}. Use it whenever the user asks to draft, add, change, move or remove workflow blocks or steps ("add a verify after n3", "this block"); do not edit that file by hand. A design is a spec the user reviews, not a script: never run it from here.`,
     'Actions: read = the design JSON, the block selected on the board ("this block") and the lints. Always read before you describe, review or edit a design: the user changes the board by hand between your turns, so what you read or wrote earlier may be gone (every answer names the revision it shows). apply = `ops` in order, all or nothing. write = replace the whole tree with `nodes` (drafting, large restructures): keep the id of every block that stays, leave id off new ones. guide = the long help card of every type. `name` defaults to the design open on the board. An edit shows on the board at once and returns the lints: fix them or tell the user.',
-    "Block: { id, type, kind?, title, notes?, knobs?, children? }. Ids (n1, n2…) are assigned for you and never change. title is a short label; notes is free text saying what the block should do. Order is execution order. Only containers hold children. Blocks directly inside a branch are its arms (one runs, picked by its `when`), and directly inside a parallel they run side by side: to run two blocks one after the other there, put both in a pipeline. Every design starts with its args block (the workflow's input): it is not added, moved or removed; update it by id to say what the input is, or leave it empty for none. A phase only frames its blocks: they run in order where it stands. The design's `description` is the goal of the whole workflow: set it when drafting, keep it true.",
+    "Block: { id, type, kind?, name, logic?, knobs?, children? }. Ids (n1, n2…) are assigned for you and never change. name is a short label; logic is free text saying what the block should do. Order is execution order. Only containers hold children. Blocks directly inside a branch are its arms (one runs, picked by its `condition`), and directly inside a parallel they run side by side: to run two blocks one after the other there, put both in a pipeline. Every design starts with its args block (the workflow's input): it is not added, moved or removed; update it by id to say what the input is, or leave it empty for none. A phase only frames its blocks: they run in order where it stands. The design's `description` is the goal of the whole workflow: set it when drafting, keep it true.",
     'Types:',
     ...typeLines(),
-    `Kinds: \`kind\` names the pattern a block is used for (each explained on \`kind\` in the schema); leave it out for the plain block. ${kindNames()}. A new block of a kind gets the knobs its pattern needs where you set none. The board calls the fields ${fieldWords()}: the lints use those words.`,
+    `Kinds: \`kind\` names the pattern a block is used for (each explained on \`kind\` in the schema); leave it out for the plain block. ${kindNames()}. A new block of a kind gets the knobs its pattern needs where you set none. The board and the lints say a key in words: oncePer is "once per", stopCondition "stop condition".`,
     // What each knob means is said on `knobs` in the schema: a description is cut at 4096 characters, and the types take them.
     `Knobs, all optional, explained on \`knobs\` in the schema: ${KNOB_NAMES.join(', ')}.`,
   ].join('\n')
@@ -74,8 +69,8 @@ export function toolDescription(): string {
 const BLOCK_FIELDS = {
   type: { enum: [...NODE_TYPES] },
   kind: { type: 'string', description: `Optional: the pattern, by type. ${kindLine()}. In an update, "" makes the block plain again.` },
-  title: { type: 'string' },
-  notes: { type: 'string' },
+  name: { type: 'string' },
+  logic: { type: 'string' },
   knobs: { type: 'object', description: `All optional: ${knobLine()}. In an update, "" clears a knob.` },
   children: { type: 'array', items: { type: 'object' }, description: 'Blocks inside a container, same shape.' },
 }
@@ -90,7 +85,7 @@ export const TOOL_SCHEMA: Record<string, unknown> = {
     ops: {
       type: 'array',
       description:
-        'apply. add: a new block (type, kind?, title, notes?, knobs?, children?) placed by `after` or `before` (a sibling id) or `parent` (a container id: appended); none of them = end of the top level. update: `id` plus the fields to change (type and kind too). move: `id` plus after | before | parent. remove: `id`, with everything it holds.',
+        'apply. add: a new block (type, kind?, name, logic?, knobs?, children?) placed by `after` or `before` (a sibling id) or `parent` (a container id: appended); none of them = end of the top level. update: `id` plus the fields to change (type and kind too). move: `id` plus after | before | parent. remove: `id`, with everything it holds.',
       items: {
         type: 'object',
         required: ['op'],
@@ -101,7 +96,7 @@ export const TOOL_SCHEMA: Record<string, unknown> = {
       type: 'array',
       description: 'write. The whole tree, top level first.',
       // The knobs are explained once, on the ops.
-      items: { type: 'object', required: ['type', 'title'], properties: { id: { type: 'string', description: 'Only for a block that already exists.' }, ...BLOCK_FIELDS, kind: { type: 'string', description: 'The same kinds as in `ops`.' }, knobs: { type: 'object', description: 'The same knobs as in `ops`.' } } },
+      items: { type: 'object', required: ['type', 'name'], properties: { id: { type: 'string', description: 'Only for a block that already exists.' }, ...BLOCK_FIELDS, kind: { type: 'string', description: 'The same kinds as in `ops`.' }, knobs: { type: 'object', description: 'The same knobs as in `ops`.' } } },
     },
   },
 }
@@ -132,7 +127,7 @@ export function draftBrief(name: string, description: string): string[] {
       '',
       `Make it with the ${TOOL_FULL_NAME} tool: one call with action "write", name "${name}", a one-line description and the nodes.`,
       'The design is a spec the user reviews on the board. Do not write a workflow script and do not run anything.',
-      'Pick the structure the task needs and no more: a few blocks with clear notes beat many. Give a block its kind where one fits, and use knobs where they say something (fanout, votes, until, schema).',
+      'Pick the structure the task needs and no more: a few blocks with clear logic beat many. Give a block its kind where one fits, and use knobs where they say something (oncePer, votes, stopCondition, output).',
       `Afterwards say in two or three lines what the blocks do, name any lint you chose to leave, and say that /conductor run ${name} runs it.`,
       '',
       guideText(),
@@ -174,8 +169,8 @@ function knobsError(raw: unknown, where: string): string | undefined {
 function signature(design: Design): Map<string, string> {
   const out = new Map<string, string>()
   for (const row of flatten(design)) {
-    const { id, type, kind, title, notes, knobs } = row.node
-    out.set(id, JSON.stringify([row.parentId ?? null, type, kind ?? '', title, notes ?? '', Object.entries(knobs ?? {}).sort(([a], [b]) => a.localeCompare(b))]))
+    const { id, type, kind, name, logic, knobs } = row.node
+    out.set(id, JSON.stringify([row.parentId ?? null, type, kind ?? '', name, logic ?? '', Object.entries(knobs ?? {}).sort(([a], [b]) => a.localeCompare(b))]))
   }
   return out
 }
@@ -193,11 +188,11 @@ export function diffDesigns(before: Design | null, after: Design): Change {
   return change
 }
 
-/** A `when` on a block that is no arm of a branch picks nothing: said of every such block among `ids`, so the edit can be put right. */
-export function strayWhens(design: Design, ids: readonly string[]): string[] {
+/** A `condition` on a block that is no arm of a branch picks nothing: said of every such block among `ids`, so the edit can be put right. */
+export function strayConditions(design: Design, ids: readonly string[]): string[] {
   return flatten(design)
-    .filter(row => ids.includes(row.node.id) && (row.node.knobs?.when ?? '').trim() !== '' && (row.parentId === undefined ? undefined : findNode(design, row.parentId)?.type) !== 'branch')
-    .map(row => `${row.node.id} has a \`when\` but does not stand directly in a branch, so nothing reads it: move the block into the branch as an arm, or clear the knob (when: "").`)
+    .filter(row => ids.includes(row.node.id) && (row.node.knobs?.condition ?? '').trim() !== '' && (row.parentId === undefined ? undefined : findNode(design, row.parentId)?.type) !== 'branch')
+    .map(row => `${row.node.id} has a \`condition\` but does not stand directly in a branch, so nothing reads it: move the block into the branch as an arm, or clear the knob (condition: "").`)
 }
 
 // The last gate: whatever was assembled is read back by the model's own parser.
@@ -208,7 +203,7 @@ function checked(before: Design, candidate: Design, touched: Iterable<string> = 
   for (const id of touched) {
     if (!change.added.includes(id) && !change.changed.includes(id) && findNode(parsed.design, id)) change.changed.push(id)
   }
-  const said = [...notes, ...strayWhens(parsed.design, [...change.added, ...change.changed])]
+  const said = [...notes, ...strayConditions(parsed.design, [...change.added, ...change.changed])]
   return { ok: true, design: parsed.design, ...change, ...(said.length > 0 ? { notes: said } : {}) }
 }
 
@@ -220,7 +215,7 @@ export function armNote(design: Design, id: string, beside: string): string | nu
   const row = flatten(design).find(one => one.node.id === id)
   const parent = row?.parentId === undefined ? undefined : findNode(design, row.parentId)
   if (!parent) return null
-  if (parent.type === 'branch') return `${id} was added as a new arm of branch ${parent.id} (a branch runs one of its arms; every arm but the last needs a \`when\`), not as a step after ${beside}. To run it after ${beside} in the same arm, wrap the two in a pipeline: add a pipeline in ${parent.id}, then move ${beside} and ${id} into it.`
+  if (parent.type === 'branch') return `${id} was added as a new arm of branch ${parent.id} (a branch runs one of its arms; every arm but the last needs a \`condition\`), not as a step after ${beside}. To run it after ${beside} in the same arm, wrap the two in a pipeline: add a pipeline in ${parent.id}, then move ${beside} and ${id} into it.`
   if (parent.type === 'parallel') return `${id} was added beside ${beside} in ${parent.type} ${parent.id}: the two run at the same time, not one after the other. To run it after ${beside}, wrap the two in a pipeline inside ${parent.id}.`
   return null
 }
@@ -255,10 +250,10 @@ export function replaceDesign(before: Design, rawNodes: unknown, description?: u
     if ('error' in read) problem ??= `${id}: ${read.error}`
     const block = 'error' in read ? undefined : read
     problem ??= knobsError(raw.knobs, id)
-    const node: Record<string, unknown> = { id, type: block?.type ?? raw.type, title: typeof raw.title === 'string' && raw.title.trim() !== '' ? raw.title : block ? defaultTitle(block) : '' }
+    const node: Record<string, unknown> = { id, type: block?.type ?? raw.type, name: typeof raw.name === 'string' && raw.name.trim() !== '' ? raw.name : block ? defaultName(block) : '' }
     if (block?.kind !== undefined) node.kind = block.kind
-    if (typeof raw.notes === 'string' && raw.notes.trim() !== '') node.notes = raw.notes
-    else if (raw.notes !== undefined && raw.notes !== null && typeof raw.notes !== 'string') problem ??= `${id}: notes must be a string`
+    if (typeof raw.logic === 'string' && raw.logic.trim() !== '') node.logic = raw.logic
+    else if (raw.logic !== undefined && raw.logic !== null && typeof raw.logic !== 'string') problem ??= `${id}: logic must be a string`
     // A new block of a kind gets what the kind fills in, under the knobs it came with; a block that stays is taken as written.
     const given = isRecord(raw.knobs) ? Object.fromEntries(Object.entries(raw.knobs).filter(([, value]) => value !== '' && value !== null)) : {}
     const knobs = stays || !block ? given : { ...fillOf(block), ...given }
@@ -303,8 +298,8 @@ function placeOf(design: Design, op: Record<string, unknown>): Place | string {
 
 function patchOf(raw: Record<string, unknown>): NodePatch {
   const patch: Record<string, unknown> = {}
-  if (raw.title !== undefined && raw.title !== null) patch.title = raw.title
-  if (raw.notes !== undefined && raw.notes !== null) patch.notes = raw.notes
+  if (raw.name !== undefined && raw.name !== null) patch.name = raw.name
+  if (raw.logic !== undefined && raw.logic !== null) patch.logic = raw.logic
   if (raw.knobs !== undefined && raw.knobs !== null) patch.knobs = raw.knobs
   return patch as NodePatch
 }
@@ -317,12 +312,12 @@ function grow(design: Design, raw: unknown, at: Place): Grown {
   const block = readType(raw.type, raw.kind)
   if ('error' in block) return { error: block.error }
   // The blocks a kind starts with are left out: an edit from chat brings its own.
-  const added = addNode(design, { ...block, title: typeof raw.title === 'string' && raw.title.trim() !== '' ? raw.title : undefined, bare: true }, at)
+  const added = addNode(design, { ...block, name: typeof raw.name === 'string' && raw.name.trim() !== '' ? raw.name : undefined, bare: true }, at)
   if (added.error || added.id === undefined) return { error: added.error ?? 'could not add' }
   const id = added.id
   const knobs = knobsError(raw.knobs, id)
   if (knobs) return { error: knobs }
-  const patched = updateNode(added.design, id, patchOf({ notes: raw.notes, knobs: raw.knobs }))
+  const patched = updateNode(added.design, id, patchOf({ logic: raw.logic, knobs: raw.knobs }))
   if (patched.error) return { error: `${id}: ${patched.error}` }
   let current = patched.design
   const ids = [id]
@@ -419,7 +414,7 @@ function revisionWords(revision: number | undefined): string {
 
 export function readReport(design: Design, state: ReadState): string {
   const selected = state.selectedId === null ? undefined : findNode(design, state.selectedId)
-  const where = state.open ? `open on the board; selected block ("this block"): ${selected ? `${selected.id} (${typeName(selected)} "${selected.title}")` : 'none'}` : 'not open on the board'
+  const where = state.open ? `open on the board; selected block ("this block"): ${selected ? `${selected.id} (${typeName(selected)} "${selected.name}")` : 'none'}` : 'not open on the board'
   return [
     `Design "${design.name}" as it is on the board now (${where})${state.locked ? '. A run of it is in progress: editing is locked until it ends' : ''}.${revisionWords(state.revision)}`,
     serializeDesign(design).trimEnd(),

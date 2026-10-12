@@ -6,18 +6,18 @@ import type { Design, DesignNode, Kind, Knobs, NodeType } from './model'
 export type Template = { id: string; title: string; blurb: string; make: () => Design }
 
 // Every design opens with its args block: what the template is run on.
-function args(id: string, notes: string, schema: string): DesignNode {
-  return { id, type: 'args', title: 'args', notes, knobs: { schema } }
+function args(id: string, logic: string, output: string): DesignNode {
+  return { id, type: 'args', name: 'args', logic, knobs: { output } }
 }
 
 /** A block's type, or its type and kind: `agent`, `agent verify`. */
 type Block = NodeType | `${NodeType} ${Kind}`
 
-function node(id: string, block: Block, title: string, notes: string, knobs: Knobs, children?: DesignNode[]): DesignNode {
+function node(id: string, block: Block, name: string, logic: string, knobs: Knobs, children?: DesignNode[]): DesignNode {
   const [type, kind] = block.split(' ')
   const read = readType(type, kind)
   if ('error' in read) throw new Error(`template block ${id}: ${read.error}`)
-  const made: DesignNode = { id, ...read, title, notes }
+  const made: DesignNode = { id, ...read, name, logic }
   if (Object.keys(knobs).length > 0) made.knobs = knobs
   if (children) made.children = children
   return made
@@ -32,7 +32,7 @@ export function review(): Design {
       args('n6', 'What to review: a branch, a pull request or a path. With none, the current diff.', '{ target? }'),
       node('n1', 'agent scout', 'scout diff', 'Cheap and mechanical. Its list of dimensions is the work-list for the pipeline.', {
         prompt: 'Read the diff and split the review into dimensions (bugs, security, performance, tests), each with the files it concerns',
-        schema: '{ dimensions: [{ name, focus, files[] }] }',
+        output: '{ dimensions: [{ name, focus, files[] }] }',
         effort: 'low',
       }),
       node(
@@ -40,15 +40,15 @@ export function review(): Design {
         'pipeline',
         'review',
         'Each dimension flows through both stages on its own; a fast dimension starts verifying while slow ones still review.',
-        { fanout: '×4 dimensions' },
+        { oncePer: '×4 dimensions' },
         [
           node('n3', 'agent', 'review', 'One reviewer per dimension.', {
             prompt: 'Review the diff for this dimension only and report concrete findings with evidence',
-            schema: '{ findings: [{ file, line, severity, claim, evidence }] }',
+            output: '{ findings: [{ file, line, severity, claim, evidence }] }',
           }),
           node('n4', 'agent verify', 'verify findings', 'Each skeptic tries to refute a finding and defaults to refuted when unsure. Keep a finding only if at least 2 of 3 fail to refute it.', {
             prompt: 'Try to refute this finding against the actual code',
-            schema: '{ refuted: boolean, reason }',
+            output: '{ refuted: boolean, reason }',
             votes: 3,
           }),
         ],
@@ -72,11 +72,11 @@ export function research(): Design {
         'parallel sweep',
         'multi-modal sweep',
         'Each searcher is blind to the others, so expect overlap between their results.',
-        { fanout: '4 search angles: by container, by content, by entity, by time' },
+        { oncePer: '4 search angles: by container, by content, by entity, by time' },
         [
           node('n2', 'agent', 'search', 'One agent per search angle.', {
             prompt: 'Search for sources on the question using only this angle',
-            schema: '{ sources: [{ ref, why }] }',
+            output: '{ sources: [{ ref, why }] }',
             effort: 'low',
           }),
         ],
@@ -87,22 +87,22 @@ export function research(): Design {
         'pipeline',
         'deep read',
         'Each source is read and checked independently.',
-        { fanout: 'deduped sources' },
+        { oncePer: 'deduped sources' },
         [
           node('n5', 'agent', 'read source', 'One reader per source.', {
             prompt: 'Read the source in full and extract the claims that bear on the question, with quotes',
-            schema: '{ claims: [{ claim, quote, confidence }] }',
+            output: '{ claims: [{ claim, quote, confidence }] }',
           }),
           node('n6', 'agent verify', 'check claims', 'Drop claims the source does not actually support.', {
             prompt: 'Try to refute each claim against the quoted source',
-            schema: '{ refuted: boolean, reason }',
+            output: '{ refuted: boolean, reason }',
             votes: 2,
           }),
         ],
       ),
       node('n7', 'agent critic', 'completeness critic', 'Asks what is missing: an angle not searched, a claim unverified, a source unread. Gaps become one more round of reading.', {
         prompt: 'Given the question and all claims so far, list what is still missing',
-        schema: '{ gaps: [{ what, how_to_fill }] }',
+        output: '{ gaps: [{ what, how_to_fill }] }',
       }),
       node('n8', 'agent synthesize', 'synthesize', 'Runs once over all verified claims; cite the source of each and state open gaps.', {
         prompt: 'Write the answer from the verified claims',
@@ -120,23 +120,23 @@ export function migrate(): Design {
       args('n5', 'The change to make at every site, and where to look for sites.', '{ change, scope? }'),
       node('n1', 'agent scout', 'discover sites', 'The sites are the work-list for the pipeline. Log anything left out of scope.', {
         prompt: 'Find every site that needs the migration and group them into units that can change independently',
-        schema: '{ sites: [{ id, files[], note }] }',
+        output: '{ sites: [{ id, files[], note }] }',
       }),
       node(
         'n2',
         'pipeline',
         'migrate',
         'Each site is transformed and verified on its own; a failing site drops out without stopping the rest.',
-        { fanout: 'migration sites' },
+        { oncePer: 'migration sites' },
         [
           node('n3', 'agent', 'transform', 'Agents edit files in parallel, so each one gets its own worktree. This is the only stage that needs it.', {
             prompt: 'Apply the migration to this site only',
-            schema: '{ changed: boolean, files[], summary }',
+            output: '{ changed: boolean, files[], summary }',
             isolation: 'worktree',
           }),
           node('n4', 'agent check', 'check', 'Runs the typecheck and the tests for the site against the transformed code and reports pass or fail.', {
             prompt: 'Check the migrated site: typecheck, run its tests, confirm behaviour is unchanged',
-            schema: '{ ok: boolean, failures[] }',
+            output: '{ ok: boolean, failures[] }',
           }),
         ],
       ),
@@ -156,17 +156,17 @@ export function judgePanel(): Design {
         'parallel attempts',
         'attempts',
         'A barrier is right here: the judges compare all attempts side by side.',
-        { fanout: '×3 angles: MVP-first, risk-first, user-first' },
+        { oncePer: '×3 angles: MVP-first, risk-first, user-first' },
         [
           node('n2', 'agent', 'draft approach', 'One attempt per angle, each unaware of the others.', {
             prompt: 'Design a complete approach to the task from this angle',
-            schema: '{ approach, tradeoffs[], risks[] }',
+            output: '{ approach, tradeoffs[], risks[] }',
           }),
         ],
       ),
       node('n3', 'agent judge', 'judge', 'Judges score all attempts against the same criteria and compare them; highest total wins.', {
         prompt: 'Score every attempt on correctness, simplicity and risk',
-        schema: '{ scores: [{ attempt, score, strengths[], weaknesses[] }] }',
+        output: '{ scores: [{ attempt, score, strengths[], weaknesses[] }] }',
         votes: 3,
       }),
       node('n4', 'agent synthesize', 'synthesize from winner', 'Start from the winning attempt and graft in the best ideas from the runners-up.', {
