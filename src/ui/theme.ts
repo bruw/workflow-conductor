@@ -38,13 +38,14 @@ export const ACCENT = {
   branch: 'warning',
   subworkflow: 'merged',
   code: 'ide',
-  args: 'bashBorder',
+  start: 'bashBorder',
   phase: 'text',
 } as const
 
 /**
  * What a phase is drawn on in place of a border: a neutral ground one step off the pane's own, as a theme
- * key so that it follows the person's theme (the darkest tone of a dark theme, the lightest of a light one).
+ * key so that it follows the person's theme (`userMessageBackground`: what a prompt in the transcript stands on,
+ * a little lighter than the dock in a dark theme, a little darker in a light one; not in `ThemeKey`, resolved all the same).
  * A phase in a phase goes back to the pane's own ground, so each is told from the one around it.
  */
-export const PHASE_GROUND = 'inverseText'
+export const PHASE_GROUND = 'userMessageBackground'

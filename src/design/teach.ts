@@ -124,16 +124,16 @@ export const TEACH: Record<NodeType, Teach> = {
       'No file access, no clock and no randomness inside a script.',
     ],
   },
-  args: {
+  start: {
     glyph: '⇢',
-    name: 'args',
-    hint: 'What the workflow is run on: its input, named once, up front',
-    when: 'the workflow takes input; left empty, it takes none',
+    name: 'start',
+    hint: 'Where the workflow starts: its goal, and the args it is run on',
+    when: 'always: every design has one, first',
     card: [
-      'Declares the input the script reads from `args`: say in logic what it is, and its shape in output.',
+      'Says the goal of the workflow, in a sentence: Claude reads it when it writes the script, and reviews the design against it.',
+      'Says the args, the input the script reads from `args`: what it is, or its shape. Left empty, the workflow takes no input.',
       'Every design has one, always its first block: it is not added, moved or deleted.',
-      'Left empty, the workflow takes no input.',
-      'Later blocks draw on it: a fan-out over "the files in args", a prompt that quotes the question.',
+      'Later blocks draw on the args: a fan-out over "the files in args", a prompt that quotes the question.',
       'The values come from the request the workflow is run with.',
       'Spawns no agent and costs no tokens.',
     ],
@@ -157,7 +157,7 @@ export const TEACH: Record<NodeType, Teach> = {
 export type BlockRef = { type: NodeType; kind?: Kind }
 
 /** The free-text fields of a block: its logic and the knobs typed as text. */
-export type TextField = 'logic' | 'prompt' | 'condition' | 'oncePer' | 'stopCondition' | 'output'
+export type TextField = 'logic' | 'goal' | 'args' | 'prompt' | 'condition' | 'oncePer' | 'stopCondition' | 'output'
 
 /** A block a new container of some kind starts with. */
 export type Starter = { type: NodeType; kind?: Kind; name: string; logic?: string; knobs?: Knobs }
@@ -461,6 +461,8 @@ export function defaultName(block: BlockRef): string {
 
 /** What each knob says, in a phrase: the one place the knobs are explained in words (Claude reads it; see chat.ts). */
 export const KNOB_HELP: Record<keyof Knobs, string> = {
+  goal: 'on the start block only: the goal of the workflow, in a sentence',
+  args: 'on the start block only: the input the script reads from `args`, in words or as a shape, "{ target? }: a branch, a pull request or a path"; unset, it takes none',
   prompt: 'intent of the agent prompt, not its final wording',
   output: 'the output, in words or as JSON Schema text',
   model: 'haiku, sonnet or opus; unset inherits the session',
@@ -482,13 +484,14 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
  * Reasoning: a block that does work says what it is told (`prompt`) and what it hands on
  * (`output`); a block that holds blocks says its one rule: what it runs once per (`oncePer`)
  * or when it stops (`stopCondition`). A branch's rule is on its arms (`condition`). A container hands on
- * what its last block makes, so it has no `output` of its own.
+ * what its last block makes, so it has no `output` of its own. The start block says the two
+ * things the whole design is for: its goal and its args; it has no name to set and no logic.
  */
 export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
   agent: ['prompt', 'output', 'model', 'effort', 'isolation', 'agentType'],
   code: ['output'],
   subworkflow: ['prompt', 'output'],
-  args: ['output'],
+  start: ['goal', 'args'],
   pipeline: ['oncePer'],
   parallel: ['oncePer'],
   loop: ['stopCondition'],
@@ -507,9 +510,14 @@ export function offers(block: BlockRef, knob: keyof Knobs): boolean {
   return KNOBS_BY_TYPE[block.type].includes(knob)
 }
 
-/** Whether the detail pane offers a block's logic: a phase is its name and no more, so only logic it already carries is shown. */
+/** Whether the detail pane offers a block's logic: a phase is its name and no more, and the start block its goal and args, so only logic it already carries is shown. */
 export function hasLogic(node: { type: NodeType; logic?: string }): boolean {
-  return node.type !== 'phase' || (node.logic ?? '').trim() !== ''
+  return (node.type !== 'phase' && node.type !== 'start') || (node.logic ?? '').trim() !== ''
+}
+
+/** Whether the detail pane offers a block's name: the start block is named for what it is. */
+export function hasName(node: { type: NodeType }): boolean {
+  return node.type !== 'start'
 }
 
 /**
@@ -532,6 +540,8 @@ export function knobsOf(node: BlockRef & { knobs?: Knobs }, parentType?: NodeTyp
 export const FIELD_LABEL = {
   name: 'name',
   logic: 'logic',
+  goal: 'goal',
+  args: 'args',
   prompt: 'prompt',
   oncePer: 'once per',
   stopCondition: 'stop condition',
@@ -546,6 +556,8 @@ export function fieldWord(field: string): string {
 
 export const FIELD_PLACEHOLDER = {
   logic: 'what this block does and why, for whoever reads the design',
+  goal: 'what this workflow is for, in a sentence',
+  args: 'what it is run on, e.g. { target? }: a branch or a path; empty: no input',
   prompt: 'the intent of its prompt; Claude writes the wording',
   oncePer: 'e.g. changed files, ×4 dimensions',
   stopCondition: 'e.g. 2 dry rounds, 10 findings, budget < 50k',
@@ -568,7 +580,7 @@ export function placeholderOf(block: BlockRef, field: TextField, parent?: BlockR
   return (kind === undefined ? undefined : KIND_TEACH[kind].hints?.[field]) ?? TYPE_HINTS[block.type]?.[field] ?? FIELD_PLACEHOLDER[field]
 }
 
-/** The add list's order: the blocks that do work, then the ones that hold blocks. `args` is not in it: every design has that block, and no second. */
+/** The add list's order: the blocks that do work, then the ones that hold blocks. `start` is not in it: every design has that block, and no second. */
 export const PALETTE: PaletteEntry[] = [
   { type: 'agent', group: 'work' },
   { type: 'code', group: 'work' },

@@ -23,7 +23,6 @@ export type KeyOp =
   | 'detail'
   | 'undo'
   | 'redo'
-  | 'goal'
   | 'review'
   | 'run'
   | 'clearRun'
@@ -56,7 +55,6 @@ export const KEY_OPS: Record<string, KeyOp> = {
   i: 'detail',
   u: 'undo',
   y: 'redo',
-  g: 'goal',
   q: 'review',
   r: 'run',
   c: 'clearRun',
@@ -87,8 +85,8 @@ export function burstKeys(text: string): { keys: string[] } | { paste: true } {
 // ---------------------------------------------------------------------------
 // The legend
 
-/** Where the ring is: on the catcher (`graph`), in a field of the block, in the add list's filter, in the goal's field; `start` is the catcher on the start screen. */
-export type RingPlace = 'graph' | 'fields' | 'list' | 'goal' | 'start'
+/** Where the ring is: on the catcher (`graph`), in a field of the block, in the add list's filter; `start` is the catcher on the start screen. */
+export type RingPlace = 'graph' | 'fields' | 'list' | 'start'
 
 /** What decides which keys work right now. */
 export type LegendState = {
@@ -101,9 +99,9 @@ export type LegendState = {
   opens?: boolean
   /** The add list shows a block's kinds: `b` goes back to the blocks. */
   kinds?: boolean
-  /** The design holds no block of its own (the args block alone): nothing to run or to review. */
+  /** The design holds no block of its own (the start block alone): nothing to run or to review. */
   empty: boolean
-  /** The selected block is the args block: it does not move and is not deleted. */
+  /** The selected block is the start block: it does not move and is not deleted. */
   fixed?: boolean
   /** A help page is open: `x` closes it, it deletes nothing. */
   helping: boolean
@@ -139,9 +137,8 @@ export function legendItems(state: LegendState): Legend {
   const out: LegendItem = { keys: 'Esc', word: 'Keys to the prompt', core: true }
   const save: LegendItem = { keys: 'Enter', word: 'Save, back to the graph', core: true }
   const pages: LegendItem[] = [{ keys: '? h', word: 'Next page', core: true }, { keys: 'x', word: 'Close help', core: true }]
-  // In a field, in the goal's and in the add list's filter the letters are text: no key of the graph acts, and the footer names the one way out.
+  // In a field and in the add list's filter the letters are text: no key of the graph acts, and the footer names the one way out.
   if (state.ring === 'fields') return { footer: [out], detail: [{ keys: 'Tab', word: 'Next field', core: true }, { keys: 'Shift+Tab', word: 'Previous', core: true }, save] }
-  if (state.ring === 'goal') return { footer: [out], detail: [save] }
   if (state.ring === 'list') {
     return {
       footer: [out],
@@ -166,7 +163,7 @@ export function legendItems(state: LegendState): Legend {
   const footer: (LegendItem | false)[] = [
     // With no detail pane to say it, the footer names the one key that brings it back, first: it is the last to go where the room is short.
     state.hidden && { keys: 'i', word: 'Show details', core: true },
-    // Every design has a card to walk to: its args block.
+    // Every design has a card to walk to: its start block.
     { keys: 'WASD', word: 'Navigate', core: true },
     edits && state.selected && !state.fixed && { keys: 'Shift+WASD', word: 'Move', core: true },
     edits && { keys: 'n', word: 'New', core: true },
@@ -176,7 +173,6 @@ export function legendItems(state: LegendState): Legend {
     state.nested && { keys: 'b', word: 'Back', core: true },
     edits && state.undo && { keys: 'u', word: 'Undo', core: false },
     edits && state.redo && { keys: 'y', word: 'Redo', core: false },
-    edits && { keys: 'g', word: 'Goal', core: false },
     edits && !state.empty && { keys: 'q', word: 'Ask Claude', core: false },
     edits && !state.empty && { keys: 'r', word: 'Run', core: true },
     state.results && !state.locked && { keys: 'c', word: 'Clear results', core: false },

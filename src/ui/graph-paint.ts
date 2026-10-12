@@ -154,8 +154,8 @@ export function graphRuns(layout: GraphLayout, run: RunOverlay): Map<string, Car
   for (const block of blocks) {
     const sum = sums.get(block.id) ?? NO_RUN
     if (sum.total === 0) {
-      // A `code` block that spawned nothing has no status, and the args block never spawns.
-      if (block.type !== 'code' && block.type !== 'args') out.set(block.id, { glyph: '·', color: 'inactive', text: over ? NOT_RUN : WAITING, shorter: [], reached: !over })
+      // A `code` block that spawned nothing has no status, and the start block never spawns.
+      if (block.type !== 'code' && block.type !== 'start') out.set(block.id, { glyph: '·', color: 'inactive', text: over ? NOT_RUN : WAITING, shorter: [], reached: !over })
       continue
     }
     const words = runWords(sum)

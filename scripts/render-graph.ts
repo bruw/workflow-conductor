@@ -23,7 +23,7 @@
 
 import { readFileSync } from 'node:fs'
 import { lint } from '../src/design/lints'
-import { flatten, parseDesign, readType, withArgs } from '../src/design/model'
+import { flatten, parseDesign, readType, withGoal, withStart } from '../src/design/model'
 import type { Design, DesignNode, Kind, Knobs, NodeType } from '../src/design/model'
 import type { Place } from '../src/design/ops'
 import { TEMPLATES } from '../src/design/templates'
@@ -44,8 +44,8 @@ function node(id: string, block: NodeType | `${NodeType} ${Kind}`, name: string,
   return made
 }
 
-function design(name: string, description: string, nodes: DesignNode[]): Design {
-  return { version: 1, name, description, nodes }
+function design(name: string, goal: string, nodes: DesignNode[]): Design {
+  return withGoal(withStart({ version: 1, name, nodes }), goal)
 }
 
 const LONG = 'Reads every source in full, however long, and writes down each claim that bears on the question together with the exact quote that supports it, the page or line it was found at, how confident the reader is in it and why, and which other claims it agrees or disagrees with, so that the checker after it has all it needs and never has to open the source again.'
@@ -158,8 +158,8 @@ function load(name: string): Design {
   const template = TEMPLATES.find(one => one.id === name)
   if (template) return template.make()
   const stress = STRESS[name]
-  // As the pane has them: every design opens with its args block.
-  if (stress) return withArgs(stress())
+  // As the pane has them: every design opens with its start block.
+  if (stress) return withStart(stress())
   const parsed = parseDesign(readFileSync(name, 'utf8'))
   if (!parsed.ok) throw new Error(`${name}: ${parsed.error}`)
   return parsed.design

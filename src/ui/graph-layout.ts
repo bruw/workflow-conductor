@@ -16,7 +16,7 @@ import { needsBrief, needsStop } from '../design/lints'
 import { canHoldChildren, flatten, isBlank, plainKind } from '../design/model'
 import type { Design, DesignNode, NodeType, Row } from '../design/model'
 import { defaultName } from '../design/teach'
-import { ARGS_STAY, addPlace, quickKnob } from '../design/ops'
+import { START_STAY, addPlace, quickKnob } from '../design/ops'
 import type { Place, QuickKnob } from '../design/ops'
 import { cappedLines, clip, moreLines } from './text'
 
@@ -61,7 +61,7 @@ export const EMPTY = 'empty'
 /** Under an empty design's `[+]`, dim: the keys that start it (left out while the pane does not hold the keyboard), then what Claude can do. */
 export const EMPTY_KEYS: readonly (readonly [string, string])[] = [
   ['n', 'add a block'],
-  ['g', 'say what this workflow is for'],
+  ['e', 'say what this workflow is for'],
 ]
 export const EMPTY_NOTE: readonly string[] = ['A plain message to Claude in the prompt', 'can draft the design, or change it later.']
 /** The cells and rows the empty state takes: its `[+]`, a blank row, the lines under it. */
@@ -82,7 +82,7 @@ export type SegRole =
   | 'fact'
   /** `haiku low` at the right of a leaf's first row. */
   | 'meta'
-  /** The one line of notes a card at rest shows, and `output: …`: dim. */
+  /** The one line of notes a card at rest shows: dim. */
   | 'note'
   /** The selected card's notes: plain. */
   | 'text'
@@ -194,7 +194,7 @@ export type GraphLayout = {
   scroll: Record<string, number>
   /** Every block of the design, drawn or not, parents first: what a run is summed over. */
   blocks: { id: string; type: NodeType; parentId: string | undefined }[]
-  /** The whole design is shown and has no block of its own (the args block at the most): its `[+]` stands over the lines that say how to start. */
+  /** The whole design is shown and has no block of its own (the start block at the most): its `[+]` stands over the lines that say how to start. */
   blank: boolean
 }
 
@@ -234,8 +234,9 @@ export function childFlow(type: NodeType | undefined): Flow {
   return type === 'parallel' || type === 'branch' ? 'stack' : 'chain'
 }
 
-/** What a card says under its name: the block's notes, or with none what its prompt asks. */
+/** What a card says under its name: the block's notes, or with none what its prompt asks; the start block's goal. */
 function cardText(node: DesignNode): string {
+  if (node.type === 'start') return (node.knobs?.goal ?? '').trim()
   const notes = (node.logic ?? '').trim()
   return notes !== '' ? notes : (node.knobs?.prompt ?? '').trim()
 }
@@ -315,15 +316,13 @@ function edgeKind(parent: NodeType | undefined, from: DesignNode): EdgeKind {
   return MANY.includes(source.type) ? 'barrier' : 'stream'
 }
 
-/** What a block needs and lacks, said in its place before `[not set]`: an agent's brief, a loop's stop. */
+/** What a block needs and lacks, said in its place before `[not set]`: an agent's brief, a loop's stop, the start block's goal. */
 function missingOf(node: DesignNode): string {
   if (needsBrief(node) && cardText(node) === '') return 'Instruction'
   if (needsStop(node) && clean(node.knobs?.stopCondition ?? '') === '') return 'Stop'
+  if (node.type === 'start' && cardText(node) === '') return 'Goal'
   return ''
 }
-
-/** What the args block says while it has neither notes nor a schema: that is a design, not a lack. */
-export const NO_INPUT = 'no input'
 
 /** How many levels deeper the blocks of a container `depth` deep are: a phase only frames, so it adds none (the frame of a view always adds one). */
 function depthStep(type: NodeType, depth: number): number {
@@ -460,17 +459,6 @@ function topRow(node: DesignNode, w: number, arm: Arm | null, problems: number, 
   return { left, right }
 }
 
-/** A row with words at both ends in `inner` cells: the left keeps what it needs, the right is cut (and left out under 9 cells). */
-function splitRow(left: Seg[], right: string, inner: number): CardRow {
-  const want = segsWidth(left)
-  if (right === '') return { left: clipSegs(left, inner), right: [] }
-  if (want === 0) return { left: [], right: [{ text: clip(right, inner), role: 'note' }] }
-  // Both whole when they fit; else the right keeps at most half the row.
-  const room = want + 2 + right.length <= inner ? right.length : Math.max(inner - want - 2, Math.min(right.length, Math.floor(inner / 2) - 1))
-  if (room < 9) return { left: clipSegs(left, inner), right: [] }
-  return { left: clipSegs(left, inner - room - 2), right: [{ text: clip(right, room), role: 'note' }] }
-}
-
 function clipSegs(segs: readonly Seg[], room: number): Seg[] {
   const out: Seg[] = []
   let left = room
@@ -519,22 +507,18 @@ function leafBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
     if (kept.length > 0) rows.push({ left: kept, right: [] })
   }
 
-  // Row 2: what it does, and at the right what it hands on (for the args block, the input's shape).
+  // Row 2: what it does (the start block: the goal; its args are the detail pane's). What it hands on is the detail pane's.
   const lacks = missingOf(node)
-  const out = knobs.output ? `${node.type === 'args' ? 'input' : 'output'}: ${clean(knobs.output)}` : ''
-  const idle = node.type === 'args' && firstLine(node) === '' && out === '' ? NO_INPUT : ''
-  const said: Seg[] = lacks !== '' ? [{ text: `${lacks} `, role: 'note' }, { text: NOT_SET, role: 'error' }] : idle !== '' ? [{ text: idle, role: 'more' }] : firstLine(node) === '' ? [] : [{ text: firstLine(node), role: 'note' }]
+  const said: Seg[] = lacks !== '' ? [{ text: `${lacks} `, role: 'note' }, { text: NOT_SET, role: 'error' }] : firstLine(node) === '' ? [] : [{ text: firstLine(node), role: 'note' }]
   const capped = selected && lacks === '' ? cappedLines(cardText(node), inner, ctx.noteRows) : { lines: [], more: 0 }
-  const whole = segsWidth(said) + (out === '' ? 0 : 2 + out.length) <= inner
-  if (!selected || lacks !== '' || capped.lines.length === 0 || (capped.lines.length === 1 && capped.more === 0 && whole)) {
-    // A card at rest, and a selected one whose notes are one line that fits: one row.
+  if (!selected || lacks !== '' || capped.lines.length === 0 || (capped.lines.length === 1 && capped.more === 0)) {
+    // A card at rest, and a selected one whose notes are one line: one row.
     const text: Seg[] = selected ? said.map(seg => (seg.role === 'note' && lacks === '' ? { ...seg, role: 'text' as const } : seg)) : said
-    if (text.length > 0 || out !== '') rows.push(splitRow(text, out, inner))
+    if (text.length > 0) rows.push({ left: clipSegs(text, inner), right: [] })
   } else {
-    // The selected card: all its notes, wrapped, then what it hands on.
+    // The selected card: all its notes, wrapped.
     for (const line of capped.lines) rows.push({ left: [{ text: line, role: 'text' }], right: [] })
     if (capped.more > 0) rows.push({ left: [{ text: clip(moreLines(capped.more), inner), role: 'more' }], right: [] })
-    if (out !== '') rows.push({ left: [], right: [{ text: clip(out, inner), role: 'note' }] })
   }
 
   const top = topRow(node, w, armOf(node, parent, index), ctx.problems[node.id] ?? 0, () => [], 0)
@@ -760,7 +744,7 @@ export function layoutGraph(design: Design, options: GraphOptions): GraphLayout 
     const endMark = (card: GraphCard, open: boolean): NonNullable<GraphSlot['mark']> => markAt(arrowX - 1, card.y + card.h - 1, open ? SLOT_OPEN : SLOT, card.x + 2, card.w - 4)
 
     if (!host && blank) {
-      // A design with no block of its own: the args block every design has, then its `[+]` in the middle of the rows
+      // A design with no block of its own: the start block every design has, then its `[+]` in the middle of the rows
       // left, over the lines that say how to start (the paint's).
       let y = oy
       for (const kid of kids) {
@@ -795,8 +779,8 @@ export function layoutGraph(design: Design, options: GraphOptions): GraphLayout 
           // Two cells right of the arrow (a barrier's `all` is on its left).
           slots.push({ ...base, x: ox, y, w: lw, h: 1, place: place(i), end: false, bar: 'row', open, mark: markAt(arrowX + 3, y, open ? SLOT_OPEN : SLOT, ox, lw) })
           y += 1
-        } else if (lead === 0 && !(host === undefined && kid.node.type === 'args')) {
-          // Nothing is dropped before the args block.
+        } else if (lead === 0 && !(host === undefined && kid.node.type === 'start')) {
+          // Nothing is dropped before the start block.
           slots.push({ ...base, x: ox, y, w: lw, h: 1, place: place(0), end: false, bar: 'row', open: false, mark: null })
         }
         put(kid, ox, y)
@@ -1174,7 +1158,7 @@ export function moveTarget(design: Design, layout: GraphLayout, id: string | nul
   const here = id === null ? undefined : index.byId.get(id)
   if (!here) return { to: null, reason: id === null ? 'no block is selected' : `no block ${id}` }
   if (here.node.id === layout.viewRootId) return { to: null, reason: `${here.node.id} is the view: b goes up a level, then it can move` }
-  if (here.node.type === 'args') return { to: null, reason: ARGS_STAY }
+  if (here.node.type === 'start') return { to: null, reason: START_STAY }
   const parent = parentOf(here)
   const within = (at: number): Place => (parent ? { parentId: parent.node.id, index: at } : { index: at })
   const siblings = siblingsOf(here)
@@ -1188,8 +1172,8 @@ export function moveTarget(design: Design, layout: GraphLayout, id: string | nul
 
   const down = direction === 'down'
   const neighbour = siblings[here.index + (down ? 1 : -1)]
-  // Nothing goes before the args block.
-  if (neighbour?.type === 'args') return { to: null, reason: `already at the top: ${ARGS_STAY}` }
+  // Nothing goes before the start block.
+  if (neighbour?.type === 'start') return { to: null, reason: `already at the top: ${START_STAY}` }
   if (neighbour) {
     const open = canHoldChildren(neighbour.type) && cardOf(layout, neighbour.id)?.kind === 'open'
     return { to: open ? { parentId: neighbour.id, index: down ? 0 : (neighbour.children ?? []).length } : within(here.index + (down ? 1 : -1)) }

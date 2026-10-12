@@ -107,7 +107,7 @@ const FULL: Record<Pose, Sprite> = {
 export const FULL_W = 26
 export const FULL_H = 28
 
-/** The header's persona: four pixels tall, so two rows beside the name and the goal. */
+/** The header's persona: four pixels tall, so two rows: the name's and the one under it. */
 const SMALL: Record<Pose, Sprite> = {
   idle: [' #####', ' #o#o#', '  ###h', '  # # ##'],
   ready: [' #####  #', ' #o#o# #', '  ###h', '  # #'],

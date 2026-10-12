@@ -49,7 +49,7 @@ terminal session it installs with `/plugin install conductor --marketplace <owne
 | `/conductor design [name]` | Opens the designer on the saved design of that name. With a name no design has yet, or with no name: the start screen (the saved designs to open, above the templates for a new one). |
 | `/conductor draft <name> <description…>` | Claude drafts a design for the description, saves it under that name and shows it on the graph. Refused when a design of that name already holds blocks. |
 | `/conductor run <name> [fill]` | Hands the saved design to Claude and submits the prompt; the pane switches to that design. With `fill`, the request is left in the box, ending `on: `, for you to say what to run it on and send. The answer says what the design implies: `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats) · problems in n3, n5`. |
-| `/conductor list` | The saved designs, each with its block count and description. |
+| `/conductor list` | The saved designs, each with its block count and goal. |
 | `/conductor rename <old> <new>` | Renames a saved design (the file, and this session's undo history of it). Refused when `<new>` exists or starts with `replay-`, and while the design is being run. |
 | `/conductor delete <name>` | Deletes a saved design. Asks once more: it answers with what would go, and `/conductor delete <name> confirm` does it. |
 | `/conductor replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
@@ -78,7 +78,7 @@ Four parts, each in a fixed place: a **header**, the **graph** of the workflow, 
 
 - **Wide** (docked, at least 100 columns inside the pane): the graph on the left, the detail pane on the right (about 30% of the width, 38 to 52 columns), a rule between them. `i` hides the detail pane and the graph takes its width (the footer then names `[i] Show details`); `i` again, or anything that needs the pane (`e`, `n`, `g`, `?`), brings it back.
 - **Stacked** (docked and narrower, or inline above the prompt): the same parts in one column, the detail pane under the graph. Docked it has a fixed share of the rows at rest (about 45%) and grows while a field, the add list, the goal or a help page is open. Inline it is one row (its key hints) until one of those is open, the goal has one row and the legend one. Hidden with `i`, it takes no rows.
-- **Header.** Row 1: `conductor / <design name> / agents ≥ 12`, the last part in a colour of its own: one per agent block (the cheapest arm of a branch), `agents = 3` when every block runs once, `agents ≥ 12` where the design holds a block that may run its agents more than once: a pipeline or a parallel, a loop, a verify or a judge, a subworkflow. Nothing typed into a field is read for a count. At the right, the state: `EDITING · saved`, `EDITING · unsaved template` (started from a template, nothing written yet), `EDITING · not saved yet` (a new empty design), `EDITING · replay, not saved`, `DRAFTING` (Claude was asked for a draft and nothing has arrived), `RUNNING · …` / `FINISHED · …` (a run laid over the design), `START · …` (the start screen). Under it, `Goal: ` and the design's description on up to two rows; `not said yet · g sets it` while it has none. A click on the goal opens its field, as `g` does. Docked, a rule across the pane stands under these rows.
+- **Header.** Row 1: `conductor / <design name> / agents ≥ 12`, the last part in a colour of its own: one per agent block (the cheapest arm of a branch), `agents = 3` when every block runs once, `agents ≥ 12` where the design holds a block that may run its agents more than once: a pipeline or a parallel, a loop, a verify or a judge, a subworkflow. Nothing typed into a field is read for a count. At the right, the state: `EDITING · saved`, `EDITING · unsaved template` (started from a template, nothing written yet), `EDITING · not saved yet` (a new empty design), `EDITING · replay, not saved`, `DRAFTING` (Claude was asked for a draft and nothing has arrived), `RUNNING · …` / `FINISHED · …` (a run laid over the design), `START · …` (the start screen). The goal is not in the header: it is the first line of the start block. Docked, a rule across the pane stands under the header.
 - **Footer:** the legend, centred, for the keys of the graph and of the pane as a whole. Each key is in brackets with its word after it (`[WASD] Navigate  [Shift+WASD] Move  [n] New  [x] Delete …`), in a fixed order. It names only keys that work right now: no `[x] Delete` with nothing selected, no `[o] Open` on a block that holds none, and during a run only what still works. Docked it is one row where the pane is wide enough for its main keys (112 columns), and wraps onto a second in a narrower one; inline it is one row. Where the room is short the less-used entries are left out; the help page "Keys" has them all.
 - **What was last said** (a change and its way back, `Last change: n5 changed: notes · [u] Undo`; a refusal, a question, the run's lock) stands centred in the rule over the footer, on one row; inline, where there is no rule, on the row over the legend.
 - **Key hints.** The keys of the detail pane are named on its own last rows, and no key is named in both places: `[Enter] Edit  [i] Hide` at rest; in a field `[Tab] Next field  [Shift+Tab] Previous  [Enter] Save, back to the graph`, and the footer then names only `[Esc] Keys to the prompt` (so too in the add list and in the goal's field, each with its own keys on those rows); with a help page open, `[? h] Next page  [x] Close help`.
@@ -91,7 +91,7 @@ The workflow runs top to bottom. The graph never pans sideways: it is laid out f
 ┌╌ PARALLEL sweep / multi-modal sweep · once per: 4 search angl… ╌ n1 ╌┐
 ┊ ╭───────────────────────────────────────────────────────────── n2 ─╮ ┊
 ┊ │ AGENT / search                                               low │ ┊
-┊ │ One agent per search angle.  output: { sources: [{ ref, why }] } │ ┊
+┊ │ One agent per search angle.                                      │ ┊
 ┊ ╰──────────────────────────────────────────────────────────────────╯ ┊
 └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ [+] ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘
                                all ⇓  [+]
@@ -103,23 +103,22 @@ The workflow runs top to bottom. The graph never pans sideways: it is laid out f
 ┌╴ PIPELINE / deep read · once per: deduped sources ╴╴╴╴╴╴╴╴╴╴╴╴╴╴ n4 ╴┐
 ╎ ╭───────────────────────────────────────────────────────────── n5 ─╮ ╎
 ╎ │ AGENT / read source                                              │ ╎
-╎ │ One reader per source.  output: { claims: [{ claim, quote, conf… │ ╎
+╎ │ One reader per source.                                           │ ╎
 ╎ ╰──────────────────────────────────────────────────────────────────╯ ╎
 ╎                                  ↓  [+]                              ╎
 ╎ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ n6 ━┓ ╎
 ╎ ┃ AGENT verify / check claims                    1 model  2 effort ┃ ╎
 ╎ ┃ 2 votes: drop claims the source does not actually support.       ┃ ╎
-╎ ┃                             output: { refuted: boolean, reason } ┃ ╎
 ╎ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ╎
 └╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴ [+] ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴┘
- ▼ 2 more below
+ ▼ 1 more below
 ```
 
 (`bun scripts/render-graph.ts research --cols 72 --rows 30 --select n6`: the Research template, `n6` selected.)
 
 **Cards**
 
-- A block that holds none is a card with a light rounded border and its id on the top border. Row 1: `TYPE kind / Name` (`AGENT verify / check claims`; the kind is left out on a plain block, and the name while it is still the type's or the kind's) and, at the right, its model and effort where they are set. Row 2: the first line of its notes (of its prompt when it has no notes) and, at the right, `output: <schema>`, cut with `…`. A card with nothing for row 2 is three rows tall.
+- A block that holds none is a card with a light rounded border and its id on the top border. Row 1: `TYPE kind / Name` (`AGENT verify / check claims`; the kind is left out on a plain block, and the name while it is still the type's or the kind's) and, at the right, its model and effort where they are set. Row 2: the first line of its notes (of its prompt when it has no notes), cut with `…`. Its output is said in the detail pane, not on the graph. A card with nothing for row 2 is three rows tall.
 - What a block needs and lacks is said in its place, in the error colour: `Instruction [not set]` (an agent with neither logic nor a prompt), `Stop [not set]` (a loop with no stop condition), `IF [not set]` (an arm of a branch with no condition).
 - A container is a box in its type's colour around its blocks, and its line says how it runs them: **dashed** for a chain (pipeline, loop: one block after the other), **dotted** for a stack (parallel, branch: side by side). A **phase** has no outline: it stands on a ground of its own, a step off the pane's (a phase in a phase goes back to the pane's). Its top border is its header: `TYPE / Title`, then what fits of its fields as they were typed: `· once per: …`, `· stop: …`. An empty container says `empty` where its blocks would stand; its `[+]` is on its bottom border.
 - **The selected card** has a heavy border in the accent colour (heavy dashes or dots on a chain or a stack, a plain heavy line on a phase). A selected block shows all its logic, wrapped (up to a third of the graph's rows, 8 at most, then `… N more lines`), and its **chips** in place of the model and effort: `1 model  2 effort`. A chip shows its digit and the knob's value, or the knob's name, dim, while the knob is not set. A selected sweep or loop-until-dry carries its chips on its top border where they fit.
@@ -148,18 +147,17 @@ The workflow runs top to bottom. The graph never pans sideways: it is laid out f
 - **The carousel.** An arm is never narrower than 28 columns. A stack whose arms do not all fit shows as many as fit, between two gutters of 3 columns: `◀` and `▶` with the number of arms out of sight on that side under them, and `· 3–5 of 9` in the header. The window always holds the selected arm: `a` / `d` past its edge slide it. A click on `◀` or `▶` slides it by one; if that takes the selected arm out of sight, the selection steps back to the stack itself.
 
 ```
-┌─ PARALLEL / lenses · 3–5 of 9 ────────────────────────────────────────────────────────────── n2 ─┐
-│    ┏━━━━━━━━━━━━━━━━━━━━━ n5 ━┓   ╭───────────────────── n6 ─╮   ╭───────────────────── n7 ─╮    │
-│  ◀ ┃ AGENT / performance      ┃ ∥ │ AGENT / tests     sonnet │ ∥ │ VERIFY / docs            │ ▶  │
-│  2 ┃ 1 model  2 effort        ┃   │ Review the…  output: { … │   │ 3 votes: r…  output: { … │ 4  │
-│    ┃ Review the change for    ┃   │                          │   │                          │    │
-│    ┃ performance only.        ┃   │                          │   │                          │    │
-│    ┃ output: { findings: [{ … ┃   │                          │   │                          │    │
-│    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛   ╰──────────────────────────╯   ╰──────────────────────────╯    │
-└────────────────────────────────────────────── [+] ───────────────────────────────────────────────┘
+┌╌ PARALLEL / lenses · 3–5 of 9 ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ n2 ╌┐
+┊    ┏━━━━━━━━━━━━━━━━━━━━━ n5 ━┓   ╭───────────────────── n6 ─╮   ╭───────────────────── n7 ─╮    ┊
+┊  ◀ ┃ AGENT / performance      ┃ ∥ │ AGENT / tests     sonnet │ ∥ │ AGENT verify / docs      │ ▶  ┊
+┊  2 ┃ 1 model  2 effort        ┃   │ Review the change for t… │   │ 3 votes: review the cha… │ 4  ┊
+┊    ┃ Review the change for    ┃   │                          │   │                          │    ┊
+┊    ┃ performance only.        ┃   │                          │   │                          │    ┊
+┊    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛   ╰──────────────────────────╯   ╰──────────────────────────╯    ┊
+└╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ [+] ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘
 ```
 
-(From `bun scripts/render-graph.ts parallel-9 --cols 100 --rows 15 --select n5 --scroll n2=3`.)
+(From `bun scripts/render-graph.ts parallel-9 --cols 100 --rows 15 --select n5 --scroll n2=2`.)
 
 **Collapsed containers and nested views**
 
@@ -204,7 +202,6 @@ Letters are keys while the pane has the keyboard and no field is open. Case matt
 | `o` `b` | open the selected container as the view / back up one level |
 | `i` | hide or show the detail pane |
 | `u` `y` | undo and redo. Every change to a design can be undone: add, delete, move, retype, a field, a knob, the goal, a drop, and what Claude changed from chat. Fifty steps per design, for the session |
-| `g` | the goal: the design's description opens as a field in the detail pane |
 | `q` | ask Claude: puts `Review the "<name>" workflow design as it is on the board now (read it first, it may have changed by hand): is the structure right for its goal, what is missing, what is wasteful?` in the prompt, not sent; the keys go to the prompt |
 | `r` | run: puts `Implement and run the "<name>" workflow design on: ` in the prompt, for you to say what to run it on and send. The keys go to the prompt. The footer says what the design implies first: `run: agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats) · problems in n3, n5 · finish the prompt, then Enter` |
 | `c` | put away the results of a run that is over (the first edit does the same) |
@@ -234,14 +231,16 @@ For the selected block, from the top:
 | `Condition` | the condition that picks this arm; empty on the last arm for the else | a block directly in a branch |
 | `Once per` | what it runs once per, in your own words: `changed files`, `4 dimensions` | pipeline, parallel |
 | `Stop condition` | when a loop stops, in your own words | loop |
-| `Output` | what the block hands on, in words or as JSON Schema text | agent, code, subworkflow, args |
+| `Output` | what the block hands on, in words or as JSON Schema text | agent, code, subworkflow |
+| `Goal` | what the workflow is for, in a sentence: Claude is handed it as the goal. Required: `[not set]` and a problem while it is empty | start (its only fields, with `Args`: it has no name or logic to set) |
+| `Args` | what the workflow is run on, in words or as a shape: `{ target? }: a branch or a path`. Empty: it takes no input | start |
 
 A block's fields are its type's, the same for every kind of it: a kind adds no field. The design file names them with the same words: `name`, `logic`, and under `knobs` `prompt`, `output`, `oncePer`, `stopCondition`, `condition`. An empty field says what it is for, in the kind's words (a loop of kind pass: `the check passes, at most 3 rounds`), and a new block of a kind has the fields its pattern needs filled in already. A container hands on what its last block makes, so it has no output of its own.
 
 5. Read only, where the file sets them: `Isolation  worktree` and `Agent type  <name>` (the pane has no control for either; Claude sets or drops them). The model and the effort have no picker here: the chips on the card step them. A block whose file sets `isolation: worktree` shows a read-only line, `Isolation  worktree`: the pane has no control for it, Claude sets or drops it when asked.
 6. **Run**, while a run's results show: the block's agents.
 
-The pane's last rows name its keys: `[Enter] Edit  [i] Hide` at rest, and the keys of a field, the add list, the goal or a help page while one of those is open.
+The pane's last rows name its keys: `[Enter] Edit  [i] Hide` at rest, and the keys of a field, the add list or a help page while one of those is open.
 
 - **At rest** a field is text: its whole value, wrapped, `[not set]` where it is empty (in the error colour where a problem names that field). A knob a block carries that its type does not list (set from chat, or in the file) gets its field too.
 - **While editing** (after `e`, Enter, Tab, or a click on a field) every field is an input of one line, and the whole text of the one you are typing in is drawn wrapped under it as you type. Enter saves and returns to the graph. Text typed into a field is never dropped: every other way out saves it too (Tab to the next field, a picker's choice, a click on the graph, Escape, a command, a prompt sent, an edit from chat, a resize, closing the pane), each as an edit `u` undoes.
@@ -252,7 +251,7 @@ The same pane shows, in place of the block:
 
 - **The add list** (`n`, `+`, a click on a `[+]`). Its heading says the place (`New block after n4 Deep read`), then a filter field, then the eight blocks, each on a row with what it does, in two groups (blocks that do work, blocks that hold blocks). A block that has kinds is marked `▸`, and the marked row names them; Enter on it opens its kinds (`· which loop?`), the plain one first, and `b` goes back to the blocks. Typing skips that step: the list then shows every block whose name holds what was typed, at the block's level or the kind's, each named in full (`ver`: `AGENT verify`, `LOOP converged`; `loop`: every kind of loop). Names only are searched. `w` / `s` move the mark and `n` changes the place while the filter is empty; a name that starts with one of those letters is still typed as it is spelled (`sw` is the filter `sw`). Enter adds the marked row, a click the one clicked, `x` cancels. The new block is selected and its name is typed next (Enter keeps the default).
 - **Help** (`?`, `h`), four pages: the selected block's type and kind, what the graph's marks mean, the keys, the mouse and the design file's path.
-- **The goal** (`g`): one field for the design's description. Claude is handed it as the goal of the workflow.
+- **The goal and the args** are fields of the start block: select it (a design opens on it) and press `Enter`.
 - With nothing selected: the goal, and how to go on.
 
 ### The start screen
@@ -264,27 +263,25 @@ A design started from a template or blank is not written to disk until its first
 ### An empty design
 
 ```
-╭───────────────────────────────────────────────────────────────────────── n1 ─╮
-│ ARGS                                                                         │
-│ no input                                                                     │
+╭────────────────────────────────────────────────────────────────────── !  n1 ─╮
+│ START                                                                        │
+│ Goal [not set]                                                               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
                    [+]
 
                    n  add a block
-                   g  say what this workflow is for
+                   e  say what this workflow is for
 
                    A plain message to Claude in the prompt
-                   can draft the design, or change it later.
 ```
 
-(`bun scripts/render-graph.ts empty --cols 80 --rows 14`, blank rows cut.) The args block is there from the start, as in every design. After `/conductor draft` the graph says `Claude is drafting this design: blocks appear here as they are written` until the first blocks land.
+(`bun scripts/render-graph.ts empty --cols 80 --rows 14`, blank rows cut.) The start block is there from the start, as in every design, and the design opens on it. After `/conductor draft` the graph says `Claude is drafting this design: blocks appear here as they are written` until the first blocks land.
 
 ### The mouse and the wheel
 
 - Click a card to select it (press and release on the same cell).
 - Click the selected container again to open it as the view; click a crumb to go back to that view.
-- Click the goal under the header to edit it.
 - Click a `[+]` for a new block there: press and release on the same `[+]` (a press let go elsewhere does nothing). The one under the pointer lights up.
 - Click a chip to step it, `◀` or `▶` to slide the arms.
 - Drag the **selected** card to a slot to move it, into or out of a container too. A bar shows where it will land and the words at the pointer say what a release does (`drop here`, `drop into n4`, `no slot here: release cancels`). Held at the graph's top or bottom edge, the graph scrolls.
@@ -295,7 +292,7 @@ A design started from a template or blank is not written to disk until its first
 
 ### Blocks and kinds
 
-There are nine blocks, the ones a workflow script is written in: `agent`, `code`, `subworkflow`, `args`, and the ones that hold blocks: `pipeline`, `parallel`, `loop`, `branch`, `phase`. A pattern is not a block of its own: it is a **kind** of the block it is made of, picked one step after the block (or typed by name). Each block's kinds answer one question about it, and the first one is the plain block.
+There are nine blocks, the ones a workflow script is written in: `agent`, `code`, `subworkflow`, `start`, and the ones that hold blocks: `pipeline`, `parallel`, `loop`, `branch`, `phase`. A pattern is not a block of its own: it is a **kind** of the block it is made of, picked one step after the block (or typed by name). Each block's kinds answer one question about it, and the first one is the plain block.
 
 | Block | Its kinds answer | Kinds |
 | --- | --- | --- |
@@ -304,7 +301,7 @@ There are nine blocks, the ones a workflow script is written in: `agent`, `code`
 | parallel | what differs between its arms? | arms (different jobs) · each (the same job per item) · sweep (the same search, different angles) · attempts (independent tries at one task) |
 | branch | how is its arm picked? | if-else · guard (one arm: run it or skip it) · route (by a label) |
 
-`pipeline`, `phase`, `code`, `subworkflow` and `args` have no kinds. A `code` block's logic field says what such a block is for (dedup, filter, top-K, merge).
+`pipeline`, `phase`, `code`, `subworkflow` and `start` have no kinds. A `code` block's logic field says what such a block is for (dedup, filter, top-K, merge).
 
 What a kind does:
 
@@ -327,7 +324,7 @@ Conductor checks the design as you build and never blocks anything. A block that
 - a loop whose round ends in nothing the stop test can read
 - an arm of a branch with no condition (only the last arm may go without one, as the else)
 
-**Two blocks that do no work.** `args` is the workflow's input: what it is run on, in its logic, and its shape in its output (shown on the card as `input: …`). Every design has it, always as its first block: a new design opens with it, a design saved without one is given an empty one when it is read, and it is not in the add list. It is not deleted, does not move and becomes no other type, and nothing goes above it. Left empty it reads `no input`, which is no problem: the workflow then takes none. `phase` is a titled group: it holds any block, has no knobs, and its blocks run one after the other where it stands, as if it were not there. It costs no nesting level (a container in a phase is drawn open as deep as it would be without it).
+**Two blocks that do no work.** `start` is where the workflow starts. It carries two fields, edited in the detail pane like any other: the **goal** (what the workflow is for; required, the card's first line, `Goal [not set]` and a problem while it is empty) and the **args** (what it is run on; not shown on the card, and left empty the workflow takes no input). Every design has it, always as its first block: a new design opens with it, a design saved without one is given an empty one when it is read, and it is not in the add list. It is not deleted, does not move and becomes no other type, and nothing goes above it. `phase` is a titled group: it holds any block, has no knobs, and its blocks run one after the other where it stands, as if it were not there. It costs no nesting level (a container in a phase is drawn open as deep as it would be without it).
 
 ## Watching a run
 
@@ -347,13 +344,13 @@ A run started from a design is laid over it:
 ## How a design becomes a workflow
 
 A design is a spec, not a program. `/conductor run <name>` (or `r`, which leaves the request in the prompt for you to finish)
-gives Claude the design's goal (its description), the design
+gives Claude the design's goal (the start block's), the design
 file's path and no more about the workflow: the design says what to build. Claude is told to ask you first about any flow
 in it that is ambiguous or looks unintended, then to write a real Workflow script and run it with the Workflow tool.
 The one thing the hand-off adds is how the run is tied back to the board:
 
 - Label: every `agent()` call is labelled `<nodeId>: <short text>`, with the id of the innermost design node it belongs to.
-- Phase: each top-level node (the args block left out) is one phase titled `<nodeId> <title>`, listed in `meta.phases` in design order. A top-level `phase` block is such a node: its title names that part of the run.
+- Phase: each top-level node (the start block left out) is one phase titled `<nodeId> <title>`, listed in `meta.phases` in design order. A top-level `phase` block is such a node: its title names that part of the run.
 
 Designs are stored in the project, one JSON file each: `.claude/workflow-designs/<name>.json`.
 The designer saves on every change.

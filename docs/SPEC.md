@@ -45,7 +45,6 @@ Rule: `src/` is pure TypeScript with no `$`, no engine imports beyond types. Hoo
 type Design = {
   version: 1
   name: string            // kebab-case, becomes meta.name
-  description: string
   nodes: DesignNode[]     // top-level order = execution order
   nextId?: number         // next n<k> to hand out, so ids are never reused
 }
@@ -56,6 +55,8 @@ type DesignNode = {
   name: string            // human label, e.g. "review"
   logic?: string          // free text for Claude: what the block does, anything blocks can't express
   knobs?: {
+    goal?: string         // the start block only: what the workflow is for
+    args?: string         // the start block only: what it is run on, in words or as a shape
     prompt?: string       // intent of the agent prompt, not final wording
     output?: string       // what it hands on, in words or as JSON Schema text
     model?: string
@@ -71,8 +72,8 @@ type DesignNode = {
 type NodeType =
   // what a workflow script is written in
   | 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code'
-  // frame (see "Blocks: args, phase, borders by flow")
-  | 'args' | 'phase'
+  // frame (see "The start block")
+  | 'start' | 'phase'
 type Kind =               // by type; the first of each row is the plain block and is not written
   | 'task' | 'scout' | 'check' | 'verify' | 'judge' | 'critic' | 'synthesize' | 'classify'   // agent
   | 'custom' | 'count' | 'pass' | 'dry' | 'converged' | 'target' | 'budget'                  // loop
@@ -585,10 +586,10 @@ The designer is a workspace of four fixed parts: a graph of the workflow (top to
 **The graph's layout** (`graph-layout.ts`)
 - **Width.** `graphColumns(region)`: between `GRAPH_MIN_W` 12 and `GRAPH_MAX_W` 132; in a wider region the Client centres it (`pad`). Nothing reaches past the columns it was laid out for; there is no `panX`.
 - **Chains and stacks** (`childFlow`): the top level, `pipeline`, `loop`, `loop-until-dry` list their blocks one under the other, each as wide as the list (a container's inside is 4 columns narrower), one arrow row between two. `parallel`, `sweep`, `branch` stand their arms side by side at equal widths (`stackShare`; the last arm in view takes the cells the division leaves), every arm as tall as the tallest, the gap between two holding `armWord` on the arms' second row: `OR` (branch; gap 4) or `∥` (gap 3), in `layout.rules`.
-- **Leaf** (`leafBox`): top border with the id at the right; row 1 `nameSegs` (`TYPE / Title`, the title left out while it equals the type, `×N` after it for a leaf that fans out, `×n` with no count) and at the right the model and effort that are set (each cut to `KNOB_MAX` 14; left to the detail pane where they do not fit beside the name); row 2 the first line of `cardText` (notes, else the prompt) and at the right `votes N · output: <schema>` (`splitRow`: the right side keeps at most half the row, and is left out under 9 cells). No row 2: three rows tall.
+- **Leaf** (`leafBox`): top border with the id at the right; row 1 `nameSegs` (`TYPE / Title`, the title left out while it equals the type, `×N` after it for a leaf that fans out, `×n` with no count) and at the right the model and effort that are set (each cut to `KNOB_MAX` 14; left to the detail pane where they do not fit beside the name); row 2 the first line of `cardText` (notes, else the prompt) cut to the row. `output` is not on the graph: the detail pane says it. No row 2: three rows tall.
 - **Missing but needed** (`missingOf`, `armOf`): `Instruction [not set]` (an agent with no `cardText`), `Stop [not set]` (a `loop` with no `until`; a row inside its box), `IF [not set]`; `NOT_SET` in role `error`.
 - **Open container** (`openBox`, `headSegs`): square border in the type's `ACCENT`; the header on the top border is `TYPE / Title ×4`, then what fits of `· each: <eachOf>`, `· until: …`, `· count unknown` (a fan-out with no number, in place of `×n`), and last `· 2–4 of 9` (a carousel's window: it is kept before any knob is). Right: the problem mark and the id (`topRow`). Empty: one row, `empty` (`EMPTY`), and its `[+]` on the bottom border.
-- **Selected:** heavy border in `claude`. A selected leaf shows all of `cardText` wrapped, up to `noteRows(rows)` rows (a third of the graph's rows, at most `NOTE_ROWS_MAX` 8, then `… N more lines`), then `output:` on a row of its own; and its **chips** (`chipsOf`, `quickKnobs`) in place of the model and effort: digit, then the knob's value (`2 low`, `3 votes 2`) or its name dim while unset (`1 model`). Chips that do not fit beside the whole title take the next row. A selected container with quick knobs (`sweep`, `loop-until-dry`) carries them on its top border where name and chips both fit. No chips while a run locks. Each chip's cells are in `layout.chips` for a press.
+- **Selected:** heavy border in `claude`. A selected leaf shows all of `cardText` wrapped, up to `noteRows(rows)` rows (a third of the graph's rows, at most `NOTE_ROWS_MAX` 8, then `… N more lines`); and its **chips** (`chipsOf`, `quickKnobs`) in place of the model and effort: digit, then the knob's value (`2 low`, `3 votes 2`) or its name dim while unset (`1 model`). Chips that do not fit beside the whole title take the next row. A selected container with quick knobs (`sweep`, `loop-until-dry`) carries them on its top border where name and chips both fit. No chips while a run locks. Each chip's cells are in `layout.chips` for a press.
 - **Problem mark:** a bare ` ! ` (`BADGE`, role `badge`: inverse, bold, `error`), no count: on the top border directly left of the id (`topRow`), on a leaf and on a container alike; left out where the border cannot hold both. An open container is marked for its own problems; a collapsed one also when a block inside it has one (`problemsIn`). The pane shows no problem count anywhere.
 - **Arms of a branch** (`armOf`, `armSegs`): the top border's left says `IF <when>` (the `when` knob, cut), `ELSE` for the last arm with none (when there is more than one arm), `IF [not set]` otherwise. On a container arm the header keeps its least cells and the condition takes what is over.
 - **Carousel** (`stackShare`, `GUTTER_W` 3): an arm is never narrower than `ARM_MIN_W` 28. Where all arms at that width do not fit, `shown` of them are drawn between two gutters (both sides keep their 3 columns; `◀` / `▶` and under it the count out of sight, in `claude`, only on a side that has more). `layout.carousels[id] = { first, shown, count }`; `first` is what was asked (`designUi.carousels`, by container id), moved just far enough to hold the selected arm, clamped; `layout.scroll` is what it settled on and `shown()` in session.ts writes it back to state.
@@ -738,13 +739,13 @@ Asked for after a review of block coverage. Built; checked with `claude plugin v
   - It is not in `PALETTE`, so neither the add list nor the type list offers it; its own detail pane has no `Type` row; `n` on it adds after it only (`addSides`); the legend names neither `Shift+WASD` nor `x` while it is selected (`fixed`), and `WASD` is always named.
   - A design with nothing but it is blank (`isBlank`): that is what "empty" means everywhere (the draft command, a run refused, `not saved yet`, the legend's `q` and `r`, the detail pane's "An empty design"), and block counts leave it out (`blockCount`). The graph of a blank design is the args card, then the `[+]` and the lines on how to start in the middle of the rows left (`GraphLayout.blank`); nothing is selected when it opens, so the detail pane says how to start.
 - **Borders say the flow** (`FRAMES` in graph-paint.ts, by `shapeOf`): a leaf `╭─╮ │`, a chain dashed `┌╴┐ ╎`, a stack dotted `┌╌┐ ┊`, each with a heavy twin for the selection (`┏━┓`, `┏╸┓ ╏`, `┏╍┓ ┋`). `SQUARE` is gone. A leaf in hand keeps `LIFTED` (`╭╴╮ ╎`); a container in hand keeps its own line, dim.
-- **A phase has no outline.** Its ring is blank cells and the whole of its box stands on `PHASE_GROUND` (`inverseText`: the darkest tone of a dark theme, the lightest of a light one). The paint keeps a second grid (`grounds`) beside the looks; `shade` clips as `put` does; a phase in a phase turns the ground back to the pane's (`shaded`). Selected, it has the plain heavy line. `Span.ground` is the Client's `backgroundColor`. Not drawn in the `plain` fallback, and the rows of `▲ / ▼ N more` and the drag chip are put back on the pane's ground.
+- **A phase has no outline.** Its ring is blank cells and the whole of its box stands on `PHASE_GROUND` (`userMessageBackground`: one step off the dock, `rgb(55,55,55)` on `rgb(38,38,38)` in the dark theme, `rgb(240,240,240)` on `rgb(245,245,245)` in the light one). The paint keeps a second grid (`grounds`) beside the looks; `shade` clips as `put` does; a phase in a phase turns the ground back to the pane's (`shaded`). Selected, it has the plain heavy line. `Span.ground` is the Client's `backgroundColor`. Not drawn in the `plain` fallback, and the rows of `▲ / ▼ N more` and the drag chip are put back on the pane's ground.
 - **Accents:** `args` `bashBorder`, `phase` `text`. Glyphs for the plain list: `⇢`, `▭`.
 - **Hand-off:** `args` gets no entry in `meta.phases` and is not the label's example; two lines say what `args` and `phase` mean to the script. `HANDOFF_MAX_LINES` is 65 (30 fixed lines and at most 35 of outline; 60 was already passed by 2).
 - **The tool for Claude:** two more type lines took the description past 4096 characters, so what each knob means is now the description of `knobs` in the schema (on the ops; `nodes` points to it) and the description names the knobs only: 4,050 characters.
 - Refusals name a type with its article (`aType`: `an agent block cannot hold children`).
 
-**Not exercised:** a model turn (Claude filling in `args` or adding a `phase` through the tool, a hand-off of a design that has them); the light theme and the ANSI themes (in a 16-colour terminal the dock and `inverseText` are both black: a phase is then told by its header and its missing outline only); the inline placement, which has no dock background.
+**Not exercised:** a model turn (Claude filling in `args` or adding a `phase` through the tool, a hand-off of a design that has them); the light theme and the ANSI themes (in the ANSI themes and in a 16-colour terminal the dock and `userMessageBackground` are the same colour: a phase is then told by its header and its missing outline only); the inline placement, which has no dock background.
 
 ## Persona: splash and header
 
@@ -777,7 +778,7 @@ Asked for: "a block subtype system that encapsulates key patterns as presets", p
 | agent | name, logic, prompt, output, agent type | model, effort |
 | code | name, logic, output | |
 | subworkflow | name, logic, prompt, output | |
-| args | name, logic, output | |
+| start | goal, args | |
 | pipeline, parallel | name, logic, once per | |
 | loop | name, logic, stop condition | |
 | branch | name, logic; each arm: condition | |
@@ -835,3 +836,20 @@ Asked for after "Votes in the logic": the counts and meanings that were still re
 - **Hand-off** (`buildHandoff`): the goal, the design file ("it defines the workflow"), the script to update where one exists, not to call the offer tool, to ask the user first about every flow that is ambiguous or looks unintended, and the three rules that tie a run to the board (label, phase, `meta.name`; with a script, `match`). Gone from it: what a node's fields are, the knobs paragraph, the per-kind `script` lines, the outline, the report after launching, `HANDOFF_MAX_LINES`. `outline` and `KindTeach.script` stay for the tool for Claude (chat.ts).
 - **The tool for Claude** no longer says where votes go.
 
+## The start block
+
+Asked for: the `args` block becomes `start`, which carries the goal and the args as plain fields in the detail pane; the goal leaves the header and its key. Checked with `claude plugin validate .`, `bunx tsc -p .` and a real paint. A clean break; where this section and an earlier one disagree, this one holds.
+
+- **The type** `args` is `start` everywhere (`NODE_TYPES`, `TEACH`, `ACCENT`, `types/index.d.ts`); the parser refuses `args` as an unknown type. `startOf`, `withStart`, `START_PLACE`, `START_KEPT`, `START_STAY` take the place of the `args` names. It stays what the args block was: one per design, first, not added, moved, deleted or retyped.
+- **Its fields** are two knobs only it has (`START_KNOBS`; `startOnly` refuses them on any other block, in the parser and in `updateNode`): `goal` and `args`, both text. It offers no name and no logic (`hasName`, `hasLogic`): `e`, Enter and Tab open it on the goal (`firstField`), and its heading is `START` alone.
+- **`Design.description` is gone**: the goal is `startOf(design).knobs.goal` (`goalOf`, `withGoal`). The saved designs and the templates were converted by hand: the description became the goal, the args block's output and logic became `args` (`{ target? }: what to review…`).
+- **The card:** `START`, then the goal (wrapped in full when selected); `Goal [not set]` in the error colour while it is empty (`missingOf`). The args are not on the card. `NO_INPUT` and the `input: …` at the right are gone.
+- **Lint 0, `start-no-goal`:** the start block with an empty goal. It marks the card (`!`), the field (`[not set]`) and the preflight line like any other.
+- **The header** is the name's row and nothing under it but the rest of the persona (`HEAD_ROWS` 2): no `Goal:` rows, no `hooks/goal.tsx`, no click on them.
+- **The key `g` is gone** (`KeyOp` `goal`, the legend's `Goal`, `RingPlace` `goal`, the help table's row), and with it `designUi.describing`, `describeDesign`, `drafts.goal`, `goalField`, `saveGoal`, `goalAsked`, the `design-description` Input.
+- **A design opens on its start block** (`firstPick`), a blank one too, so the first Enter is the goal; the empty graph's hint is `e  say what this workflow is for`. With nothing selected the detail pane still says the goal.
+- **The tool for Claude** has no `description` input: the goal and the args are the start block's knobs, set by an `update` of it or by a `write` that puts it first (a `write` without it keeps the one the design has). The briefs (`draftBrief`, `offerBrief`, `visualizeBrief`) say so, and `/conductor draft <name> <description>` writes the description as the goal.
+- **Hand-off:** `Goal of the workflow (the start block's goal): …`; the start block gets no phase and is not the label's example.
+- **Lists** (`/conductor list`, the start screen): `SavedDesign.goal`.
+
+**Not exercised:** a model turn (Claude setting the goal through the tool, a draft, a hand-off); the stacked and inline layouts.
