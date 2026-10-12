@@ -323,8 +323,8 @@ let ringTo = ''
  * When that does change the text is replaced, but the cursor stays where it was, so the next letter lands in the
  * middle. And a letter typed into an Input in the very frame it is drawn under another address is dropped. So a
  * field is drawn with the one text it opened with for as long as it is typed in, whatever is typed (the pane is drawn
- * again on every keystroke, to show the whole text under the field); letters that reached the mod by another way are
- * kept beside it, and the field is drawn anew, with all of it, only once the typing has paused (`tidySoon`).
+ * again on every keystroke, to give the field the rows its text now takes); letters that reached the mod by another
+ * way are kept beside it, and the field is drawn anew, with all of it, only once the typing has paused (`tidySoon`).
  */
 let pins: Record<string, { value: string; head: string; tail: string }> = {}
 /** The text an open field is drawn with: the one it opened with. */
@@ -1783,7 +1783,11 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
 
     // What the screen is made of, the same for the start screen and the designer: rows of the detail pane, the
     // legend, the footer, and the frame that holds them.
-    type Item = { rows: number; el: RenderChildren }
+    /**
+     * A part of the detail pane. `wide`: it indents itself, where the others are indented by the pane (an open field,
+     * whose Input needs the pane's full width: S16). `keep`: its last row stays in view when the rows do not hold all.
+     */
+    type Item = { rows: number; el: RenderChildren; wide?: true; keep?: true }
     type Tint = typeof FADED | 'error' | 'warning' | 'suggestion'
     const blank: Item = { rows: 1, el: <Text> </Text> }
     // The persona's pixels: half-blocks in its own colours, a row of spans to a row of cells.
@@ -1874,26 +1878,37 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // The keys that act on the detail pane, for its last rows: two rows docked, one inline or where the pane is short.
     const hintsOf = (items: readonly LegendItem[], width: number, rows: number): LegendItem[][] => legendRows(items, width, dock && rows >= 8 ? HINT_ROWS : 1)
     // The detail pane: its content, and on its last rows the keys that act on it.
-    const detailBox = (width: number, rows: number, hints: readonly (readonly LegendItem[])[], items: readonly Item[]) => (
-      <Box key="design-detail" flexDirection="column" width={width} height={rows} flexShrink={0}>
-        {rows - hints.length > 0 && (
-          <Box key="design-content" flexDirection="column" height={rows - hints.length} overflow="hidden">
-            {/* Never squeezed: what does not fit is cut at the bottom, whole rows. */}
-            <Box flexDirection="column" flexShrink={0}>
-              {items.map(item => item.el)}
+    // It is as wide as the pane, and its rows are indented by `left` cells: beside the graph those are the graph's, which
+    // is laid over them; under it there are none. So a field typed in has the pane's full width, the one width the
+    // engine wraps it at (S16). Taller than its rows, it is moved up until the `keep` item (the field typed in) ends in view.
+    const detailBox = (rows: number, hints: readonly (readonly LegendItem[])[], items: readonly Item[], left: number) => {
+      const room = rows - hints.length
+      const kept = items.findIndex(item => item.keep)
+      const up = kept < 0 ? 0 : Math.max(0, rowsOf(items.slice(0, kept + 1)) - room)
+      return (
+        <Box key="design-detail" flexDirection="column" height={rows} flexShrink={0}>
+          {room > 0 && (
+            <Box key="design-content" flexDirection="column" height={room} overflow="hidden">
+              {/* Never squeezed: what does not fit is cut at the bottom, whole rows. */}
+              <Box flexDirection="column" flexShrink={0} marginTop={-up}>
+                {items.map(item => (item.wide ? item.el : <Box flexDirection="column" flexShrink={0} paddingLeft={left} paddingRight={1}>{item.el}</Box>))}
+              </Box>
             </Box>
+          )}
+          <Box key="design-hints" flexDirection="column" height={hints.length} flexShrink={0} paddingLeft={left} paddingRight={1}>
+            {hints.map(legendRow)}
           </Box>
-        )}
-        <Box key="design-hints" flexDirection="column" height={hints.length} flexShrink={0}>
-          {hints.map(legendRow)}
         </Box>
-      </Box>
-    )
-    // One column of margin at each side: `columns` is the body's less the two. `detail` is null while the detail pane is hidden.
+      )
+    }
+    // One column of margin at each side: `columns` is the body's less the two. The margin is each part's own, not the
+    // frame's, which would take the pane's full width from the detail pane. Beside the graph the detail pane has the
+    // main rows to itself and the graph is laid over its left. `detail` is null while the detail pane is hidden.
+    const margin = (children: RenderChildren) => <Box flexDirection="column" paddingLeft={1} paddingRight={1}>{children}</Box>
     const frame = (catching: boolean, head: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, beside: boolean, mainRows: number, said: Said, legend: RenderChildren) => (
-      <Box flexDirection="column" paddingLeft={1} paddingRight={1}>
+      <Box flexDirection="column" position="relative">
         {catching && catcher()}
-        <Box flexDirection="row">
+        <Box flexDirection="row" paddingLeft={1} paddingRight={1}>
           <Box key="design-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
             {spanRows(smallPersona(pose))}
           </Box>
@@ -1901,24 +1916,27 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
             {head}
           </Box>
         </Box>
-        {dock && rule()}
+        {dock && margin(rule())}
         {beside ? (
-          <Box flexDirection="row" height={mainRows}>
-            {graph}
-            <Box width={3} flexShrink={0}>
-              <Text color={RULE}>{Array.from({ length: mainRows }, () => ' │ ').join('\n')}</Text>
-            </Box>
+          <Box flexDirection="column" height={mainRows}>
             {detail}
           </Box>
         ) : (
           <Box flexDirection="column">
-            {graph}
-            {dock && detail !== null && rule()}
+            {margin(graph)}
+            {dock && detail !== null && margin(rule())}
             {detail}
           </Box>
         )}
-        {saidRow(said)}
-        {legend}
+        {margin([saidRow(said), legend])}
+        {beside && (
+          <Box position="absolute" top={HEAD_ROWS + (dock ? 1 : 0)} left={1} flexDirection="row" height={mainRows}>
+            {graph}
+            <Box width={3} flexShrink={0}>
+              <Text color={RULE}>{Array.from({ length: mainRows }, () => ' │ ').join('\n')}</Text>
+            </Box>
+          </Box>
+        )}
       </Box>
     )
     // A help page as rows: its title and which page it is, then paragraphs, or a table whose first column is the key.
@@ -2059,7 +2077,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         // The agents the marked row's design starts, where it has blocks to count.
         headOf(shown !== null && !isBlank(shown) ? factsLine(shown) : null),
         shown ? preview : <Box key="design-graph" width={graphW} height={graphRows} flexShrink={0} />,
-        detailBox(detailW, detailRows, hints, content),
+        detailBox(detailRows, hints, content, beside ? 1 + graphW + 3 : 0),
         beside,
         mainRows,
         message === null ? null : { text: message, color: focused ? 'warning' : FADED },
@@ -2079,6 +2097,10 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const beside = wide && !hidden
     const detailW = beside ? detailWidth(columns) : columns
     const graphW = beside ? columns - detailW - 3 : columns
+    // The cells before the detail pane's first: beside the graph its margin, the graph and the rule; under it none.
+    const detailLeft = beside ? 1 + graphW + 3 : 0
+    // The width the engine wraps a field at: the cells from there to the pane's edge, less the four it keeps for its Enter mark (S16).
+    const fieldW = Math.max(1, columns + 2 - detailLeft - 4)
     // The view follows the selection where something other than the person's keys moved it out of sight.
     const viewRoot = viewRootOf(design, ui, graphW)
 
@@ -2196,7 +2218,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       if (savedField.element === element) queueKeys($, [ENTER])
       settleRing($)
     }
-    // A keystroke in a field: kept as a draft of that block's field, and the pane is drawn again, to show all of the text under the field.
+    // A keystroke in a field: kept as a draft of that block's field, and the pane is drawn again, to give the field the rows its text now takes.
     const typeIn = (key: string, element: string, value: string): void => {
       if (!node) return
       // The ring is known to be elsewhere, yet a letter reached this field: it was left here by a change of the stops, or
@@ -2243,14 +2265,10 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
 
     // The detail pane's parts. A thin rule stands under its heading; a blank row between two fields and two sections, while there are rows for it.
     const thin: Item = { rows: 1, el: <Text color={RULE}>{'─'.repeat(detailW)}</Text> }
-    /** A wrapped text cut to `most` rows, `…` on the last; `tail` keeps its end (where the typing is) and marks the start. */
-    const capped = (rows: readonly string[], most: number, tail: boolean = false): string[] => {
-      if (rows.length <= most) return [...rows]
-      if (tail) return rows.slice(rows.length - most).map((row, index) => (index === 0 ? `…${row.slice(1)}` : row))
-      return rows.slice(0, most).map((row, index) => (index === most - 1 ? `${clip(row, detailW - 1)}…` : row))
-    }
+    /** A wrapped text cut to `most` rows, `…` on the last. */
+    const capped = (rows: readonly string[], most: number): string[] => (rows.length <= most ? [...rows] : rows.slice(0, most).map((row, index) => (index === most - 1 ? `${clip(row, detailW - 1)}…` : row)))
     const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
-    // The ring's field, or the one it is on its way to: all of its text is drawn under it as it is typed.
+    // The ring's field, or the one it is on its way to: the one drawn at full width, wrapped.
     const ringAt = ringTo !== '' ? ringTo : ringOn
     const activeBase = fielding && isField(ringAt) ? baseOf(ringAt ?? '') : null
     // The door stands at the right end of the heading's row: two cells, empty, seen only for the moment the ring is on it.
@@ -2307,37 +2325,45 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         ),
       }
     }
-    // A field open for typing: one line (the engine's field wraps only at the pane's full width), and, where the text is
-    // longer than the line, all of it wrapped under the field: as typed so far under the ring's own, dim under the others.
-    const openField = (one: (typeof texts)[number], most: number, others: boolean): Item => {
+    // A field open for typing, under its label. The ring's own is drawn at the pane's full width, where the engine wraps
+    // it (S16), behind a label of spaces as wide as the indent: the engine ends a label with `: `, which the rule
+    // beside the graph covers. With no indent it has no label. The others stand in the column, one line each, cut.
+    const openField = (one: (typeof texts)[number]): Item => {
       const element = fieldKey(one.key, node?.id ?? '')
       const lit = activeBase === one.key
-      const whole = oneLine(one.value)
       const shown = pinned(element, one.value)
-      // Under it too while the field itself does not show all of it: letters typed on the ring's way stand beside it until the typing pauses.
-      const under = (lit || others) && (whole.length > detailW - 4 || (pins[element]?.head ?? '') !== '') ? capped(wrapText(one.value, detailW), most, lit) : []
+      // Letters typed on the ring's way are not in the field until the typing pauses: they stand under it meanwhile.
+      const ahead = lit ? (pins[element]?.head ?? '') : ''
+      const field = (label: string | undefined, placeholder: string) =>
+        Input && (
+          <Input
+            key={element}
+            label={label}
+            placeholder={placeholder}
+            value={shown}
+            submitLabel=""
+            onInput={(value, input) => typeIn(one.key, input.element, value)}
+            onSubmit={value => save(one.key, value)}
+          />
+        )
       return {
-        rows: 2 + under.length,
+        rows: 1 + (lit ? Math.max(1, wrapText(one.value, fieldW).length) + (ahead === '' ? 0 : 1) : 1),
+        wide: true,
+        keep: lit ? true : undefined,
         el: (
           <Box flexDirection="column" flexShrink={0}>
-            {fieldLabel(one)}
-            {/* A row of its own, under its label: the whole width is the text's. */}
-            <Box flexDirection="column" flexShrink={0} height={1}>
-              {Input && (
-                <Input
-                  key={element}
-                  placeholder={one.placeholder}
-                  value={shown}
-                  submitLabel=""
-                  onInput={(value, input) => typeIn(one.key, input.element, value)}
-                  onSubmit={value => save(one.key, value)}
-                />
-              )}
-            </Box>
-            {under.map(row => (
-              // To the full width: a row that got shorter leaves no cells of the one before it.
-              <Text color={lit ? undefined : FADED} wrap="truncate-end">{row.padEnd(detailW)}</Text>
-            ))}
+            <Box paddingLeft={detailLeft} paddingRight={1}>{fieldLabel(one)}</Box>
+            {lit ? (
+              // A placeholder is one line, never wrapped: longer than the column it would push the field's start left, under the graph.
+              field(detailLeft >= 2 ? ' '.repeat(detailLeft - 2) : undefined, clip(one.placeholder, fieldW))
+            ) : (
+              <Box flexDirection="column" height={1} paddingLeft={detailLeft} paddingRight={1}>{field(undefined, one.placeholder)}</Box>
+            )}
+            {ahead === '' ? null : (
+              <Box paddingLeft={detailLeft} paddingRight={1}>
+                <Text color={FADED} wrap="truncate-end">{clip(`+ ${ahead}`, detailW)}</Text>
+              </Box>
+            )}
           </Box>
         ),
       }
@@ -2389,9 +2415,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       ]
     }
     // The selected block, as far as the rows go. With all of them: a blank row between two sections, every text whole.
-    // Short of rows, with the fields open, the whole texts under the ones the ring is not in go first (each is in its
-    // field, cut: they are said twice); then the blank rows; then what the type means (the help page says it); then
-    // the long texts are cut, to fewer rows each time.
+    // Short of rows, the blank rows go first; then what the type means (the help page says it); then the long texts
+    // are cut, to fewer rows each time. An open field is never cut: the ring's own has all its rows, the others one.
     const CUTS = [8, 5, 3, 2, 1] as const
     const inspector = (level: number): Item[] => {
       if (!node || !heading) return []
@@ -2405,7 +2430,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         const parts = problemParts(one.message)
         sections.push([label('Error', 'error'), ...lines(capped(wrapText(parts.error, detailW), most)), ...(parts.fix === '' ? [] : [label('Fix'), ...lines(capped(wrapText(parts.fix, detailW), most))])])
       }
-      if (editable) for (const one of texts) sections.push([fielding ? openField(one, most, level < 1) : restField(one, most)])
+      if (editable) for (const one of texts) sections.push([fielding ? openField(one) : restField(one, most)])
       if (setItems.length > 0) sections.push(setItems)
       const ran = agentItems(Number.isFinite(most) ? Math.max(2, most) : AGENT_ROWS_MAX)
       if (ran.length > 0) sections.push(ran)
@@ -2553,6 +2578,6 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         )),
     )
 
-    return frame(catching, headOf(factsLine(design)), graph, hidden ? null : detailBox(detailW, detailRows, hints, content), beside, mainRows, message, legend)
+    return frame(catching, headOf(factsLine(design)), graph, hidden ? null : detailBox(detailRows, hints, content, detailLeft), beside, mainRows, message, legend)
   })
 }

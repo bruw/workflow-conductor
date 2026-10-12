@@ -466,7 +466,15 @@ Probe: `/probe-wrap` in `spikes/probe/hooks/register.tsx`, a 135-cell docked pan
   instead (a parent with `paddingLeft`), one line; moving it between the two parents under the same `key`, on `ui.focus`,
   keeps its text, its cursor and the ring.
 - In a row a `Text` before an Input is squeezed to nothing by a long value: it needs a box with a `width` and `flexShrink={0}`.
-- Not tried: a `Client` (the graph) in the `absolute` box, and presses on it over the Input's label.
+- A `Client` (the graph) in the `absolute` box is drawn and takes its presses, also on the rows where it covers the
+  focused Input's label; a press on an Input in the column moves the ring to it.
+- The wrap width is the cells from the text's first to the pane's edge less 4 (the Enter mark's). Seen at 40 and at 98 cells.
+- A placeholder never wraps. Longer than the room it squeezes the label, and the field's first cell (and the cursor)
+  moves left, under whatever covers the label. It is cut to the room by the mod.
+- A column with `marginTop` below zero inside a box with `overflow="hidden"` is drawn moved up, its first rows cut:
+  how a field taller than the pane keeps its last row, and the cursor, in view.
+- With no label the text starts at the box's first cell: a full-width Input cannot be indented by one cell (the least
+  a label takes is its `: `).
 
 ## Other findings
 
@@ -477,8 +485,8 @@ Probe: `/probe-wrap` in `spikes/probe/hooks/register.tsx`, a 135-cell docked pan
 - `scripts/dev-session.sh` takes `CONDUCTOR_EXTRA_PLUGIN_DIRS` (colon-separated, relative to the repo or absolute).
 - Redesign v1, Input:
   - A focused `Input` wraps only when it has the pane's full body width; inside any narrower column it is one
-    line cut with `…` (S16). So a field being edited keeps one line and the mod draws the whole text wrapped under
-    it, redrawn per keystroke.
+    line cut with `…` (S16). The mod first kept a field being edited to one line and drew the whole text wrapped
+    under it; it now draws the ring's field at the full width (S16).
   - An Input opened again under the key it last submitted from, with the same `value`, was drawn empty
     (Enter then saved an empty text). It is drawn under a new key each time it opens.
 - Redesign v1, the ring:
