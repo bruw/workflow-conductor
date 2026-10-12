@@ -485,7 +485,11 @@ Probe: `/probe-wrap` in `spikes/probe/hooks/register.tsx`, a 135-cell docked pan
   - Stop order is tree order, and an engine stop (the pane's ✕) sits before the mod's first. A `column-reverse`
     Box puts the tree's first stop on the pane's last row: how the catcher was first placed. It is not used
     any more: the catcher is the tree's first child, under `display="none"` (S7).
-  - Up / Down walk the ring like Shift+Tab / Tab, and a hook cannot tell them apart.
+  - Up / Down walk the ring like Shift+Tab / Tab, and a hook cannot tell them apart. It can tell where the move
+    landed: with the ring kept on one Input, the stop after it means Down and any other Up (the add list's arrows).
+  - The Left arrow on a `Button` is the engine's (`← for agents`): the conversation goes to the background, the
+    pane goes, and the debug log is no longer written. On an `Input` (empty too, cursor at the start too) it stays
+    in the field. So the ring is kept on Inputs.
   - A `ui.focus` raised by the person for a stop that names no element cannot be given one with
     `next({ ...e, element })`: the engine refuses it. The mod lets the move land and then moves the ring itself.
   - A `Select` the ring opens lists its options under itself, so its row must not have a fixed height.

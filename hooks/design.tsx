@@ -47,6 +47,7 @@ import {
   isDefaultName,
   isSaved,
   listWindow,
+  movePick,
   moveStartMark,
   nothingToRestore,
   noticeInforms,
@@ -165,34 +166,24 @@ const pickerKey = (): string => `${PICKER_KEY}:${LOAD}.${pickGen}`
 const isPickerField = (element: string | undefined): boolean => (element ?? '').startsWith(`${PICKER_KEY}:`)
 /**
  * The block picker's label: `design-label:design-type`. A Button, so that a click on the word opens the list of blocks
- * as a click on its value does; it is the stop before the picker, so Shift+Tab from the picker comes to it and is passed on (`offLabel`).
+ * as a click on its value does. Neither it nor the picker keeps the ring: on a Button the Left arrow is the engine's
+ * (it opens the agents list, and the pane goes), so the ring rests on fields alone and `t` opens the list.
  */
 const LABEL_KEY = 'design-label:'
-/**
- * Where a move of the person's that lands on the picker's label goes instead: to the picker; or, coming from the
- * picker (Shift+Tab stepping back, and it is the first stop), to the catcher. Any other element stays.
- */
-const offLabel = (element: string | undefined): string | undefined => {
-  if (element === undefined || !element.startsWith(LABEL_KEY)) return element
-  const picker = element.slice(LABEL_KEY.length)
-  if (ringOn !== picker) return picker
-  return drawnCatcher !== '' ? drawnCatcher : picker
-}
 /** The field a resting field's address stands for (`design-notes`); null for any other element. */
 const restBase = (element: string | undefined): string | null => (element !== undefined && element.startsWith(REST_KEY) ? baseOf(element.slice(REST_KEY.length)) : null)
 /**
- * The door: a second small Input, the stop right after the catcher while a block's fields are shown. The person's Tab
- * from the catcher lands on it, and that opens the fields (at rest they are text, with nothing to land on); being an
- * Input, it takes what is typed until the ring is on the title, and none of it is lost. With the fields open,
- * Shift+Tab from the title lands on it again: the way back to the graph. Emptied as the catcher is.
+ * The door: a second small Input, the stop right after the catcher while a block's fields are shown. The person's
+ * Down arrow (or Tab) from the catcher lands on it, and that opens the fields (at rest they are text, with nothing to
+ * land on); being an Input, it takes what is typed until the ring is on the title, and none of it is lost. With the
+ * fields open, a step back from the first field that lands on it is the way back to the graph. Emptied as the catcher is.
  */
 const DOOR_KEY = 'door'
 let doorGen = 0
 const doorKey = (): string => `${DOOR_KEY}:${LOAD}.${doorGen}`
 const isDoor = (element: string | undefined): boolean => (element ?? '').startsWith(`${DOOR_KEY}:`)
-/** Whether an element is a field or the type picker of the detail pane: where the ring may rest besides the catcher. */
-const isDetailStop = (element: string | undefined): boolean =>
-  element !== undefined && (isField(element) || isPickerField(element) || element.startsWith('pick:') || restBase(element) !== null || element === TYPE_KEY)
+/** Whether an element is a field of the detail pane or the add list's filter: where the ring may rest besides the catcher. */
+const isDetailStop = (element: string | undefined): boolean => element !== undefined && (isField(element) || isPickerField(element) || restBase(element) !== null)
 /** How long after the command's answer the handoff prompt is submitted. */
 export const SUBMIT_DELAY_MS = 64
 /** How many times the ring is sent to an element before the field is given up. */
@@ -205,7 +196,7 @@ export const BOX_POLL_MS = 600
 export const DESIGN_VERBS = /^\s*((design|run|list|draft|delete|rename)(\s|$)|replay\s+design(\s|$)|$)/
 /** The header's rows: the persona's two, the name on the first. */
 const HEAD_ROWS = 2
-const EDIT_HINT = 'click a field of the block, or press Tab to reach the name'
+const EDIT_HINT = 'click a field of the block, or press the Down arrow to reach the name'
 /** The graph's region is never asked to be shorter than this while the detail pane, under it, has rows to give. */
 const GRAPH_LEAST_ROWS = 3
 /** Stacked, the detail pane at rest takes this share of the rows between header and footer. */
@@ -627,7 +618,7 @@ const landOn = ($: EngineInterface, target: () => string, hint: string): void =>
 
 /**
  * Opens the fields of the selected block for typing, the ring on `base` (its first field when none is named): what `e`
- * does, for the ways that are not a key (Tab from the catcher, a click on a field at rest).
+ * does, for the ways that are not a key (the Down arrow from the catcher, a click on a field at rest).
  */
 const openFields = async ($: EngineInterface, base?: string): Promise<void> => {
   const ui = await read($, uiAtom)
@@ -895,7 +886,7 @@ const openEntry = async ($: EngineInterface, at?: number): Promise<void> => {
   else await startFrom($, entry.id)
 }
 
-/** One key on the start screen: `w` / `s` move the mark, Enter opens the marked row, `?` turns the help pages and `x` closes them. */
+/** One key on the start screen: `w` / `s` move the mark (the arrows do too: the `ui.focus` hook), Enter opens the marked row, `?` turns the help pages and `x` closes them. */
 const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   if (key === ENTER) {
     await openEntry($)
@@ -971,10 +962,10 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   }
   const edited = op === 'edit' && step.ui.editing && step.design && step.ui.selectedId !== null ? findNode(step.design, step.ui.selectedId) : undefined
   if (edited) landOn($, () => fieldKey(firstField(edited), edited.id), `edit: ${EDIT_HINT}`)
-  if (op === 'add' && step.ui.picker) {
+  if ((op === 'add' || op === 'retype') && step.ui.picker) {
     // A new filter, with nothing typed in it.
     pickGen++
-    landOn($, pickerKey, 'new block: press Tab to reach the filter')
+    landOn($, pickerKey, op === 'add' ? 'new block: click the filter to type in it' : 'block: click the filter to type in it')
   }
 
   return true
@@ -1011,7 +1002,7 @@ const catchKeys = ($: EngineInterface, element: string, kind: 'change' | 'submit
 }
 
 /**
- * What the door was given: the person's Tab left the ring on it and the fields are opening. Whatever is typed here
+ * What the door was given: the person's Down arrow left the ring on it and the fields are opening. Whatever is typed here
  * is the title's text, as what is typed into the catcher after `e` is; Enter saves it.
  */
 const doorKeys = ($: EngineInterface, element: string, kind: 'change' | 'submit', value: string): void => {
@@ -1683,19 +1674,28 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     return {}
   })
 
-  // Where the ring is. The person's Tab and arrows walk it over every stop: a move that lands on anything that is
-  // neither a field nor the type picker (the engine's own stop on the pane's close mark, where Enter would close the pane) is
-  // followed at once by the mod's own move back to the catcher. A move cannot be sent elsewhere in the chain: the engine
-  // refuses an element where the person's move named none. The ring on a field is "editing". The mod's own moves do
-  // not come here (they are settled where they are made).
-  on('ui.focus', { requestId: DESIGN_PANE_ID }, async ($, raised, next) => {
-    const person = raised.origin.kind === 'person'
-    // The picker's label never keeps the ring: the move is sent on to the picker.
-    const sent = person ? offLabel(raised.element) : raised.element
-    const e = sent === raised.element ? raised : { ...raised, element: sent }
+  // Where the ring is. The person's arrows (Up, Down) and Tab walk it over every stop: a move that lands on anything
+  // that is not a field (the block picker's row, the engine's own stop on the pane's close mark, where Enter would close
+  // the pane) is followed at once by the mod's own move back to the catcher. A move cannot be sent elsewhere in the
+  // chain: the engine refuses an element where the person's move named none. The ring on a field is "editing". The
+  // mod's own moves do not come here (they are settled where they are made).
+  on('ui.focus', { requestId: DESIGN_PANE_ID }, async ($, e, next) => {
+    const person = e.origin.kind === 'person'
     const before = await read($, uiAtom)
+    // The add list is open and the ring left its filter: the arrows choose. A step that lands on a row of the list
+    // was Down; any other (the stop before the filter) was Up. The ring goes back to the filter: letters stay its text.
+    if (person && before.status === 'ready' && before.picker !== null && !isPickerField(e.element)) {
+      const moved = await next(e)
+      if (moved.deny !== undefined) return moved
+      const design = await read($, designAtom)
+      await update($, uiAtom, held => movePick(design, held, (e.element ?? '').startsWith('pick:') ? 1 : -1))
+      await $.ui.focus({ requestId: DESIGN_PANE_ID, key: pickerKey() }).catch(() => settleRing($))
+      $.ui.invalidate('ui.render')
+
+      return moved
+    }
     const door = person && isDoor(e.element)
-    // On the door with the fields open, the person stepped back from the title: the way to the graph.
+    // On the door with the fields open, the person stepped back from the first field: the way to the graph.
     const leaves = door && before.editing
     const stray = person && (before.status === 'ready' || before.status === 'pick') && drawnCatcher !== '' && !isCatcher(e.element) && !isDetailStop(e.element) && !door
     const was = ringOn
@@ -1708,14 +1708,16 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       return moved
     }
     if (stray || leaves) await $.ui.focus({ requestId: DESIGN_PANE_ID, key: drawnCatcher }).catch(() => settleRing($))
-    // The ring left where it was: what was typed there is saved (Tab to the next field, a click on the type).
+    // On the start screen the arrows choose, as in the add list: a step onto a row was Down, any other Up.
+    if (stray && before.status === 'pick') await update($, uiAtom, held => ({ ...moveStartMark(held, (e.element ?? '').startsWith(START_KEY) ? 1 : -1), help: 0 }))
+    // The ring left where it was: what was typed there is saved (an arrow to the next field, a click on the block).
     const flushed = person ? await flushDrafts($) : null
-    // In the detail pane: on a field, on the type picker, or on the way to one (the door, a field at rest).
+    // In the detail pane: on a field, or on the way to one (the door, a field at rest).
     const rest = stray ? null : restBase(e.element)
-    const inDetail = !stray && !leaves && (isField(e.element) || e.element === TYPE_KEY || door || rest !== null)
+    const inDetail = !stray && !leaves && (isField(e.element) || door || rest !== null)
     const held = await read($, uiAtom)
     if (held.status === 'ready' && held.editing !== inDetail && (inDetail || person)) await update($, uiAtom, ui => ({ ...ui, editing: inDetail, freshId: inDetail ? ui.freshId : null }))
-    // The person's Tab from the catcher: the fields open, and the ring goes on to the first. (A field at rest it came to rest on: that field.)
+    // The person's Down arrow from the catcher: the fields open, and the ring goes on to the first. (A field at rest it came to rest on: that field.)
     if ((door && !leaves) || rest !== null) await openFields($, rest ?? undefined)
     await keepSaid($, flushed)
     // The legend and the detail pane's last rows name the keys of where the ring is.
@@ -2228,7 +2230,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const matches = picking && ui.picker ? pickerMatches(design, ui.picker) : []
     const marker = matches[Math.min(ui.picker?.pick ?? 0, Math.max(0, matches.length - 1))]
     const editable = node !== undefined && !locked
-    // The fields are text to read until they are opened (`e`, Enter, Tab, a click on one): only then are they drawn to type in.
+    // The fields are text to read until they are opened (`e`, Enter, the Down arrow, a click on one): only then are they drawn to type in.
     const fielding = editable && ui.editing && focused && !picking && !helping && Input !== null
     // The fields closed since the last drawing: the ones opened next are new ones.
     if (fieldsDrawn && !fielding) editGen++
@@ -2296,7 +2298,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       const step = await commit($, (before, held, context) => openRetype(before, held, target.id, context))
       if (!step.ui.picker) return
       pickGen++
-      landOn($, pickerKey, 'type: press Tab to reach the filter')
+      landOn($, pickerKey, 'block: click the filter to type in it')
     }
 
     // The detail pane's parts. A thin rule stands under its heading; a blank row between two fields and two sections, while there are rows for it.
@@ -2406,8 +2408,8 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const typeLine = (target: DesignNode): Item => ({
       rows: 1,
       el: (
-        // The row is the first of the block's own: its label is the stop before the picker, and the picker the one before
-        // the name. Shift+Tab from the name comes to the picker; from the picker to the label, which passes it on to the graph (`offLabel`).
+        // The row is the first of the block's own. A step back from the name lands on it and is passed on to the graph
+        // (the `ui.focus` hook): it is pressed with the pointer, and `t` opens the same list.
         <Box flexDirection="row" flexShrink={0}>
           <Box width={PICKER_LABEL_W} flexShrink={0}>
             <Button key={`${LABEL_KEY}${TYPE_KEY}`} plain onPress={() => retype(target)}>

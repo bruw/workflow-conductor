@@ -674,6 +674,12 @@ export function applyOp(design: Design | null, ui: DesignUi, op: KeyOp, context:
     }
     case 'add':
       return { design, ui: { ...calm, help: 0, detailHidden: false, picker: openAdd(design, node, node !== undefined && node.id === calm.viewRootId) }, changed: false }
+    case 'retype': {
+      if (!node) return { design, ui: { ...calm, notice: 'block: select a block first' }, changed: false }
+      // The start block becomes no other block.
+      if (node.type === 'start') return { design, ui: { ...calm, notice: 'the start block stays the start block' }, changed: false }
+      return openRetype(design, { ...calm, detailHidden: false }, node.id, context)
+    }
     case 'remove': {
       // While a help page is open `x` closes it, and deletes nothing.
       if ((ui.help ?? 0) > 0) return { design, ui: { ...calm, help: 0 }, changed: false }
@@ -754,6 +760,14 @@ export function pickerMatches(design: Design | null, picker: NonNullable<DesignU
   if (picker.block !== undefined) return kinds(picker.block)
   const blocks: PickRow[] = PALETTE.map((entry): PickRow => (kindsOf(entry.type).length > 0 ? { type: entry.type, opens: true } : { type: entry.type })).filter(may)
   return retyped ? [...kinds(retyped.type), ...blocks.filter(row => row.type !== retyped.type)] : blocks
+}
+
+/** The add list's mark moved by `by` rows (the arrows); it stops at the ends. Returns `ui` itself where it stays. */
+export function movePick(design: Design | null, ui: DesignUi, by: number): DesignUi {
+  if (!ui.picker) return ui
+  const last = Math.max(0, pickerMatches(design, ui.picker).length - 1)
+  const pick = Math.max(0, Math.min(last, (ui.picker.pick ?? 0) + by))
+  return pick === (ui.picker.pick ?? 0) ? ui : { ...ui, picker: { ...ui.picker, pick } }
 }
 
 /** The keys the add list keeps for itself while nothing is typed in its filter: up, down, and the place. */
@@ -889,9 +903,10 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['w a s d', 'move the selection'],
   ['Shift+W S', 'move the block one place up / down, into and out of the containers on its way'],
   ['Shift+A D', 'swap an arm with the one beside it'],
-  ['Enter  e', 'edit: the ring goes to the name (on the start block, to the goal). In a field Tab walks the fields, Enter saves and returns to the graph, Esc saves and hands the keys to the prompt'],
-  ['Tab', 'the same field, by the ring\'s own step'],
+  ['Enter  e', 'edit: the ring goes to the name (on the start block, to the goal). In a field Enter saves and returns to the graph, Esc saves and hands the keys to the prompt'],
+  ['↑ ↓', 'in a field: the field above / below (↓ from the graph opens the first); past the first or the last: saved, back to the graph. In a list of blocks: choose'],
   ['n  +', 'a new block after this one: pick a block, then its kind, or type either name; n again in the list: inside, before'],
+  ['t', 'the block and its kind: pick another from the list'],
   ['x', 'delete (a container that holds blocks asks: x again); closes the add list and these pages'],
   ['1 2', 'step the model, the effort (the chips on the selected card)'],
   ['o  b', 'open the selected container as the view / back up one level'],
