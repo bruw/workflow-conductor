@@ -12,7 +12,7 @@ export type Teach = {
   name: string
   /** One line, at most HINT_MAX characters, in plain words: what the block does. */
   hint: string
-  /** One line, at most HINT_MAX characters: the situation that calls for it. Shown as `use when: …`. */
+  /** One line, at most WHEN_MAX characters: the situation that calls for it. Shown as `use when: …`. */
   when: string
   /** Three to six short lines: what it is, when to use it, cost or gotcha. */
   card: string[]
@@ -29,17 +29,18 @@ export const PALETTE_GROUPS: readonly { group: PaletteGroup; heading: string }[]
   { group: 'holds', heading: 'Blocks that hold blocks' },
 ]
 
-export const HINT_MAX = 70
+export const HINT_MAX = 25
+export const WHEN_MAX = 70
 
 export const TEACH: Record<NodeType, Teach> = {
   agent: {
     glyph: '●',
     name: 'agent',
-    hint: 'One Claude subagent does one task and returns its answer',
+    hint: 'Performs a task',
     when: 'a step needs reading or judgment: search, review, write, decide',
     card: [
       'One subagent with its own context. Its final text is the return value.',
-      'Its kind says its job: scout, check, verify, judge, critic, synthesize, classify.',
+      'Its kind says its job: scout, check, verify, judge, critic, merge, classify.',
       'Set its output to a shape to force structured output: you get a validated object back, no parsing.',
       'Leave model and effort unset to inherit the session; low effort suits mechanical stages.',
       'Worktree isolation is expensive: only for agents that edit files in parallel.',
@@ -49,7 +50,7 @@ export const TEACH: Record<NodeType, Teach> = {
   pipeline: {
     glyph: '◆',
     name: 'pipeline',
-    hint: 'Steps in a row; each item moves on alone, not waiting for the others',
+    hint: 'Per-item chain of steps',
     when: 'each item takes several steps and no step needs all items at once',
     card: [
       'Each item runs through all stages on its own. Item A can be in stage 3 while B is in stage 1.',
@@ -62,7 +63,7 @@ export const TEACH: Record<NodeType, Teach> = {
   parallel: {
     glyph: '≡',
     name: 'parallel',
-    hint: 'Runs its blocks at the same time and waits for all results',
+    hint: 'Concurrent; awaits all',
     when: 'the next step needs every result together: merge, compare, pick',
     card: [
       'Runs tasks concurrently and waits for all of them before the next step starts.',
@@ -75,7 +76,7 @@ export const TEACH: Record<NodeType, Teach> = {
   loop: {
     glyph: '↻',
     name: 'loop',
-    hint: 'Repeats its blocks until a count, a condition or the budget is reached',
+    hint: 'Repeat until stop rule',
     when: 'you cannot tell up front how many rounds it takes; say when it stops',
     card: [
       'A plain while loop around one or more steps.',
@@ -87,7 +88,7 @@ export const TEACH: Record<NodeType, Teach> = {
   branch: {
     glyph: 'ψ',
     name: 'branch',
-    hint: 'If/else on an earlier result: one arm runs; code decides',
+    hint: 'If/else on a result',
     when: 'a result decides what runs next, e.g. nothing found: skip the checks',
     card: [
       'Control flow in the script: which arm runs depends on an earlier result. Plain code decides, not a model.',
@@ -101,7 +102,7 @@ export const TEACH: Record<NodeType, Teach> = {
   subworkflow: {
     glyph: '▸',
     name: 'subworkflow',
-    hint: 'Runs a saved workflow as one step; one level deep only',
+    hint: 'Run a saved workflow',
     when: 'a saved workflow already does this part',
     card: [
       'Runs another workflow as a sub-step and returns whatever it returns.',
@@ -113,7 +114,7 @@ export const TEACH: Record<NodeType, Teach> = {
   code: {
     glyph: 'λ',
     name: 'code',
-    hint: 'Plain JS between agents: dedup, filter, group, reduce. No tokens',
+    hint: 'Plain JS, no tokens',
     when: 'the step is exact and mechanical: never spend an agent on it',
     card: [
       'Deterministic JavaScript in the script: dedup, filter, flatten, count, vote tally.',
@@ -127,7 +128,7 @@ export const TEACH: Record<NodeType, Teach> = {
   start: {
     glyph: '⇢',
     name: 'start',
-    hint: 'Where the workflow starts: its goal, and the args it is run on',
+    hint: 'Entry: goal and args',
     when: 'always: every design has one, first',
     card: [
       'Says the goal of the workflow, in a sentence: Claude reads it when it writes the script, and reviews the design against it.',
@@ -141,7 +142,7 @@ export const TEACH: Record<NodeType, Teach> = {
   phase: {
     glyph: '▭',
     name: 'phase',
-    hint: 'A named group around blocks: it only frames them, nothing more',
+    hint: 'Named group, no logic',
     when: 'a long design reads better in named parts: gather, check, write up',
     card: [
       'A frame with a name and nothing else: no knobs, no fan-out, no condition.',
@@ -165,7 +166,7 @@ export type Starter = { type: NodeType; kind?: Kind; name: string; logic?: strin
 export type KindTeach = {
   /** One line, at most HINT_MAX characters, in plain words: what a block of this kind does. */
   hint: string
-  /** One line, at most HINT_MAX characters: the situation that calls for it. */
+  /** One line, at most WHEN_MAX characters: the situation that calls for it. */
   when: string
   /** Three to five short lines: what it is, when to use it, cost or gotcha. */
   card: string[]
@@ -195,7 +196,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
   // agent: what is its job?
   task: plain('agent', 'one agent() call'),
   scout: {
-    hint: 'Lists the work: the items a later block runs once per',
+    hint: 'Search and collect',
     when: 'the work-list is not known up front: files, sites, dimensions',
     card: [
       'One cheap agent that finds what there is to do and returns it as a list.',
@@ -208,7 +209,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     hints: { prompt: 'what to list, e.g. every site that needs the change' },
   },
   check: {
-    hint: 'An exact pass or fail: runs the tests, the typecheck, a rule',
+    hint: 'Model checks pass/fail',
     when: 'the result can be checked exactly, and a loop or a branch reads it',
     card: [
       'One agent that runs an objective check and reports ok or the failures: tests, typecheck, lint, a diff.',
@@ -221,7 +222,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     hints: { prompt: 'what must hold, e.g. typecheck and tests pass' },
   },
   verify: {
-    hint: 'Independent checkers try to disprove each result; survivors stay',
+    hint: 'Voters try to refute it',
     when: 'a wrong result costs more than checking it: after any finder',
     card: [
       'Each voter is prompted to refute the claim and to say refuted when unsure.',
@@ -236,11 +237,11 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     hints: { prompt: 'what to try to refute, e.g. this finding against the code' },
   },
   judge: {
-    hint: 'Judges score the candidates before it; the best one wins',
+    hint: 'Judges score, best wins',
     when: 'several attempts exist and one has to be picked',
     card: [
       'Parallel judges score every candidate against the same criteria; the highest total wins.',
-      'Put the attempts before it (a parallel of kind attempts) and a synthesize after it.',
+      'Put the attempts before it (a parallel of kind attempts) and a merge after it.',
       'Waiting for all results is right here: the judges need every candidate at once.',
       'Cost: one agent per vote: say how many in its logic (`3 votes`).',
     ],
@@ -250,20 +251,20 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     hints: { prompt: 'the criteria to score on, e.g. correctness, simplicity, risk' },
   },
   critic: {
-    hint: 'One agent at the end asks what is missing; gaps become more work',
+    hint: 'Finds what is missing',
     when: 'before the final write-up of research, review or audit work',
     card: [
       'One agent at the end that asks what is missing.',
       'It looks for a search angle not run, a claim unverified, a source unread.',
-      'Use before synthesis on research, review and audit work.',
+      'Use before the merge on research, review and audit work.',
       'What it finds becomes the next round of work: its output is a shape, so the gaps can be acted on.',
     ],
     script: 'one agent() listing what is missing; its gaps are the next round of work',
     fill: { output: '{ gaps: [{ what, how_to_fill }] }' },
     hints: { prompt: 'what complete means here, e.g. every angle searched' },
   },
-  synthesize: {
-    hint: 'Merges every result before it into one answer',
+  merge: {
+    hint: 'Many results into one',
     when: 'many results must become one: the write-up at the end',
     card: [
       'One agent that reads all the results at once and writes one thing from them: the reduce step.',
@@ -275,7 +276,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     hints: { prompt: 'what to write from all the results', output: 'free text: the answer itself; a shape only if a block reads it' },
   },
   classify: {
-    hint: 'Labels its input with one of a few names; a branch routes on it',
+    hint: 'Labels input for routing',
     when: 'different inputs need different handling: triage, routing',
     card: [
       'One cheap agent that sorts its input into one of the labels you name.',
@@ -291,14 +292,14 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
   // loop: when does it stop?
   custom: plain('loop', 'a while loop with the stop condition as written', { stopCondition: 'e.g. 3 rounds · the check passes · 2 dry rounds · budget < 50k' }),
   count: {
-    hint: 'Repeats its blocks a fixed number of rounds',
+    hint: 'Fixed number of rounds',
     when: 'you know how many passes it takes: three rounds of refinement',
     card: ['A for loop: the same blocks, a set number of times.', 'Each round is given what the round before made.', 'Bounded by nature: the cost is the rounds times what a round costs.'],
     script: 'for (let round = 0; round < N; round++), each round given the result of the last',
     fill: { stopCondition: '3 rounds' },
   },
   pass: {
-    hint: 'Repeats until the check at the end of a round passes',
+    hint: 'Repeat until check passes',
     when: 'the work can be checked exactly: fix, test, fix again',
     card: [
       'A round does the work and ends with a check; the loop stops when the check says ok.',
@@ -314,7 +315,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     ],
   },
   dry: {
-    hint: 'Keeps searching until some rounds in a row find nothing new',
+    hint: 'Until nothing new found',
     when: 'you do not know how many there are to find: bugs, edge cases',
     card: [
       'Repeats a round of finders until K consecutive rounds return nothing new.',
@@ -330,7 +331,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     ],
   },
   converged: {
-    hint: 'Repeats until a round changes nothing against the one before',
+    hint: 'Until results stabilize',
     when: 'each round refines the last: draft, critique, revise',
     card: [
       'Each round improves on the last result; the loop stops when a round leaves it as it was.',
@@ -341,14 +342,14 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     fill: { stopCondition: 'the result is the same as last round, at most 5 rounds' },
   },
   target: {
-    hint: 'Repeats until enough has been collected',
+    hint: 'Until target reached',
     when: 'you need a set number of results: 10 findings, 5 candidates',
     card: ['Each round adds what it found to one list; the loop stops when the list is long enough.', 'Dedup each round against the list, or the same result is counted twice.', 'A target that cannot be met runs to the cap of 1000 agents: consider a budget as well.'],
     script: 'while (collected.length < N): push each round\'s results onto `collected`',
     fill: { stopCondition: '10 items collected' },
   },
   budget: {
-    hint: 'Repeats while the token budget of the turn lasts',
+    hint: 'While token budget lasts',
     when: 'depth should follow the budget the user gave ("+500k")',
     card: [
       'Runs rounds for as long as the turn\'s token budget has room for another.',
@@ -362,7 +363,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
   // parallel: what differs between its arms?
   arms: plain('parallel', 'parallel() of the blocks inside, one thunk each', { oncePer: 'leave empty: the blocks inside run side by side' }),
   each: {
-    hint: 'Runs the same blocks once per item, and waits for all',
+    hint: 'Once per item, await all',
     when: 'one job, many items, and the next step needs every result',
     card: [
       'What it holds runs once for each item, all at the same time; the next step starts when all are done.',
@@ -373,7 +374,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     hints: { oncePer: 'the items, e.g. changed files, ×4 dimensions' },
   },
   sweep: {
-    hint: 'Several searchers at once, each looking a different way',
+    hint: 'Parallel varied searches',
     when: 'one way of searching would miss things',
     card: [
       'Parallel agents that each search differently: by container, content, entity or time.',
@@ -385,11 +386,11 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     fill: { oncePer: '4 search angles: by container, by content, by entity, by time' },
   },
   attempts: {
-    hint: 'Several independent tries at one task, each from its own angle',
+    hint: 'N independent tries',
     when: 'a first answer is rarely the best one: a judge picks after',
     card: [
       'The same task done several times at once, each try from a different angle and blind to the others.',
-      'Put a judge after it to score the tries, and a synthesize after that to build on the winner.',
+      'Put a judge after it to score the tries, and a merge after that to build on the winner.',
       'Beats iterating on a single try when many answers are possible.',
       'Cost: one agent per try.',
     ],
@@ -400,7 +401,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
   // branch: how is its arm picked?
   'if-else': plain('branch', 'if / else if / else on an earlier result', { condition: 'e.g. no findings; leave the last arm empty for the else' }),
   guard: {
-    hint: 'Runs what it holds only if a condition holds; else skips it',
+    hint: 'Run only if condition',
     when: 'a step is wasted on an empty result: nothing found, skip the checks',
     card: [
       'An if with no else: its one arm runs when its condition holds, and nothing runs when it does not.',
@@ -412,7 +413,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     hints: { condition: 'when it runs, e.g. any findings; otherwise nothing runs' },
   },
   route: {
-    hint: 'Picks the arm whose label an earlier block chose',
+    hint: 'Pick arm by label',
     when: 'a classifier sorted the input and each sort has its own steps',
     card: [
       'A switch: each arm carries one label, and the arm whose label was chosen runs.',

@@ -51,7 +51,7 @@ export function review(): Design {
           }),
         ],
       ),
-      node('n5', 'agent synthesize', 'synthesize', 'Runs once over all surviving findings: merge duplicates, order by severity, say what was dropped.', {
+      node('n5', 'agent merge', 'merge', 'Runs once over all surviving findings: merge duplicates, order by severity, say what was dropped.', {
         prompt: 'Write one review from the confirmed findings of every dimension',
       }),
     ],
@@ -100,7 +100,7 @@ export function research(): Design {
         prompt: 'Given the question and all claims so far, list what is still missing',
         output: '{ gaps: [{ what, how_to_fill }] }',
       }),
-      node('n8', 'agent synthesize', 'synthesize', 'Runs once over all verified claims; cite the source of each and state open gaps.', {
+      node('n8', 'agent merge', 'merge', 'Runs once over all verified claims; cite the source of each and state open gaps.', {
         prompt: 'Write the answer from the verified claims',
       }),
     ],
@@ -162,7 +162,7 @@ export function judgePanel(): Design {
         prompt: 'Score every attempt on correctness, simplicity and risk',
         output: '{ scores: [{ attempt, score, strengths[], weaknesses[] }] }',
       }),
-      node('n4', 'agent synthesize', 'synthesize from winner', 'Start from the winning attempt and graft in the best ideas from the runners-up.', {
+      node('n4', 'agent merge', 'merge from winner', 'Start from the winning attempt and graft in the best ideas from the runners-up.', {
         prompt: 'Write the final approach from the winner, adopting the strongest ideas of the others',
       }),
     ],

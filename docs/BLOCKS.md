@@ -22,7 +22,7 @@ The same for every kind of a block: a kind adds no field. The file's keys are in
 
 `prompt`, `output`, `oncePer`, `stopCondition`, `condition`, `model`, `effort`, `isolation` and `agentType` sit under `knobs`. The last two have no control in the pane: Claude sets them, and the pane shows them read-only when set.
 
-The detail pane opens with the block itself (`Block  agent verify ▾`), then these fields.
+The detail pane's top row is the block itself and, at the right, its id (`agent verify ▾      n4`), then these fields.
 
 ## Kinds
 
@@ -36,7 +36,7 @@ Prefill is written into the field when the block is added; a hint shows while th
 | | verify | voters try to refute each result; a majority decides | logic `3 votes: each voter tries to refute the result; it is kept when a majority fail to refute it` · output `{ refuted: boolean, reason }` | prompt: what to try to refute |
 | | judge | voters score the candidates; the best wins | logic `3 votes: each judge scores every candidate; the highest total wins` · output `{ scores: [{ candidate, score, why }] }` | prompt: the criteria to score on |
 | | critic | says what is missing; gaps become more work | output `{ gaps: [{ what, how_to_fill }] }` | prompt: what complete means here |
-| | synthesize | merges every result into one answer | | prompt: what to write from all the results · output: free text |
+| | merge | merges every result into one answer | | prompt: what to write from all the results · output: free text |
 | | classify | labels its input for a branch to route on | output `{ label }` · effort low | prompt: the labels to choose from |
 | **loop**: when does it stop? | custom | the stop condition in your own words | | stop condition: 3 rounds · the check passes · 2 dry rounds · budget < 50k |
 | | count | a fixed number of rounds | `3 rounds` | |
@@ -58,7 +58,7 @@ Prefill is written into the field when the block is added; a hint shows while th
 ## Rules
 
 - Votes are neither a kind nor a knob: a verify or a judge says them in its logic (`3 votes`, `2 voters`, `5 judges`), which the kind fills in and the user edits as text. Nothing reads the number: it is for Claude, at the hand-off.
-- A pattern that spans several blocks (judge panel: attempts, judge, synthesize) is a template, not a kind.
+- A pattern that spans several blocks (judge panel: attempts, judge, merge) is a template, not a kind.
 - Changing a block's kind keeps every value that was typed; a value still as the old kind filled it in is replaced by the new kind's.
 - A loop of kind pass or dry is added with its starter blocks in one edit (one undo).
 - No field is read for a count or a meaning. `once per`, a stop condition and the votes in a logic are words for Claude; the agent count takes one per agent block and says `≥` when the design holds a pipeline, a parallel, a loop, a verify, a judge or a subworkflow.

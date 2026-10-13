@@ -7,7 +7,7 @@ export type ConductorDesignNode = {
   id: string
   type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'start' | 'phase'
   kind?:
-    | 'task' | 'scout' | 'check' | 'verify' | 'judge' | 'critic' | 'synthesize' | 'classify'
+    | 'task' | 'scout' | 'check' | 'verify' | 'judge' | 'critic' | 'merge' | 'classify'
     | 'custom' | 'count' | 'pass' | 'dry' | 'converged' | 'target' | 'budget'
     | 'arms' | 'each' | 'sweep' | 'attempts'
     | 'if-else' | 'guard' | 'route'

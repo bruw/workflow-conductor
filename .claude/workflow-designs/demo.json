@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "demo",
-  "nextId": 30,
+  "nextId": 31,
   "nodes": [
     {
       "id": "n27",
@@ -36,6 +36,12 @@
                 "model": "opus",
                 "effort": "low"
               }
+            },
+            {
+              "id": "n30",
+              "type": "agent",
+              "name": "1",
+              "logic": "1"
             },
             {
               "id": "n6",

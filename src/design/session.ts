@@ -774,8 +774,8 @@ export function movePick(design: Design | null, ui: DesignUi, by: number): Desig
   return pick === (ui.picker.pick ?? 0) ? ui : { ...ui, picker: { ...ui.picker, pick } }
 }
 
-/** The keys the add list keeps for itself while nothing is typed in its filter: up, down, and the place. */
-export const PICKER_KEYS = 'wsn'
+/** The key the add list keeps for itself while nothing is typed in its filter: the place. */
+export const PICKER_PLACE = 'n'
 /** One more while it lists a block's kinds: back to the blocks. */
 export const PICKER_BACK = 'b'
 /** The key that closes the add list, wherever it is typed: no block's or kind's name holds it. */
@@ -789,12 +789,12 @@ function forgetNav(picker: NonNullable<DesignUi['picker']>): NonNullable<DesignU
 
 /**
  * What the add list's filter says now (`whole`: all of its text, without the keys already taken from it).
- * While the filter is empty `w` / `s` move the mark, `n` changes the place (on a
+ * While the filter is empty `n` changes the place (on a
  * list a key opened on a block) and `b` goes back from a block's kinds to the blocks; any other character
  * starts the filter, and from there every character narrows it. `x` closes the list, always. `taken` counts
  * the characters used as keys.
  *
- * Names start with those letters too (`sweep`, `scout`, `budget`), so the keys just taken are remembered: when
+ * Names start with those letters too (`budget`, `branch`), so the keys just taken are remembered: when
  * they and the next character are how a block's or a kind's name starts, they were the filter all along. They
  * then open the filter's text as its `lead`: the field they were typed in no longer holds them (it was drawn
  * anew when they were taken as keys), so the pane says them before the field, and whoever reads the field puts
@@ -818,15 +818,12 @@ export function typePicker(design: Design | null, ui: DesignUi, whole: string): 
     if (key === PICKER_BACK && picker.block !== undefined) {
       const { block: _block, ...blocks } = picker
       next = { ...next, picker: { ...blocks, pick: 0, nav: `${run}${key}` } }
-    } else if (!PICKER_KEYS.includes(key)) break
-    else if (key === 'n') {
+    } else if (key !== PICKER_PLACE) break
+    else {
       const cycled = design === null ? next : cyclePlace(design, next)
       // On a list with no block to go round, `n` is a letter like any other.
       if (cycled === next || !cycled.picker) break
       next = { ...cycled, picker: forgetNav(cycled.picker) }
-    } else {
-      const last = Math.max(0, pickerMatches(design, picker).length - 1)
-      next = { ...next, picker: { ...picker, nav: `${run}${key}`, pick: Math.max(0, Math.min(last, (picker.pick ?? 0) + (key === 's' ? 1 : -1))) } }
     }
     query = query.slice(1)
     taken++

@@ -25,7 +25,7 @@ export type NodeType = (typeof NODE_TYPES)[number]
  * the empty ones are for (`KIND_TEACH` in teach.ts).
  */
 export const KINDS = {
-  agent: ['task', 'scout', 'check', 'verify', 'judge', 'critic', 'synthesize', 'classify'],
+  agent: ['task', 'scout', 'check', 'verify', 'judge', 'critic', 'merge', 'classify'],
   loop: ['custom', 'count', 'pass', 'dry', 'converged', 'target', 'budget'],
   parallel: ['arms', 'each', 'sweep', 'attempts'],
   branch: ['if-else', 'guard', 'route'],

@@ -78,7 +78,7 @@ import { TEMPLATES } from '../src/design/templates'
 import { emptyRunState } from '../src/run/events'
 import { replayDesignEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
-import { NOT_SET, UNMAPPED_ID, canOpen, typeLabel } from '../src/ui/graph-layout'
+import { NOT_SET, UNMAPPED_ID, canOpen } from '../src/ui/graph-layout'
 import { parseGraphMessage } from '../src/ui/graph-model'
 import { ENTER, KEY_OPS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
@@ -168,12 +168,6 @@ let drawnCatcher = ''
 let pickGen = 0
 const pickerKey = (): string => `${PICKER_KEY}:${LOAD}.${pickGen}`
 const isPickerField = (element: string | undefined): boolean => (element ?? '').startsWith(`${PICKER_KEY}:`)
-/**
- * The block picker's label: `design-label:design-type`. A Button, so that a click on the word opens the list of blocks
- * as a click on its value does. Neither it nor the picker keeps the ring: on a Button the Left arrow is the engine's
- * (it opens the agents list, and the pane goes), so the ring rests on fields alone and `t` opens the list.
- */
-const LABEL_KEY = 'design-label:'
 /** The field a resting field's address stands for (`design-notes`); null for any other element. */
 const restBase = (element: string | undefined): string | null => (element !== undefined && element.startsWith(REST_KEY) ? baseOf(element.slice(REST_KEY.length)) : null)
 /**
@@ -2459,32 +2453,41 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     // The ring's field, or the one it is on its way to: the one drawn at full width, wrapped.
     const ringAt = ringTo !== '' ? ringTo : ringOn
     const activeBase = fielding && isField(ringAt) ? baseOf(ringAt ?? '') : null
-    // The door stands at the right end of the heading's row: two cells, empty, seen only for the moment the ring is on it.
+    // The heading's row: the block's type and kind, which a press changes (`t` opens the same list), and at the right the id.
+    // The door stands at its right end: two cells, empty, seen only for the moment the ring is on it. It is first in
+    // the tree (the row runs backward), so the Down arrow from the catcher lands on it and not on the type.
     const DOOR_W = 2
+    const typeWord = node ? typeName(node) : ''
     const heading: Item | null = node
       ? {
           rows: 1,
           el: (
-            <Box key="design-heading" flexDirection="row" justifyContent="space-between" height={1}>
-              <Text wrap="truncate-end">
-                <Text color={ACCENT[node.type]} bold>{typeLabel(node)}</Text>
-                {hasName(node) && <Text color={FADED}>{' / '}</Text>}
-                {hasName(node) && <Text bold color={TEXT}>{clip(node.name, Math.max(4, detailW - typeLabel(node).length - node.id.length - 5 - DOOR_W))}</Text>}
-              </Text>
-              <Box flexDirection="row" flexShrink={0}>
-                <Text color={FADED}>{node.id}</Text>
-                {editable && Input && (
-                  <Box width={DOOR_W} flexShrink={0}>
-                    <Input
-                      key={doorKey()}
-                      value=""
-                      placeholder=""
-                      submitLabel=""
-                      onInput={(value, input) => doorKeys($, input.element, 'change', value)}
-                      onSubmit={(value, input) => doorKeys($, input.element, 'submit', value)}
-                    />
-                  </Box>
-                )}
+            <Box key="design-heading" flexDirection="row-reverse" height={1}>
+              {editable && Input && (
+                <Box width={DOOR_W} flexShrink={0}>
+                  <Input
+                    key={doorKey()}
+                    value=""
+                    placeholder=""
+                    submitLabel=""
+                    onInput={(value, input) => doorKeys($, input.element, 'change', value)}
+                    onSubmit={(value, input) => doorKeys($, input.element, 'submit', value)}
+                  />
+                </Box>
+              )}
+              <Box flexDirection="row" justifyContent="space-between" flexGrow={1} height={1}>
+                <Box flexShrink={0}>
+                  {/* The block is picked from the same list one is added from: every block and kind on a row with what it does. */}
+                  {/* The start block has no type to pick: it becomes no other block. */}
+                  {editable && node.type !== 'start' ? (
+                    <Button key={TYPE_KEY} plain onPress={() => retype(node)}>
+                      <Text color={ACCENT[node.type]} bold>{`${typeWord} ▾`}</Text>
+                    </Button>
+                  ) : (
+                    <Text color={ACCENT[node.type]} bold>{typeWord}</Text>
+                  )}
+                </Box>
+                <Text color={FADED} wrap="truncate-end">{` ${node.id}`}</Text>
               </Box>
             </Box>
           ),
@@ -2558,27 +2561,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
         ),
       }
     }
-    // Under the fields, one to a row, a label and its value: the block's type, which a press changes; and, read only, the
-    // worktree its file asks for (Claude sets that knob, the pane has no control for it).
     const PICKER_LABEL_W = 11
-    const typeLine = (target: DesignNode): Item => ({
-      rows: 1,
-      el: (
-        // The row is the first of the block's own. A step back from the name lands on it and is passed on to the graph
-        // (the `ui.focus` hook): it is pressed with the pointer, and `t` opens the same list.
-        <Box flexDirection="row" flexShrink={0}>
-          <Box width={PICKER_LABEL_W} flexShrink={0}>
-            <Button key={`${LABEL_KEY}${TYPE_KEY}`} plain onPress={() => retype(target)}>
-              <Text color="suggestion">{'Block'.padEnd(PICKER_LABEL_W)}</Text>
-            </Button>
-          </Box>
-          {/* The block is picked from the same list one is added from: every block and kind on a row with what it does. */}
-          <Button key={TYPE_KEY} plain label={`${typeName(target)} ▾`} onPress={() => retype(target)} />
-        </Box>
-      ),
-    })
-    // The start block has no type to pick: it becomes no other block.
-    const blockItems: Item[] = node && editable && node.type !== 'start' ? [typeLine(node)] : []
     // What Claude set and the pane has no control for, read only: the worktree, the subagent it runs as.
     const setItems: Item[] = node
       ? [
@@ -2611,8 +2594,7 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
     const inspector = (level: number): Item[] => {
       if (!node || !heading) return []
       const most = level < 4 ? Infinity : (CUTS[level - 4] ?? 1)
-      // The block and its kind come first, always: what the rest of the pane is about.
-      const sections: Item[][] = blockItems.length > 0 ? [blockItems] : []
+      const sections: Item[][] = []
       if (level < 3) {
         sections.push([label('Meaning'), ...lines(capped(wrapText(`${cap(teachOf(node).hint)}.`, detailW), most)), ...lines(capped(wrapText(`${cap(useWhen(node))}.`, detailW), most), FADED)])
       }
