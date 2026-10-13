@@ -153,8 +153,8 @@ test('labels without a node id go to unmapped and still count by phase', async (
   expectConsistent(state)
 })
 
-test('a node id outside the known set is unmapped', async () => {
-  const known = new Set(['n1', 'n2'])
+test('a node id the project does not have is unmapped', async () => {
+  const known = { ids: new Set(['n1', 'n2']) }
   const state = reduceAll([start('a1', 'n1: plan', 'P'), start('a2', 'n9: stray', 'P')], known)
 
   expect(Object.keys(state.byNode)).toEqual(['n1'])

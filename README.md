@@ -25,7 +25,17 @@ implement and run, and watch the run's progress on the same project.
 - **Undo is per project, fifty steps, for the session.** It is not saved with the project. It survives `/reload-plugins`; it is lost when the session ends and when the mod's code is reloaded after a change.
 - **Names.** Claude names a project it drafts; a project started from a template is `untitled` (`untitled-2`, …). A saved project is renamed on the start screen: mark it, press `e`, type the name, Enter. Names starting with `replay-` are kept for replays.
 
-## Install for development
+## Install
+
+In a terminal session:
+
+```
+/plugin install conductor --marketplace bruw/workflow-conductor
+```
+
+Answer `y` to add the marketplace, then pick a scope (Enter takes the user scope). The repository is its own marketplace (`.claude-plugin/marketplace.json`).
+
+### Install for development
 
 Terminal:
 
@@ -39,20 +49,14 @@ Desktop app (no flag can be given): name the folder in the `env` block of `~/.cl
 { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/conductor" } }
 ```
 
-The repository is also a marketplace (`.claude-plugin/marketplace.json`), so from a
-terminal session it installs with `/plugin install conductor --marketplace <owner>/<repo>`.
-
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `/conductor` | The board. With a run in progress: that run, on its project when it came from one. Otherwise the project last opened in this session, with the keyboard, or the start screen when there is none: the saved projects to open, rename or delete, above the templates for a new one. |
 | `/conductor <description…>` | Claude drafts a new project for the description, names it and shows it on the graph (see "Designing by talking"). Always a new project, unless your own words name an existing one to change. |
-| `/conductor-dev ask reset` | Forgets every stored `Always …` and `Never …` answer, so Conductor asks both its questions again (see "When Claude starts a workflow"). |
-| `/conductor-dev replay <review-41\|partial-29\|clear> [fast\|slow]` | Dev: replays a recorded run in the run view, or clears it. |
-| `/conductor-dev replay project <template> [fast\|slow]` | Dev: replays a made-up run over a template's project (`review`, `research`, `migrate`, `judge-panel`). The project is named `replay-<template>`, lives in the session only, and is never saved or listed (the `replay-` prefix is kept for this). |
 
-There are no other verbs: a project is opened, renamed and deleted on the start screen, and run with `r` on its board.
+There are no verbs: a project is opened, renamed and deleted on the start screen, and run with `r` on its board. Replays and the reset of stored answers are rows of the start screen too.
 
 ## Designing by talking
 
@@ -259,6 +263,8 @@ The same pane shows, in place of the block:
 
 `/conductor`, with nothing opened yet in the session, opens the start screen (`p` opens it from a project). The detail pane lists the saved projects (each with its block count and what it is for) above the templates (`Review`, `Research`, `Migrate`, `Judge panel`) and `Blank`; `↑` / `↓` (or `w` / `s`) move the mark, Enter or a click opens the row. On a saved project `e` renames it (its name becomes a field: type, Enter; an arrow leaves it as it was) and `x` deletes it and its script, after asking once more (`x` again; any other key keeps it). A project that is being run is neither renamed nor deleted. The graph shows the marked project read-only, the header its name and goal. Under the list, `[Draft using claude]` puts `/conductor ` in the prompt box, for you to say what the workflow should do. `?` opens help here too.
 
+Under all of those the list goes on with what opens no project. **Replay a run** (dev): a made-up run replayed over each template (the project is named `replay-<template>`, lives in the session only, and is never saved or listed: the `replay-` prefix is kept for this), and each recorded run (`review-41`, `partial-29`) replayed in the run view. Token counts are made up. Last, **Ask again** forgets every stored `Always …` and `Never …` answer, so Conductor asks both its questions again (see "When Claude starts a workflow").
+
 A project started from a template or blank is not written to disk until its first edit, or until it is run. Reopening a project brings back the block it was left on.
 
 ### An empty project
@@ -349,7 +355,7 @@ A project drawn this way ties its blocks to the script with `match`: the agent l
 
 A run whose workflow name is a saved project's name is that project's run: it is shown on the project with no question, whatever is stored for the second one. So the next run of a script you had visualized lands on its project.
 
-`/conductor-dev ask reset` forgets the kept answers to both questions.
+`Ask again`, the last row of the start screen, forgets the kept answers to both questions.
 
 ## Watching a run
 
@@ -418,5 +424,5 @@ claude plugin validate . && bunx tsc -p .
 - `bun scripts/render-graph.ts --list` names the projects it can draw; `bun scripts/render-graph.ts research --cols 100 --rows 40 --select n5` prints the graph as the pane paints it, with no session (`--view`, `--scroll`, `--run`, `--ansi`: see the file's head). The examples in this README are its output.
 - `scripts/dev-session.sh` starts a detached tmux session running Claude Code with the mod loaded (`CONDUCTOR_SESSION`, `CONDUCTOR_COLS`, `CONDUCTOR_ROWS`); the debug log goes to `.capture/debug.log`.
 - `scripts/send.sh '/conductor' Enter` sends keys to it; `scripts/capture.sh` prints the screen and the mod's recent debug lines (also written to `.capture/`).
-- `/conductor-dev replay …` exercises the run view and the overlay without running a workflow.
+- The start screen's `Replay a run` rows exercise the run view and the overlay without running a workflow.
 - `docs/SPEC.md` and `docs/API-NOTES.md` hold the design and what was learned about the mod API; `docs/redesign-v1/BRIEF.md` is the brief the current pane was built from.

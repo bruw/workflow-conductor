@@ -64,7 +64,7 @@ turn.step.stop {"agentId":"a7d5df6f5c088efc8","index":0,"keys":["kind","stopReas
 workflow.call keys: script tool tool_use_id            (tool input is flat on the event, no `e.input`)
 workflow.result keys: ref result text
   result keys: status taskId taskType workflowName runId summary transcriptDir scriptPath
-  transcriptDir: ~/.claude/projects/-home-aturdiev-conductor/<session>/subagents/workflows/wf_612793e3-454
+  transcriptDir: ~/.claude/projects/<project>/<session>/subagents/workflows/wf_612793e3-454
 t=120426 workflow.result  list:["journal.jsonl"]  journalTypes:["launched"]
 t=120430 agent.spawn.before (n1: two)   journal: ["launched"]
 t=120463 agent.spawn.after              journal: ["launched","started"]  {"label":"n1: two","phase":"Alpha"}

@@ -2,6 +2,10 @@
   "name": "conductor",
   "version": "0.1.0",
   "description": "Design a workflow visually, hand it to Claude, watch the run on the same project",
-  "author": { "name": "artdiev" },
+  "author": { "name": "bruw" },
+  "homepage": "https://github.com/bruw/workflow-conductor",
+  "repository": "https://github.com/bruw/workflow-conductor",
+  "license": "MIT",
+  "keywords": ["workflow", "agents", "pane", "mod"],
   "types": "./types/index.d.ts"
 }

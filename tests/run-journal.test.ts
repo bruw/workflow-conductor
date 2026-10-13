@@ -112,7 +112,7 @@ test('a hand-written journal with node ids fills byNode', async () => {
       { type: 'result', agentId: 'a1', result: true },
       { type: 'started', agentId: 'a2', label: 'n2: build api', phase: 'n2 Build' },
       { type: 'started', agentId: 'a3', label: 'n2: build ui', phase: 'n2 Build' },
-      { type: 'started', agentId: 'a4', label: 'n7: not in design', phase: 'n2 Build' },
+      { type: 'started', agentId: 'a4', label: 'n7: not in project', phase: 'n2 Build' },
       { type: 'started', agentId: 'a5', label: 'helper', phase: 'n2 Build' },
       { type: 'result', agentId: 'a2', result: true },
       { type: 'result', agentId: 'a3', result: null },
@@ -121,7 +121,7 @@ test('a hand-written journal with node ids fills byNode', async () => {
     {},
     { runId: 'wf_nodes' },
   )
-  const state = reduceAll(events, new Set(['n1', 'n2']))
+  const state = reduceAll(events, { ids: new Set(['n1', 'n2']) })
 
   expect(state.runId).toBe('wf_nodes')
   expect(state.status).toBe('running')

@@ -2,11 +2,11 @@
 
 ## Tests
 
-Do not write tests and do not run the test suite (`claude plugin test .`, `bun run check`) for this project. The files under `tests/` are stale; leave them alone.
+The tests under `tests/` are live: one file per module, named after it (`tests/project-ops.test.ts` is `src/project/ops.ts`). They test logic through a module's exports (parse, ops, lints, reducers, layout invariants), and the run hooks against the engine. Do not test what is painted: no exact rows, glyphs or wording.
 
 Verify a change with:
 
-- `claude plugin validate .` and `bunx tsc -p .` (errors under `tests/` are known and can be ignored).
+- `bun run check`: `claude plugin validate .`, `bunx tsc -p .` and `claude plugin test .`, all of which must pass with no error.
 - Real paint: `scripts/dev-session.sh` starts Claude Code with this mod in tmux, `scripts/send.sh` sends keys, `scripts/capture.sh` prints the screen and the mod's debug lines.
 
 ## Compatibility
