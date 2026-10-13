@@ -8,12 +8,14 @@ implement and run, and watch the run's progress on the same project.
 
 - Claude Code 2.1.296 or later (the version this was built and tested on), with the Workflow tool.
 - A fullscreen terminal session for the mouse; the keys work without it.
-- Docked beside the transcript, the pane asks the dock for the terminal's width less 30 columns (the transcript keeps a sliver, the prompt stays full width). A dock width you dragged (Claude Code keeps it) wins over that.
+- A terminal 110 columns wide or more, in the fullscreen layout, for the designer: there its pane is docked beside the transcript. In a smaller one Conductor shows its compact view above the prompt instead.
+- Docked, the pane asks the dock for the terminal's width less 30 columns, less 24 in a terminal under 130 (the transcript keeps a sliver, the prompt stays full width). A dock width you dragged (Claude Code keeps it) wins over that.
 - For development: `bun` (the check runs `bunx tsc`).
 
 ## Before you start
 
-- **Use a wide terminal and the docked pane.** With 100 columns or more inside the docked pane, the graph and the detail pane stand side by side. A terminal under 130 columns cannot give the pane that (it asks for the terminal's width less 30); it then gets the stacked screen: the same parts in one column. Above the prompt (inline) the screen is always stacked and short: the detail pane is one row until you open a field, the add list, the goal or a help page.
+- **Use a wide terminal and the docked pane.** The designer has one screen: the graph and the detail pane side by side. Its pane needs 80 columns and 20 rows inside, which a docked pane has from a terminal of 110 columns. A pane with less (above the prompt in a smaller terminal, or a dock dragged narrow) draws no squeezed designer: Conductor goes into its **compact view** in the band above the prompt, which says what the designer needs. Widen the terminal and the designer opens by itself.
+- **`Shift+M` minimizes the designer into the compact view, and expands it again.** Minimized, the transcript has its full width back and the band shows the project and its run. The same key expands it once the band has the keyboard (click the band, or `ctrl+x` `tab`); a click on `[ Shift+M Expand ]` or `/conductor` does too.
 - **A dock width you once dragged is remembered by Claude Code** and wins over the width Conductor asks for. Drag the dock's border to change it.
 - **The pane says when the keyboard is not its own.** While letters go to Claude Code's prompt, the legend and the key hints are dim and the footer says `Input: prompt · click the graph or /conductor`: do one of the two to get the keys back. While the pane has the keyboard, letters are keys on the graph and text in an open field.
 - **Escape always hands the keyboard back to the prompt.** No mod can keep it. Text you typed into a field is not lost: it is saved as an edit (the pane says `n3 changed: notes`, and `u` undoes it) on Escape and on every other way out of a field: an arrow to another field, Enter, a click on the graph, a picker's choice, a `/conductor` command, a prompt you send, an edit from chat, a resize, closing the pane. Press `u` afterwards if you did not mean it.
@@ -79,14 +81,37 @@ Claude works from the project as it is on the board: every answer of its project
 
 Four parts, each in a fixed place: a **header**, the **graph** of the workflow, a **detail pane** for the selected block, and a **last row** with the buttons that hand the project to Claude. The key legend is the header's second row.
 
-- **Wide** (docked, at least 100 columns inside the pane): the graph on the left, the detail pane on the right (about 30% of the width, 38 to 52 columns), a rule between them. `i` hides the detail pane and the graph takes its width (the legend then names `[i] Show details`); `i` again, or anything that needs the pane (`e`, `n`, `g`, `?`), brings it back.
-- **Stacked** (docked and narrower, or inline above the prompt): the same parts in one column, the detail pane under the graph. Docked it has a fixed share of the rows at rest (about 45%) and grows while a field, the add list, the goal or a help page is open. Inline it is one row (its key hints) until one of those is open, the goal has one row and the legend one. Hidden with `i`, it takes no rows.
-- **Header.** Row 1: `conductor / <project name> / agents ≥ 12`, the last part in a colour of its own: one per agent block (the cheapest arm of a branch), `agents = 3` when every block runs once, `agents ≥ 12` where the project holds a block that may run its agents more than once: a pipeline or a parallel, a loop, a verify or a judge, a subworkflow. Nothing typed into a field is read for a count. At the right, the state: `EDITING · saved`, `EDITING · unsaved template` (started from a template, nothing written yet), `EDITING · not saved yet` (a new empty project), `EDITING · replay, not saved`, `DRAFTING` (Claude was asked for a draft and nothing has arrived), `RUNNING · …` / `FINISHED · …` (a run laid over the project), `START · …` (the start screen). The goal is not in the header: it is the first line of the start block. Docked, a rule across the pane stands under the header.
+- **Side by side, always:** the graph on the left, the detail pane on the right (about 30% of the width, 34 to 52 columns), a rule between them. `i` hides the detail pane and the graph takes its width (the legend then names `[i] Show details`); `i` again, or anything that needs the pane (`e`, `n`, `g`, `?`), brings it back.
+- **No room, no designer.** With fewer than 80 columns or 20 rows inside the pane, the pane closes and the compact view takes over (below).
+- **Header.** Row 1: `conductor / <project name> / agents ≥ 12`, the last part in a colour of its own: one per agent block (the cheapest arm of a branch), `agents = 3` when every block runs once, `agents ≥ 12` where the project holds a block that may run its agents more than once: a pipeline or a parallel, a loop, a verify or a judge, a subworkflow. Nothing typed into a field is read for a count. At the right, the state: `EDITING · saved`, `EDITING · unsaved template` (started from a template, nothing written yet), `EDITING · not saved yet` (a new empty project), `EDITING · replay, not saved`, `DRAFTING` (Claude was asked for a draft and nothing has arrived), `RUNNING · …` / `FINISHED · …` (a run laid over the project), `START · …` (the start screen). The goal is not in the header: it is the first line of the start block. A rule across the pane stands under the header.
 - **Header:** `conductor / <name> ▾ / EDITING · saved / agents ≥ 8`: the project's name, its state in a quiet colour, the agents it starts. Short of room the agents go first, then the state. The name is a button: a press on it, or `p`, lists the project's projects. During a run the state is the run's summary.
 - **Legend:** the header's second row, for the keys of the graph and of the pane as a whole. Each key is in brackets with its word after it (`[p] Projects  [⇧+WASD] (Move) Navigate  [n] New  [x] Delete …`), in a fixed order. With Shift the four keys move the block; where the block cannot move the entry is `[WASD] Navigate`. It names only keys that work right now: no `[x] Delete` with nothing selected, no `[o] Open` on a block that holds none, and during a run only what still works. It is one row always: where the room is short the less-used entries are left out; the help page "Keys" has them all.
 - **Last row:** `[r] Implement and Run` and `[q] Claude Review`, centred, and `[c] Clear results` while a run's results show. Each is a button: press it, or type its key. Dim while it cannot be used (an empty project, a run in progress, a field open).
-- **What was last said** (a change and its way back, `Last change: n5 changed: notes · [u] Undo`; a refusal, a question, the run's lock) stands centred in the rule over the last row, on one row; inline, where there is no rule, on the row over the buttons.
+- **What was last said** (a change and its way back, `Last change: n5 changed: notes · [u] Undo`; a refusal, a question, the run's lock) stands centred in the rule over the last row, on one row.
 - **Key hints.** The keys of the detail pane are named on its own last rows, and no key is named in both places: `[Enter] Edit  [i] Hide` at rest; in a field `[↑ ↓] Field  [Enter] Save, back to the graph`, and the header then names only `[Esc] Keys to the prompt` (so too in the add list and in the goal's field, each with its own keys on those rows); with a help page open, `[? h] Next page  [x] Close help`.
+
+### The compact view
+
+What Conductor draws in the band above the prompt while the designer is minimized: by you (`Shift+M`), or because its pane has no room. It is not a small designer. It has no graph and no detail pane, and nothing is edited in it (ask Claude in the prompt: edits from chat still reach the project).
+
+```
+          conductor / demo / agents ≥ 9                                            COMPACT VIEW [-]
+          Goal: Answer a question from many sources: search several ways, read deeply, check f…
+          Projects  demo  splashtest  untitled  untitled-2
+          [ Shift+M Expand ]  The full designer needs a terminal 110+ columns wide
+```
+
+(100 columns, from a real session; the conductor stands in the ten cells at the left of the first two rows, left out here.)
+
+- **The conductor**, as in the designer's header: it conducts while a run is on.
+- **Row 1:** `conductor / <project> / agents ≥ 9`, and at the right `COMPACT VIEW` (no room for the designer) or `MINIMIZED` (your `Shift+M`).
+- **Row 2:** a run in progress, as a bar and in words (`████████     RUNNING · 6/9 agents done · 53.8k tokens · 4.1s`, the project's name first where it is not the open one); a run that is over stays on its own project until its results are put away. With no run, the project's goal; with no project open, what to do next.
+- **Projects:** the saved projects, in one row. A click on a name (or, with the keyboard in the band, `tab` to it and Enter) makes it the open project. In a terminal too small for the start screen this is where a project is picked.
+- **The last row:** `[ Shift+M Expand ]`, and what the designer needs where its pane had no room: a wider terminal, the fullscreen layout, a wider dock, a taller terminal.
+- **Fewer rows, fewer parts:** under four rows the projects go, under three the last row, and one row alone is the name, the run and the button on one line.
+- **Back to the designer:** `Shift+M` with the keyboard in the band (plain `m` does too: the band's keys have no case), a click on the button, or `/conductor`. Where the compact view came up by itself, widening the terminal to 110 columns opens the designer by itself.
+- **It comes up by itself** when a run starts on a project, or Claude edits one, in a terminal too small for the pane; the band then shows what the pane would.
+- The band is Claude Code's: its `[-]` (or `ctrl+x` `ctrl+a`) hides it, and a survey takes its place while one is up.
 
 ### The graph
 
@@ -207,6 +232,7 @@ Letters are keys while the pane has the keyboard and no field is open. Case matt
 | `1` `2` | step a knob of the selected block, as its chips show: `1` model (inherit → haiku → sonnet → opus → inherit), `2` effort (inherit → low → medium → high → xhigh → max → inherit). Only the ones the block has |
 | `o` `b` | open the selected container as the view / back up one level |
 | `i` | hide or show the detail pane |
+| `Shift+M` | minimize the designer into the compact view above the prompt; there, with the keyboard in the band, expand it again |
 | `u` `y` | undo and redo. Every change to a project can be undone: add, delete, move, retype, a field, a knob, the goal, a drop, and what Claude changed from chat. Fifty steps per project, for the session |
 | `q` | Claude review: puts `Review the "<name>" workflow project as it is on the board now (read it first, it may have changed by hand): is the structure right for its goal, what is missing, what is wasteful?` in the prompt, not sent; the keys go to the prompt |
 | `r` | implement and run: hands the project to Claude at once (the prompt `Implement and run the "<name>" workflow project …` is sent for you) and the keys go to the prompt. Claude first confirms the design and asks what to run it on, in chat; your answer starts the work. A toast says what the project implies: `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats) · problems in n3, n5`. Where the prompt box already holds text the request is left there for you to send |

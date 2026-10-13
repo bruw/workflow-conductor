@@ -11,6 +11,7 @@ import { USAGE_KEYS } from '../src/run/journal'
 import type { Handoff, Tracker } from '../src/run/tracker'
 import { buildRunRows, togglePhase } from '../src/ui/rail'
 import type { Part, Row } from '../src/ui/rail'
+import { initialShell } from '../src/ui/compact'
 import { FADED, GLYPH, PANE_ID, PANE_TITLE, TEXT } from '../src/ui/theme'
 
 import { paneArgs, runBoardOf } from './project'
@@ -33,6 +34,8 @@ const runScriptAtom = atom({ plugin: 'conductor', key: 'runScript' } as const, n
 // The designer's state (project.tsx owns it): read and written here only so the selection can follow the run.
 const projectAtom = atom({ plugin: 'conductor', key: 'project' } as const, null)
 const projectUiAtom = atom({ plugin: 'conductor', key: 'projectUi' } as const, initialUi())
+/** Where the designer is (project.tsx owns it): written here only so a run whose pane could not open is shown in the band. */
+const shellAtom = atom({ plugin: 'conductor', key: 'shell' } as const, initialShell())
 
 // The reducer leaves optional fields present but undefined; the stored copy is plain data.
 const plain = (state: RunState): RunState => JSON.parse(JSON.stringify(state)) as RunState
@@ -158,6 +161,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         // The board comes up with the run. Where nobody handed the project off, it is said where the run went.
         if (own !== null) {
           const pane = await $.ui.open(paneArgs(false)).catch(() => undefined)
+          // Not placed (nobody asked, a narrow terminal): the run is shown in the band above the prompt.
+          if (pane?.isPlaced === false) await update($, shellAtom, held => (held.minimized === 'no' ? { minimized: 'auto' as const, why: 'narrow' as const } : held))
           if (!tracker.handedOff()) $.ui.toast(reusedToast(own.name, pane?.isPlaced !== false))
         }
 

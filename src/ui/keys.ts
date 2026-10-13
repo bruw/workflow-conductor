@@ -30,6 +30,7 @@ export type KeyOp =
   | 'clearRun'
   | 'projects'
   | 'help'
+  | 'minimize'
   /** No key of its own: the add list's `cancel`. */
   | 'cancel'
 
@@ -65,7 +66,11 @@ export const KEY_OPS: Record<string, KeyOp> = {
   p: 'projects',
   '?': 'help',
   h: 'help',
+  M: 'minimize',
 }
+
+/** The key that minimizes the pane into the band above the prompt, and expands the band into the pane: one key for both. */
+export const MINIMIZE_KEYS = 'Shift+M'
 
 /** Characters that arrive at once are keys up to this many; more is a paste. */
 export const BURST_MAX = 8
@@ -74,7 +79,7 @@ export const BURST_MAX = 8
 export const PASTE_NOTICE = 'pasted text is not keys: nothing was done'
 
 /** The keys that still act while a run locks the project. */
-export const LOCKED_OPS: readonly KeyOp[] = ['left', 'right', 'up', 'down', 'open', 'back', 'detail', 'help', 'clearRun', 'projects']
+export const LOCKED_OPS: readonly KeyOp[] = ['left', 'right', 'up', 'down', 'open', 'back', 'detail', 'help', 'clearRun', 'projects', 'minimize']
 
 /** What a key the table does not hold says. */
 export function unboundNotice(key: string): string {
@@ -151,6 +156,7 @@ export function legendItems(state: LegendState): Legend {
   const save: LegendItem = { keys: 'Enter', word: 'Save, back to the graph', core: true }
   const pages: LegendItem[] = [{ keys: '? h', word: 'Next page', core: true }, { keys: 'x', word: 'Close help', core: true }]
   const help: LegendItem = { keys: '?', word: 'Help', core: true }
+  const minimize: LegendItem = { keys: MINIMIZE_KEYS, word: 'Minimize', core: false }
   if (state.ring === 'start') {
     const choose: LegendItem[] = [{ keys: '↑ ↓', word: 'Choose', core: true }, { keys: 'Enter', word: 'Open', core: true }]
     const back: LegendItem[] = state.back ? [{ keys: 'p', word: 'Back', core: true }] : []
@@ -159,7 +165,7 @@ export function legendItems(state: LegendState): Legend {
     // A saved project is renamed and deleted where it is listed.
     const row: LegendItem[] = state.saved ? [{ keys: 'e', word: 'Rename', core: true }, { keys: 'x', word: 'Delete', core: true }] : []
     // A help page has the detail pane in place of the list: the keys that walk the list still act, and are the header's.
-    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, help], actions: [], detail: [...choose, ...row] }
+    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, minimize, help], actions: [], detail: [...choose, ...row] }
   }
   const edits = !state.locked
   // The run and the review are asked of Claude, not done to the project: they are pressed on the last row. In a field
@@ -203,6 +209,7 @@ export function legendItems(state: LegendState): Legend {
     state.nested && { keys: 'b', word: 'Back', core: true },
     edits && state.undo && { keys: 'u', word: 'Undo', core: false },
     edits && state.redo && { keys: 'y', word: 'Redo', core: false },
+    minimize,
     help,
   ]
   // Enter opens the selected block's fields (the Down arrow does too: the help page says so).

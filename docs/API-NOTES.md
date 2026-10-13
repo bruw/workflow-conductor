@@ -490,6 +490,88 @@ hooks module cc-plugin-agents-md@builtin (native): prompt.submit nested in condu
 - A `command.run` answer's `context` still works for a draft (`/conductor <description>`): the brief is read on the turn the submitted prompt starts (S4).
 - `$.prompt.submit` from a `$.clock.after` callback out of a key's handler is accepted (S4's option 1, now tested).
 
+## S18. Does a mod's tree in the band (`AbovePrompt`) draw at any width, unasked? Yes. What room does it get?
+
+S18 to S22 were added on 2026-10-13: same version and surface, tmux at 80x24, 100x40, 112x40, 120x40 and 135x40,
+fullscreen layout. Method: `spikes/band/` beside Conductor (`CONDUCTOR_EXTRA_PLUGIN_DIRS=spikes/band
+scripts/dev-session.sh`, then `/band on`); its log is `.capture/band.jsonl`. No model turn was run.
+
+```
+band.render {"viewport":{"columns":80,"rows":24,"isFullscreen":true},"props":{"maxRows":6,"bodyColumns":75,"scroll":{"offset":0,"bodyRows":5}}}
+band.render {"viewport":{"columns":120,"rows":40,…},"props":{"maxRows":15,"bodyColumns":115,"scroll":{…,"bodyRows":14}}}
+band.render {"viewport":{"columns":24,"rows":40,…},"props":{"maxRows":15,"bodyColumns":19,…},"pane":{…"isPlaced":true}}   (a pane docked)
+band.render {"viewport":{"columns":80,"rows":24,…},"props":{"maxRows":2,"bodyColumns":75,…},"pane":{…}}                   (a pane inline)
+```
+
+- A hook on `ui.render` for `{ component: 'AbovePrompt' }` that returns a tree is drawn at once, at 80 columns
+  too; nothing is asked and nothing waits, unlike a pane (S12).
+- Room: `bodyColumns` is the terminal's columns less 5. `maxRows` was 6 or 7 of 24 rows and 15 of 40. A taller
+  tree is cut to `scroll.bodyRows` with `↓ n more` under it (30 filler rows at 40: 12 shown, `↓ 18 more`).
+- **Beside a docked pane the band has the transcript's column: 19 cells** (and `e.viewport.columns` is then 24,
+  the column's, not the terminal's). Nothing useful fits: pass while the pane is docked.
+- **An inline pane and the band share the bottom slot:** with the pane inline the band's `maxRows` fell from 6
+  to 2 or 3 (80x24) and from 15 to 11 (100x40). One of the two, not both.
+- Collapsed by the person (ctrl+x ctrl+a, `[-]`) the engine draws `▸ plugin panel hidden · ctrl+x ctrl+a or click
+  to show` and the mod draws nothing.
+
+## S19. What tick rate does the band keep? 30 drawings a second from the hooks module, about 21 Hz in a `Client`.
+
+```
+hook.tick {"askedMs":33,"calls":88,"elapsedMs":3002,"draws":90,"drawsHz":30}
+client    {"ev":"tick","askedMs":33,"calls":63,"elapsedMs":3013,"hz":20.9,"maxGapMs":60,"renders":63}
+```
+
+- `$.clock.every(33)` with `$.ui.invalidate('ui.render')`: every call was a drawing of the band, 30 a second.
+- A `Client` in the band asking `surface.every(33)` got 21 Hz, each tick a render, focused or not. (S6 measured
+  60 Hz in a pane at 16 ms; 16 ms was not asked here.)
+- Collapsed, the Client's ticks stop (no window was posted while hidden).
+- Both are far above what the persona needs (a beat is 300 ms).
+
+## S20. Do a band Button's hotkeys work from the prompt? A digit yes (empty prompt), a letter only once the band is focused.
+
+```
+(prompt empty, `1`)          band.press {"name":"one"}
+(prompt empty, `e`)          nothing: `e` is typed into the prompt
+(ctrl+x tab, then `e`)       band.press {"name":"expand","result":{"isPlaced":true}}
+```
+
+- A Button with `hotkey="1"` is pressed by a bare `1` in an empty prompt: no focus needed. So is every other
+  digit a Button names, which costs the person that digit as the first character of a prompt.
+- A letter hotkey needs the band to hold the keys (ctrl+x tab or a click).
+- `$.ui.open({ focus: true })` from a band Button's `onPress` placed the pane but did not give it the keys
+  (`isFocused: false`; an `m` after it was typed into the prompt). The pane's own hotkey was not reached by
+  ctrl+x tab from tmux either; not chased, Conductor's pane takes the keys its own way (the catcher).
+
+## S21. Can the mod move between pane and band? Yes: an open from a band press is placed at any width; a close gives the band its room back.
+
+```
+(80 columns)   band.press expand {"isPlaced":true}   pane.render {"placement":"inline","bodyColumns":76}
+(120 columns)  band.press expand {"isPlaced":true}   pane.render {"placement":"dock","bodyColumns":95}
+(/band min)    band.render {"viewport":{"columns":120,…},"props":{"maxRows":15,"bodyColumns":115}}
+```
+
+- The press counts as the person's: placed at 80 columns (inline) and at 120 (docked).
+- With no `columns` asked the dock left the transcript 24 cells at every width tried: body 87 at 112, 95 at
+  120, 107 at 132, 110 at 135.
+- After `$.ui.close` the band is redrawn with the terminal's width again; no call was needed for it.
+
+## S22. Does a resize redraw the band, and is an open from that drawing placed? Yes to both, from 112 columns, never asked.
+
+```
+band.render {"viewport":{"columns":112,…}}                                    (tmux resize-window -x 112, from 100)
+[DEBUG] ui.open conductor-band band-pane (unasked, 112 columns): placed
+auto.open {"columns":112,"opened":{"isPlaced":true}}    pane.render {"placement":"dock","bodyColumns":87}
+pane.render {"viewport":{"columns":100,…},"placement":"inline","bodyColumns":96}   (narrowed back to 100)
+```
+
+- Widening redraws the band with the new `viewport.columns`; narrowing redraws a placed pane with `placement:
+  'inline'`. So both directions can be acted on from a drawing: open when it would dock, close when it went inline.
+- The open was logged `unasked` and placed at 112, 132 and 135 columns, in a session that had never opened that
+  id, 12 s and 25 s after the last command. **This is not what S12 saw** (unasked waits under 144) and not what
+  the types say; S12's open came from a `tool.call` hook mid-turn. Not explained: keep the `isPlaced` check.
+- Not tried: a survey holding the band (`hasSurvey`), the main screen (not fullscreen), a kept dock width
+  narrower than the default, the desktop surface, a model turn running under the band.
+
 ## Other findings
 
 - Hot reload of a `--plugin-dir` mod is not immediate when the session is idle (the watch drops to a 30 s

@@ -30,7 +30,6 @@ import {
   REVEAL_STEPS,
   SCRATCH_PREFIX,
   TEXT_KNOBS,
-  WIDE_MIN_COLUMNS,
   addHeading,
   agentsOf,
   applyMessage,
@@ -76,6 +75,7 @@ import {
   startProject,
   startEntries,
   filterText,
+  fitsFull,
   typePicker,
   viewRootOf,
   withoutKeys,
@@ -89,10 +89,12 @@ import { replayProjectEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
 import { NOT_SET, UNMAPPED_ID, canOpen } from '../src/ui/graph-layout'
 import { parseGraphMessage } from '../src/ui/graph-model'
+import { COMPACT_BAR_W, LIST_GAP, LIST_LABEL, compactView, initialShell, whyCompact, wouldDock } from '../src/ui/compact'
+import type { CompactWhy, Minimized } from '../src/ui/compact'
 import { ENTER, KEY_OPS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
-import { FAILED, fmtTokens } from '../src/ui/rail'
-import { BEAT_MS, GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, draftPose, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene, waitScene } from '../src/ui/persona'
+import { FAILED, bar, fmtTokens } from '../src/ui/rail'
+import { BEAT_MS, GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, draftPose, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene, waitScene } from '../src/ui/persona'
 import type { PersonaSpan, Pose } from '../src/ui/persona'
 import { cellWidth, clip, cutCells, firstLines, oneLine, padCells, sanitize, wrapText } from '../src/ui/text'
 import { ACCENT, FADED, GLYPH, PANE_ID, PANE_TITLE, RULE, TEXT } from '../src/ui/theme'
@@ -211,15 +213,13 @@ export const BOX_POLL_MS = 600
 /** The header's rows: the persona's two, the name on the first. */
 const HEAD_ROWS = 2
 const EDIT_HINT = 'click a field of the block, or press the Down arrow to reach the name'
-/** The graph's region is never asked to be shorter than this while the detail pane, under it, has rows to give. */
-const GRAPH_LEAST_ROWS = 3
-/** Stacked, the detail pane at rest takes this share of the rows between header and footer. */
-const DETAIL_REST_SHARE = 0.45
-/** The detail pane's last rows name the keys that act on it: at most this many docked, one inline or where the pane is short. */
+/** The graph and the detail pane, side by side, are never asked to be shorter than this. */
+const MAIN_LEAST_ROWS = 5
+/** The detail pane's last rows name the keys that act on it: at most this many, one where the pane is short. */
 const HINT_ROWS = 2
 /** Cells between two buttons of the pane's last row. */
 const ACTION_GAP = 4
-/** What is said stands in the rule over the footer, docked: this many cells of rule are kept at each side of it. */
+/** What is said stands in the rule over the footer: this many cells of rule are kept at each side of it. */
 const SAID_RULE_W = 3
 /** Rows asked for when the pane sits inline above the prompt. */
 export const PANE_ROWS = 28
@@ -427,6 +427,8 @@ const draftBeatAtom = atom({ plugin: 'conductor', key: 'draftBeat' } as const, 0
 /** The gesture the header's persona holds; at rest it is `idle`. */
 const personaAtom = atom({ plugin: 'conductor', key: 'persona' } as const, 'idle')
 const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initialTimes())
+/** Where the designer is: in its pane, or minimized into the band above the prompt (the last hook of this file draws it there). */
+const shellAtom = atom({ plugin: 'conductor', key: 'shell' } as const, initialShell())
 /** The tracked run's script file (run.tsx writes it), and the project an `attach` drew of that run. */
 const runScriptAtom = atom({ plugin: 'conductor', key: 'runScript' } as const, null)
 
@@ -830,6 +832,76 @@ const watchBox = ($: EngineInterface): void => {
     })
   }
   look()
+}
+
+/** The band's Button that expands: `m` presses it while the band holds the keys, with Shift or without (a Button's hotkey has no case). */
+const EXPAND_KEY = 'conductor-expand'
+const EXPAND_HOTKEY = 'm'
+const BAND_PROJECT_KEY = 'conductor-project:'
+/** The band lists the saved projects again when its listing is older than this. */
+const LISTING_MS = 4000
+/** The saved projects' names, as the band last listed them. */
+let bandListing: { at: number; names: string[] } = { at: 0, names: [] }
+/** The terminal's size at which the band last opened the pane by itself: it is not tried again until the size changes. */
+let autoTried = ''
+
+/** Whether a minimize is on its way: until the pane is gone its drawings ask for no other, and do not take it back. */
+let minimizing = false
+/** The pane is given this long to be drawn with the room it has before a pane short of room is minimized. */
+const MINIMIZE_DELAY_MS = 32
+
+/**
+ * The designer leaves its pane for the band above the prompt (band.tsx draws it there): by the person's key, or
+ * because the pane has no room for it (`why`). What was typed into a field is saved first. From a clock callback:
+ * a drawing asks for it too, and a drawing closes nothing.
+ */
+const minimize = ($: EngineInterface, by: Exclude<Minimized, 'no'>, why: CompactWhy | null = null): void => {
+  if (minimizing) return
+  minimizing = true
+  $.clock.after(by === 'auto' ? MINIMIZE_DELAY_MS : 0, () => {
+    void (async (): Promise<void> => {
+      await flushDrafts($)
+      await update($, uiAtom, held => (held.editing || held.picker !== null || held.help > 0 ? { ...held, editing: false, freshId: null, picker: null, help: 0 } : held))
+      await update($, shellAtom, () => ({ minimized: by, why }))
+      await $.ui.close({ id: PROJECT_PANE_ID }).catch(() => undefined)
+    })()
+      .catch(() => undefined)
+      .then(() => {
+        minimizing = false
+        $.ui.invalidate('ui.render')
+      })
+  })
+}
+
+/**
+ * The band's way back: the pane is opened again, `asked` with the keyboard (the person's key or click), else without
+ * (the terminal was widened). `columns` is the terminal's width as the band's drawing saw it. A pane that still has
+ * no room minimizes itself anew, and the band says what it is short of.
+ */
+const expand = async ($: EngineInterface, asked: boolean, columns?: number): Promise<void> => {
+  terminalColumns = columns ?? terminalColumns
+  const opened = await $.ui.open(paneArgs(asked)).catch(() => undefined)
+  if (opened?.isPlaced === false) return
+  // The open came from a press in the band, which holds the keyboard: the pane is shown without it (API-NOTES S20).
+  // Once it is drawn it takes the keys as it does after a click on the graph.
+  if (asked) $.clock.after(FOCUS_DELAY_MS * 2, () => void retake($, false).catch(() => undefined))
+}
+
+/** A saved project picked in the band: read as it is now and made the open one, for the band to name and the pane to show. */
+const showSaved = async ($: EngineInterface, name: string): Promise<void> => {
+  await flushDrafts($)
+  const held = await read($, uiAtom)
+  if (held.name === name && held.status === 'ready') return
+  const text = await $.fs.read(projectFile(await $.session.root(), name)).catch(() => undefined)
+  const step = openProject(name, typeof text === 'string' ? text : undefined, held)
+  if (step.ui.status !== 'ready') return
+  await update($, projectAtom, () => step.project)
+  await update($, uiAtom, () => step.ui)
+}
+
+/** A pane opened with nobody asking, in a terminal too narrow for it to be placed: the designer is in the band instead. */
+const bandIfWaiting = async ($: EngineInterface, opened: { isPlaced: boolean } | undefined): Promise<void> => {
+  if (opened?.isPlaced === false) await update($, shellAtom, held => (held.minimized === 'no' ? { minimized: 'auto' as const, why: 'narrow' as const } : held))
 }
 
 /** Says one thing on the message row. */
@@ -1306,6 +1378,11 @@ const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
     return false
   }
   const op = KEY_OPS[key]
+  if (op === 'minimize') {
+    minimize($, 'person')
+
+    return false
+  }
   const helping = (ui.help ?? 0) > 0
   const marked = startEntries(ui.saved ?? [])[ui.startMark ?? 0]
   const asked = ui.deleteAsk ?? null
@@ -1385,6 +1462,11 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
     await say($, unboundNotice(key))
 
     return true
+  }
+  if (op === 'minimize') {
+    minimize($, 'person')
+
+    return false
   }
   if (op === 'up' || op === 'down' || op === 'left' || op === 'right') beat($)
   // What was typed into a field and not sent is saved before the key acts.
@@ -1822,11 +1904,12 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const offered = action === 'write' && takeOffered()
     if (offered || drafted) offerDrafted(name)
     const opened = await $.ui.open(paneArgs(offered && !drafted)).catch(() => undefined)
+    await bandIfWaiting($, opened)
     if (offered && !drafted) settleRing($)
     $.clock.after(FLASH_CLEAR_MS, () => {
       void update($, uiAtom, held => clearFlash(held, seq))
     })
-    // A project that was not on the board, in a terminal too narrow for the pane to open unasked: nothing shows, so Claude says the way in.
+    // A project that was not on the board, in a terminal too narrow for the pane to open unasked: the band shows it, and Claude says the way to the designer.
     const report = editReport(edit.project, edit, revisions[name] ?? 0)
 
     const notes = [
@@ -2024,12 +2107,22 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const draftBeats = (ui.drafting ?? null) !== null ? await read($, draftBeatAtom) : 0
     const pose: Pose = ui.drafting === 'show' ? draftPose(draftBeats) : asked !== 'idle' ? asked : ((over ? runPose(run.status, clock) : null) ?? 'idle')
     const splashed = await read($, splashedAtom)
-    const dock = e.props.placement !== 'inline'
-    // Docked and wide the graph and the detail pane stand side by side; otherwise the same parts are one column.
-    const wide = dock && bodyColumns >= WIDE_MIN_COLUMNS
     // Whether the pane holds the keyboard: Escape hands it to the prompt, and a field left open then is closed to the eye.
     const focused = e.props.isFocused !== false
     const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 48
+    // One screen: the graph and the detail pane side by side. A pane with no room for it (inline above the prompt in
+    // a small terminal, a dock dragged narrow) draws none of it: the designer goes into the band, which says why.
+    const shell = await read($, shellAtom)
+    if (!fitsFull(bodyColumns, bodyRows)) {
+      if (!minimizing) minimize($, 'auto', whyCompact({ dock: e.props.placement !== 'inline', bodyColumns, bodyRows, fullscreen: e.viewport?.isFullscreen === true }))
+
+      return <Text color={FADED}>{`${GLYPH.diamond} ${PROJECT_PANE_TITLE}: no room here for the designer, it goes to the band above the prompt`}</Text>
+    }
+    // Drawn in its pane again: the band has nothing to show. Asked of the engine, not taken from this drawing: one
+    // that was on its way when the pane closed is of a pane that is gone. Written from a clock callback: a drawing changes no state.
+    if (shell.minimized !== 'no' && !minimizing && (await $.ui.panes()).some(pane => pane.id === PROJECT_PANE_ID && pane.isPlaced)) {
+      $.clock.after(0, () => void update($, shellAtom, held => (minimizing ? held : initialShell())))
+    }
     const node = project === null || ui.selectedId === null ? undefined : findNode(project, ui.selectedId)
     const problems = project ? lint(project) : []
     // The start screen: no project is open yet, one of its rows is marked.
@@ -2151,7 +2244,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       }
       return plan(levels - 1)
     }
-    // A rule across the pane: under the header and above the footer; stacked, between the graph and the detail pane too.
+    // A rule across the pane: under the header and above the footer.
     const rule = () => <Text color={RULE}>{'─'.repeat(columns)}</Text>
     // The pane's last row: the keys that ask something of Claude or put a run away, as buttons, centred. One row always,
     // blank where there is none to press (the start screen), so the pane keeps its shape. One that cannot be pressed now is dim.
@@ -2180,11 +2273,9 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         })}
       </Box>
     )
-    // The rows. Header, rules and footer keep theirs; the graph and the detail pane share the rest. Docked, a rule
-    // stands under the header and one above the footer, and `stacked` (the detail pane under the graph) one between the two.
-    // Inline the rows are few: no rule, what is said has the row over the buttons, and the pane never asks for more rows than it has (it would scroll, and the header leave).
-    const footRows = dock ? 1 : 2
-    const mainRowsFor = (stacked: boolean): number => Math.max(wide ? GRAPH_LEAST_ROWS + 2 : dock ? HINT_ROWS + 1 : 2, bodyRows - HEAD_ROWS - (dock ? 2 : 0) - (stacked ? 1 : 0) - footRows)
+    // The rows. Header, rules and the row of buttons keep theirs: a rule stands under the header and one above the
+    // buttons. The graph and the detail pane, side by side, both have all the rest.
+    const mainRows = Math.max(MAIN_LEAST_ROWS, bodyRows - HEAD_ROWS - 2 - 1)
     // The key catcher, the ring's place while no field is open: in the tree, where it is the pane's first stop, and not drawn.
     const catcher = () =>
       Input && (
@@ -2200,20 +2291,13 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           />
         </Box>
       )
-    // What is said (a change and its way back, a refusal, where the keys are), on one row, centred. Docked it stands in
-    // the rule over the footer, so nothing moves when something is said; inline it has the row over the keys.
+    // What is said (a change and its way back, a refusal, where the keys are), on one row, centred. It stands in
+    // the rule over the footer, so nothing moves when something is said.
     type Said = { text: string; color: 'warning' | typeof FADED | undefined } | null
-    const saidW = Math.max(1, columns - (dock ? 2 * (SAID_RULE_W + 1) : 0))
+    const saidW = Math.max(1, columns - 2 * (SAID_RULE_W + 1))
     const saidRow = (said: Said) => {
       // What is said may name a block: its name is the project file's.
       const text = said === null ? '' : clip(oneLine(said.text), saidW)
-      if (!dock) {
-        return (
-          <Box key="project-message" flexDirection="column" alignItems="center" height={1}>
-            <Text color={said?.color ?? TEXT} wrap="truncate-end">{text === '' ? ' ' : text}</Text>
-          </Box>
-        )
-      }
       if (text === '') return rule()
       const wide = cellWidth(text)
       const left = Math.max(0, Math.floor((columns - wide - 2) / 2))
@@ -2225,12 +2309,11 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         </Text>
       )
     }
-    // The keys that act on the detail pane, for its last rows: two rows docked, one inline or where the pane is short.
-    const hintsOf = (items: readonly LegendItem[], width: number, rows: number): LegendItem[][] => legendRows(items, width, dock && rows >= 8 ? HINT_ROWS : 1)
+    // The keys that act on the detail pane, for its last rows: two rows, one where the pane is short.
+    const hintsOf = (items: readonly LegendItem[], width: number, rows: number): LegendItem[][] => legendRows(items, width, rows >= 8 ? HINT_ROWS : 1)
     // The detail pane: its content, and on its last rows the keys that act on it.
-    // It is as wide as the pane, and its rows are indented by `left` cells: beside the graph those are the graph's, which
-    // is laid over them; under it there are none. So a field typed in has the pane's full width, the one width the
-    // engine wraps it at (S16). Taller than its rows, it is moved up until the `keep` item (the field typed in) ends in view.
+    // It is as wide as the pane, and its rows are indented by `left` cells: the graph's, which is laid over them. So a
+    // field typed in has the pane's full width, the one width the engine wraps it at (S16). Taller than its rows, it is moved up until the `keep` item (the field typed in) ends in view.
     const detailBox = (rows: number, hints: readonly (readonly LegendItem[])[], items: readonly Item[], left: number) => {
       const room = rows - hints.length
       const kept = items.findIndex(item => item.keep)
@@ -2252,10 +2335,10 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       )
     }
     // One column of margin at each side: `columns` is the body's less the two. The margin is each part's own, not the
-    // frame's, which would take the pane's full width from the detail pane. Beside the graph the detail pane has the
-    // main rows to itself and the graph is laid over its left. `detail` is null while the detail pane is hidden.
+    // frame's, which would take the pane's full width from the detail pane. The detail pane has the main rows to
+    // itself and the graph is laid over its left. `detail` is null while the detail pane is hidden: the graph has it all.
     const margin = (children: RenderChildren) => <Box flexDirection="column" paddingLeft={1} paddingRight={1}>{children}</Box>
-    const frame = (catching: boolean, head: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, beside: boolean, mainRows: number, said: Said, actions: RenderChildren) => (
+    const frame = (catching: boolean, head: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, said: Said, actions: RenderChildren) => (
       <Box flexDirection="column" position="relative">
         <Box flexDirection="row" paddingLeft={1} paddingRight={1}>
           <Box key="project-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
@@ -2267,21 +2350,17 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         </Box>
         {/* After the header: the name there is a stop before the catcher, so the Down arrow still goes from the catcher to the detail pane. */}
         {catching && catcher()}
-        {dock && margin(rule())}
-        {beside ? (
+        {margin(rule())}
+        {detail !== null ? (
           <Box flexDirection="column" height={mainRows}>
             {detail}
           </Box>
         ) : (
-          <Box flexDirection="column">
-            {margin(graph)}
-            {dock && detail !== null && margin(rule())}
-            {detail}
-          </Box>
+          margin(graph)
         )}
         {margin([saidRow(said), actions])}
-        {beside && (
-          <Box position="absolute" top={HEAD_ROWS + (dock ? 1 : 0)} left={1} flexDirection="row" height={mainRows}>
+        {detail !== null && (
+          <Box position="absolute" top={HEAD_ROWS + 1} left={1} flexDirection="row" height={mainRows}>
             {graph}
             <Box width={3} flexShrink={0}>
               <Text color={RULE}>{Array.from({ length: mainRows }, () => ' │ ').join('\n')}</Text>
@@ -2339,7 +2418,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         const drawn = wordmark()
         const mark = columns >= drawn.width + 2 && bodyRows >= sceneRows + drawn.lines.length + 3 ? drawn : null
         return (
-          <Box flexDirection="column" paddingLeft={1} paddingRight={1} height={dock ? bodyRows : undefined} justifyContent="center">
+          <Box flexDirection="column" paddingLeft={1} paddingRight={1} height={bodyRows} justifyContent="center">
             <Box key="project-splash" flexDirection="column" alignItems="center" height={sceneRows} flexShrink={0}>
               {'Client' in els ? <els.Client key={SPLASH_KEY} module="./splash.tsx" width="100%" height={sceneRows} props={(waiting ? { rows: sceneRows, beat: draftBeats } : { rows: sceneRows }) as never} /> : spanRows((waiting ? waitScene(draftBeats, columns, sceneRows) : splashScene(2, columns, sceneRows)).lines)}
             </Box>
@@ -2366,9 +2445,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     if (starting) {
       const saved = ui.saved ?? []
       const helping = (ui.help ?? 0) > 0
-      const beside = wide
-      const detailW = beside ? detailWidth(columns) : columns
-      const graphW = beside ? columns - detailW - 3 : columns
+      const detailW = detailWidth(columns)
+      const graphW = columns - detailW - 3
       // The marked row's project, read-only: a saved one from its file (kept from the listing, read again after a reload), a template made anew.
       let shown: Project | null = null
       if (marked?.kind === 'saved') {
@@ -2378,7 +2456,6 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         }
         shown = previews[marked.id] ?? null
       } else if (marked && marked.kind !== 'recording' && marked.kind !== 'reset') shown = TEMPLATES.find(one => one.id === marked.id)?.make() ?? emptyProject(ui.name)
-      const mainRows = mainRowsFor(dock && !wide)
       // The keys: the list's on the detail pane's last rows, the rest in the header.
       // A name is typed in its field only while the pane holds the keyboard: Escape hands the keys to the prompt, and the field is closed to the eye.
       const renaming = Input !== null && focused ? (ui.renaming ?? null) : null
@@ -2432,7 +2509,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           </Box>
         ),
       }
-      const detailRows = beside ? mainRows : Math.max(Math.min(HINT_ROWS + 1, mainRows), Math.min(mainRows - Math.max(GRAPH_LEAST_ROWS, Math.floor(mainRows * (1 - DETAIL_REST_SHARE) * 0.6)), helping ? mainRows : entries.length + 8))
+      const detailRows = mainRows
       const hints = hintsOf(keys.detail, detailW, detailRows)
       const contentRows = Math.max(0, detailRows - hints.length)
       // Where the rows that open no project start: the first replay.
@@ -2460,11 +2537,11 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       })
       const content = helping ? helpItems(ui.help, undefined, detailW, contentRows, true) : listed
 
-      const box: GraphBox = { columns: graphW, rows: Math.max(1, beside ? mainRows : mainRows - detailRows) }
-      const graphRows = beside ? mainRows : mainRows - detailRows
+      const graphRows = mainRows
+      const box: GraphBox = { columns: graphW, rows: graphRows }
       graphBox = box
-      // Above it: the header's rows, and docked the rule under them.
-      graphArea = graphRows < 1 || !('Client' in els) ? null : { top: HEAD_ROWS + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
+      // Above it: the header's rows, and the rule under them.
+      graphArea = !('Client' in els) ? null : { top: HEAD_ROWS + 1, left: 1, columns: graphW, rows: graphRows }
       drawnCatcher = Input !== null ? catcherKey() : ''
       fieldsDrawn = false
       const stops = [ui.status, ui.name, saved.length, helping, listing, renaming ?? ''].join('|')
@@ -2478,9 +2555,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         // The agents the marked row's project starts, where it has blocks to count.
         headOf(shown !== null && !isBlank(shown) ? factsLine(shown) : null, keys.header),
         shown ? preview : <Box key="project-graph" width={graphW} height={graphRows} flexShrink={0} />,
-        detailBox(detailRows, hints, content, beside ? 1 + graphW + 3 : 0),
-        beside,
-        mainRows,
+        detailBox(detailRows, hints, content, 1 + graphW + 3),
         message === null ? null : { text: message, color: focused ? 'warning' : FADED },
         actionsOf(keys.actions),
       )
@@ -2496,11 +2571,10 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const hidden = (ui.detailHidden === true || drafting) && !picking && !helping
 
     // The widths. Beside the graph the detail pane has about a third, and one column of rule stands between them.
-    const beside = wide && !hidden
-    const detailW = beside ? detailWidth(columns) : columns
-    const graphW = beside ? columns - detailW - 3 : columns
-    // The cells before the detail pane's first: beside the graph its margin, the graph and the rule; under it none.
-    const detailLeft = beside ? 1 + graphW + 3 : 0
+    const detailW = hidden ? columns : detailWidth(columns)
+    const graphW = hidden ? columns : columns - detailW - 3
+    // The cells before the detail pane's first: its margin, the graph and the rule.
+    const detailLeft = hidden ? 0 : 1 + graphW + 3
     // The width the engine wraps a field at: the cells from there to the pane's edge, less the four it keeps for its Enter mark (S16).
     const fieldW = Math.max(1, columns + 2 - detailLeft - 4)
     // The view follows the selection where something other than the person's keys moved it out of sight.
@@ -2544,7 +2618,6 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           ? `${KEYS_CUE.split(' · ')[0] ?? KEYS_CUE} · ${afterCue}`
           : KEYS_CUE
     const message: Said = focused ? said : { text: cue, color: FADED }
-    const mainRows = mainRowsFor(dock && !wide && !hidden)
 
     // The fields this block's type calls for (teach.ts says which), in the detail pane's order: the knobs typed as text.
     const parent = node ? flatten(project).find(row => row.node.id === node.id)?.parentId : undefined
@@ -2556,7 +2629,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     // Drafts and the keyboard, as this drawing finds them. Text typed and not saved is saved as soon as a drawing sees
     // that its field can no longer be typed in: the pane lost the keyboard (Escape, which no hook hears; a chat turn),
     // the pane changed shape (a resize moves it between dock and inline and takes the keys), another block is shown.
-    const shape = `${dock ? 'dock' : 'inline'}/${columns}`
+    const shape = `${e.props.placement}/${columns}`
     const orphaned = hasDrafts() && (!focused || shape !== paneShape || drafts.name !== ui.name || (drafts.id !== null && drafts.id !== node?.id))
     paneShape = shape
     // The keyboard went with a field open: the field is closed, with what it held saved; `e` or a click opens it again.
@@ -2919,22 +2992,16 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     ]
     const stray = (): Item[] => [line('UNMAPPED', undefined, true), ...lines(wrapText('Agents whose label names no block of this project.', detailW), FADED), blank, ...agentItems(AGENT_ROWS_MAX)]
 
-    // The detail pane's rows. Beside the graph it has all of them. Under it, it has a fixed share at rest, so nothing
-    // shifts with the selection; while a field, the add list or a help page is open it takes what that needs.
-    // Hidden, it has none: the graph has them all.
-    const openNeed = picking ? rowsOf(addList(0)) : helping ? rowsOf(helpItems(ui.help, node, detailW, 99, false)) : rowsOf(inspector(0))
-    // Inline, at rest, it is its last row alone: the keys that open it.
-    const restRows = dock ? Math.max(Math.min(HINT_ROWS + 1, mainRows), Math.min(mainRows - GRAPH_LEAST_ROWS, Math.floor(mainRows * DETAIL_REST_SHARE))) : 1
-    const opened = picking || helping || fielding
-    const detailRows = hidden ? 0 : wide ? mainRows : opened ? Math.max(restRows, Math.min(openNeed + HINT_ROWS, mainRows - (dock ? GRAPH_LEAST_ROWS : 0))) : restRows
+    // The detail pane's rows: all of them, beside the graph. Hidden, it has none, and the graph has its columns too.
+    const detailRows = hidden ? 0 : mainRows
     const hints = hintsOf(keys.detail, detailW, detailRows)
     const contentRows = Math.max(0, detailRows - hints.length)
-    // The graph's region: every row the rest leaves, whatever the graph's own height (it pans inside), so the region never changes size with the selection.
-    const graphRows = Math.max(0, beside ? mainRows : mainRows - detailRows)
-    const box: GraphBox = { columns: graphW, rows: Math.max(1, graphRows) }
+    // The graph's region: every row between the rules, whatever the graph's own height (it pans inside), so the region never changes size with the selection.
+    const graphRows = mainRows
+    const box: GraphBox = { columns: graphW, rows: graphRows }
     graphBox = box
-    // Above it: the header's rows, and docked the rule under them.
-    graphArea = graphRows < 1 || !('Client' in els) ? null : { top: HEAD_ROWS + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
+    // Above it: the header's rows, and the rule under them.
+    graphArea = !('Client' in els) ? null : { top: HEAD_ROWS + 1, left: 1, columns: graphW, rows: graphRows }
 
     // What the detail pane holds above the rows of its keys.
     const content: Item[] =
@@ -2963,6 +3030,151 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         )),
     )
 
-    return frame(catching, headOf(factsLine(project), keys.header), graph, hidden ? null : detailBox(detailRows, hints, content, detailLeft), beside, mainRows, message, actionsOf(keys.actions))
+    return frame(catching, headOf(factsLine(project), keys.header), graph, hidden ? null : detailBox(detailRows, hints, content, detailLeft), message, actionsOf(keys.actions))
+  })
+
+  // The compact view: what is drawn in the band above the prompt (`AbovePrompt`) while the designer is minimized, by
+  // the person's Shift+M or because its pane has no room for the graph and the detail pane side by side
+  // (`compact.ts`). The conductor, the open project and the run, the saved projects to pick from, and the way back to
+  // the pane. Nothing while the pane is on screen: beside a dock the band has the transcript's few cells (API-NOTES
+  // S18), and an inline pane shares its rows.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const shell = await read($, shellAtom)
+    // A survey has the band while it is up.
+    if (shell.minimized === 'no' || e.props.hasSurvey) return next(e)
+    const els = $.ui.resolve(e)
+    if (!('Button' in els)) return next(e)
+    const { Box, Text, Button } = els
+    // The pane is on screen (on its way out, or opened again): the designer is drawn there.
+    if ((await $.ui.panes()).some(pane => pane.id === PROJECT_PANE_ID && pane.isPlaced)) return next(e)
+
+    // Minimized for want of room, and the terminal now has it: the pane opens by itself, once per size.
+    const size = `${e.viewport?.columns ?? 0}x${e.viewport?.rows ?? 0}`
+    if (!wouldDock(e.viewport)) autoTried = ''
+    else if (shell.minimized === 'auto' && autoTried !== size) {
+      autoTried = size
+      const columns = e.viewport?.columns
+      $.clock.after(0, () => void expand($, false, columns).catch(() => undefined))
+    }
+
+    const now = Date.now()
+    if (now - bandListing.at > LISTING_MS) {
+      const dir = `${(await $.session.root()).replace(/\/+$/, '')}/${PROJECT_DIR}`
+      const entries = await $.fs.list(dir).catch(() => [])
+      bandListing = {
+        at: now,
+        names: entries
+          .filter(entry => entry.kind === 'file' && entry.name.endsWith('.json'))
+          .map(entry => entry.name.slice(0, -'.json'.length))
+          .filter(isSaved)
+          .sort(),
+      }
+    }
+
+    const ui = await read($, uiAtom)
+    const project = ui.status === 'ready' ? await read($, projectAtom) : null
+    const run = await read($, runAtom)
+    // A run in progress is shown whatever project is open; one that is over, on its own project until its results are put away.
+    const runProject = run.status === 'idle' ? null : await read($, runProjectAtom)
+    const tracked = run.status === 'running' || (run.status !== 'idle' && project !== null && runProject === ui.name && !ui.runCleared)
+    // The tick clock is read only while a run is on, so a band at rest is not redrawn by it.
+    const clock = run.status === 'running' ? await read($, clockAtom) : 0
+    const asked = await read($, personaAtom)
+    const pose: Pose = asked !== 'idle' ? asked : ((tracked ? runPose(run.status, clock) : null) ?? 'idle')
+    const columns = e.props.bodyColumns
+    const room = Math.max(8, columns - SMALL_W)
+    const agents = Object.values(run.agents)
+    const settled = agents.filter(agent => agent.status !== 'running').length
+    const summary = tracked ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, room - COMPACT_BAR_W - 2)) : null
+    // A run of another project than the open one is named.
+    const runName = runProject !== null && runProject !== ui.name ? `${runProject}: ` : ''
+    const view = compactView({
+      columns,
+      rows: e.props.maxRows,
+      shell,
+      name: project === null ? null : ui.name,
+      facts: project !== null && !isBlank(project) ? factsLine(project) : null,
+      goal: project === null ? '' : goalOf(project),
+      run: summary === null ? null : { bar: bar(settled, agents.length, COMPACT_BAR_W), text: `${runName}${summary.text.replace(/^[a-z]+/, word => word.toUpperCase())}`, color: summary.color },
+      saved: bandListing.names,
+    })
+
+    const terminal = e.viewport?.columns
+    const expandButton = (
+      <Button key={EXPAND_KEY} hotkey={EXPAND_HOTKEY} onPress={() => expand($, true, terminal)}>
+        {view.expand}
+      </Button>
+    )
+    const secondRow = (width: number) => (
+      <Text wrap="truncate-end">
+        {view.second.bar !== null && <Text color={view.second.color ?? TEXT}>{`${view.second.bar} `}</Text>}
+        <Text color={view.second.color ?? FADED}>{clip(view.second.text, Math.max(4, width - (view.second.bar === null ? 0 : COMPACT_BAR_W + 1)))}</Text>
+      </Text>
+    )
+
+    if (view.oneLine) {
+      const lead = `${GLYPH.diamond} ${COMMAND} / ${view.name}`
+      return (
+        <Box flexDirection="row" height={1}>
+          <Text bold color="claude">{`${clip(lead, Math.max(8, Math.floor(columns / 3)))}  `}</Text>
+          <Box flexGrow={1} flexShrink={1}>{secondRow(columns - lead.length - view.expand.length - 8)}</Box>
+          <Box flexShrink={0}>{expandButton}</Box>
+        </Box>
+      )
+    }
+
+    const stateW = view.state.length
+    const factsW = view.facts === null ? 0 : view.facts.length + 3
+    const nameW = Math.max(8, room - COMMAND.length - 3 - stateW - 2 - factsW)
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" height={SMALL_ROWS}>
+          <Box key="conductor-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
+            {smallPersona(pose).map(row => (
+              <Box flexDirection="row" height={1} flexShrink={0}>
+                {row.map(span => (
+                  <Text color={span.color ?? TEXT} backgroundColor={span.ground}>{span.text}</Text>
+                ))}
+              </Box>
+            ))}
+          </Box>
+          <Box flexDirection="column" width={room} flexShrink={0}>
+            <Box flexDirection="row" justifyContent="space-between" height={1}>
+              <Text wrap="truncate-end">
+                <Text bold color="claude">{COMMAND}</Text>
+                <Text color={FADED}>{' / '}</Text>
+                <Text bold color={TEXT}>{clip(view.name, nameW)}</Text>
+                {view.facts !== null && <Text color={FADED}>{' / '}</Text>}
+                {view.facts !== null && <Text color="suggestion">{view.facts}</Text>}
+              </Text>
+              <Box flexShrink={0}>
+                <Text color={FADED}>{view.state}</Text>
+              </Box>
+            </Box>
+            <Box flexDirection="row" height={1}>{secondRow(room)}</Box>
+          </Box>
+        </Box>
+        {view.list !== null && (
+          <Box flexDirection="row" height={1} paddingLeft={SMALL_W}>
+            <Text color="suggestion">{LIST_LABEL}</Text>
+            {view.list.names.map(name => (
+              <Box flexDirection="row" flexShrink={0}>
+                <Text>{' '.repeat(LIST_GAP)}</Text>
+                <Button key={`${BAND_PROJECT_KEY}${name}`} plain onPress={() => showSaved($, name)}>
+                  <Text color={name === view.list?.current ? 'claude' : TEXT} bold={name === view.list?.current ? true : undefined}>{name}</Text>
+                </Button>
+              </Box>
+            ))}
+            {view.list.more > 0 && <Text color={FADED}>{`${' '.repeat(LIST_GAP)}+${view.list.more} more`}</Text>}
+          </Box>
+        )}
+        {view.taken > SMALL_ROWS + (view.list === null ? 0 : 1) && (
+          <Box flexDirection="row" height={1} paddingLeft={SMALL_W}>
+            <Box flexShrink={0}>{expandButton}</Box>
+            <Text color={FADED} wrap="truncate-end">{`  ${view.hint ?? `click here, then ${EXPAND_HOTKEY.toUpperCase()} · or /${COMMAND}`}`}</Text>
+          </Box>
+        )}
+      </Box>
+    )
   })
 }

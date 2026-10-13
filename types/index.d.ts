@@ -103,6 +103,8 @@ declare module 'claude-code' {
       draftBeat: number
       /** The gesture the header's persona holds (Pose in src/ui/persona.ts); `idle` at rest. */
       persona: 'idle' | 'ready' | 'conducting' | 'complete'
+      /** Where the designer is: in its pane (`no`), or minimized into the band above the prompt (Shell in src/ui/compact.ts). */
+      shell: { minimized: 'no' | 'person' | 'auto'; why: 'narrow' | 'screen' | 'dock' | 'short' | null }
     }
   }
 }

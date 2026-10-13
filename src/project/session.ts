@@ -789,6 +789,9 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
     case 'clearRun':
       // The results of a run that is over are put away; while it runs they stay.
       return { project, ui: context.locked ? { ...calm, notice: lockNotice(context) } : { ...calm, runCleared: true }, changed: false }
+    case 'minimize':
+      // The hooks module closes the pane and draws the band above the prompt; nothing changes here.
+      return { project, ui, changed: false }
     case 'cancel':
       return { project, ui: calm, changed: false }
   }
@@ -932,11 +935,23 @@ export const DRAFT_WAIT_NOTE = 'Claude is drafting your workflow · answer its q
 // ---------------------------------------------------------------------------
 // The screen's shape
 
-/** Docked with at least this many body columns the graph and the detail pane stand side by side; narrower, or inline, one under the other. */
-export const WIDE_MIN_COLUMNS = 100
+/**
+ * The one screen there is: the graph and the detail pane side by side. A pane with fewer body columns or rows than
+ * these draws nothing of it: the designer is minimized into the band above the prompt (`compact.ts`).
+ */
+export const FULL_MIN_COLUMNS = 80
+export const FULL_MIN_ROWS = 20
+/** From this many terminal columns the fullscreen layout docks a pane beside the transcript; under it the pane sits inline above the prompt. */
+export const DOCK_MIN_TERMINAL = 110
+
+/** Whether a pane with this room draws the designer. */
+export function fitsFull(bodyColumns: number, bodyRows: number): boolean {
+  return bodyColumns >= FULL_MIN_COLUMNS && bodyRows >= FULL_MIN_ROWS
+}
+
 /** The detail pane beside the graph: about this share of the columns, within these bounds. */
 export const DETAIL_SHARE = 0.3
-export const DETAIL_MIN_W = 38
+export const DETAIL_MIN_W = 34
 export const DETAIL_MAX_W = 52
 
 /** The detail pane's width beside the graph, for a pane with `columns` to draw in. */
@@ -969,6 +984,7 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['1 2', 'step the model, the effort (the chips on the selected card)'],
   ['o  b', 'open the selected container as the view / back up one level'],
   ['i', 'hide or show this pane'],
+  ['Shift+M', 'minimize the designer into the band above the prompt; there, once the band has the keys (a click on it), the same key expands it again'],
   ['u  y', 'undo / redo'],
   ['q', 'Claude review: asks Claude to review the project (fills the prompt)'],
   ['r', 'implement and run: hands the project to Claude at once; Claude confirms the design and asks what to run it on'],
@@ -1132,14 +1148,17 @@ export function endRun(ui: ProjectUi, project: Project | null, run: RunState, ru
 
 /** The columns of the terminal the dock leaves to the transcript: a sliver, the prompt stays full width. */
 export const DOCK_MARGIN = 30
+/** In a terminal narrower than DOCK_ROOMY the sliver is the least the dock leaves by itself, so the graph keeps its room. */
+export const DOCK_MARGIN_TIGHT = 24
+export const DOCK_ROOMY = 130
 
 /**
- * The columns to ask the dock for: the terminal's less DOCK_MARGIN. Undefined with the
+ * The columns to ask the dock for: the terminal's less the transcript's sliver. Undefined with the
  * width unknown: nothing is asked, and the dock keeps the width it has.
  */
 export function dockColumns(terminal: number | undefined): number | undefined {
   if (terminal === undefined || !Number.isFinite(terminal) || terminal <= 0) return undefined
-  return Math.max(40, Math.floor(terminal) - DOCK_MARGIN)
+  return Math.max(40, Math.floor(terminal) - (terminal < DOCK_ROOMY ? DOCK_MARGIN_TIGHT : DOCK_MARGIN))
 }
 
 /**

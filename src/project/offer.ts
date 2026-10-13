@@ -138,5 +138,5 @@ export function visualizeTyped(text: string): string {
 
 /** What the person sees when a run is put on a saved project without a question. `placed` is false when the board could not open by itself. */
 export function reusedToast(name: string, placed: boolean): string {
-  return `conductor: this run is shown on project ${name}${placed ? '' : ' · /conductor opens it'}`
+  return `conductor: this run is shown on project ${name}${placed ? '' : ' · above the prompt; /conductor opens the designer'}`
 }

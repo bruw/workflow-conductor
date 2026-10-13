@@ -188,7 +188,7 @@ export function attachNote(project: Project, unplaced: readonly string[]): strin
 
 /** Added to an edit's answer when the board could not be put on screen (an open nobody typed waits under 144 columns: API-NOTES S12). */
 export function unplacedNote(name: string): string {
-  return `The board is not on screen (the terminal is too narrow for it to open by itself): tell the user that /conductor opens it (project ${name}).`
+  return `The board is not on screen (the terminal is too narrow for it to open by itself; the band above the prompt names the project): tell the user that /conductor opens it (project ${name}).`
 }
 
 // ---------------------------------------------------------------------------
