@@ -1,8 +1,8 @@
 {
   "name": "conductor",
-  "description": "Conductor: a workflow designer and run view for Claude Code",
+  "description": "Conductor: visual workflow planner for Claude Code",
   "owner": {
-    "name": "bruw"
+    "name": "Artur Turdiev"
   },
   "plugins": [
     {

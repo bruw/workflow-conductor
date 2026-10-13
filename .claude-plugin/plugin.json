@@ -1,11 +1,19 @@
 {
   "name": "conductor",
   "version": "0.1.0",
-  "description": "Design a workflow visually, hand it to Claude, watch the run on the same project",
-  "author": { "name": "bruw" },
+  "description": "Visual workflow planner in Claude Code",
+  "author": {
+    "name": "Artur Turdiev"
+  },
   "homepage": "https://github.com/bruw/workflow-conductor",
   "repository": "https://github.com/bruw/workflow-conductor",
   "license": "MIT",
-  "keywords": ["workflow", "agents", "pane", "mod"],
+  "keywords": [
+    "workflow",
+    "agents",
+    "pane",
+    "mod",
+    "orchestration"
+  ],
   "types": "./types/index.d.ts"
 }
