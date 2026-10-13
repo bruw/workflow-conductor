@@ -324,18 +324,20 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     const offset = offsets[card.id]
     const x = card.x + (offset?.dx ?? 0)
     const y = card.y + (offset?.dy ?? 0)
-    const tone = toneOf(card)
-    const { frame, edge, run } = tone
     // A card growing or shrinking to its size is drawn at the height it has reached.
     const h = Math.max(2, card.h + (offset?.dh ?? 0))
+    const around = card.parentId !== undefined && shaded.get(card.parentId) === true
+    shaded.set(card.id, card.type === 'phase' ? !around : around)
+    // A card with no row in the window has no cell to write. (While cards slide each is gone through: one may bound what it holds.)
+    if (!moving && (y - panY >= room || y + h - panY <= 0)) continue
+    const tone = toneOf(card)
+    const { frame, edge, run } = tone
     bound = moving && card.parentId !== undefined ? (insides.get(card.parentId) ?? null) : null
     if (moving && card.kind === 'open') {
       const x0 = Math.max(x + 1, bound?.x ?? x + 1)
       const y0 = Math.max(y + 1, bound?.y ?? y + 1)
       insides.set(card.id, { x: x0, y: y0, w: Math.max(0, Math.min(x + card.w - 1, bound ? bound.x + bound.w : Infinity) - x0), h: Math.max(0, Math.min(y + h - 1, bound ? bound.y + bound.h : Infinity) - y0) })
     }
-    const around = card.parentId !== undefined && shaded.get(card.parentId) === true
-    shaded.set(card.id, card.type === 'phase' ? !around : around)
     if (card.type === 'phase' && !options.plain) shade(x, y, card.w, h, !around)
     drawTop(card, x, y, tone)
     for (let row = 1; row < h - 1; row++) {

@@ -8,7 +8,7 @@ OUT="$REPO/.capture"
 DEBUG_LOG="$OUT/debug.log"
 
 mkdir -p "$OUT"
-tmux capture-pane -p -t "$SESSION" > "$OUT/screen.txt"
+tmux capture-pane -p -t "=$SESSION:" > "$OUT/screen.txt"
 if [ -f "$DEBUG_LOG" ]; then
   { grep -i conductor "$DEBUG_LOG" || true; } | tail -n 80 > "$OUT/debug.txt"
 else

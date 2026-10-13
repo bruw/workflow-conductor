@@ -109,7 +109,7 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
       if (parsed.ok && !isBlank(parsed.project)) {
         const script = scriptFile(root, name)
 
-        return { result: handedResult(buildHandoff(parsed.project, path, (await $.fs.exists(script).catch(() => false)) ? script : null).context.join('\n')) }
+        return { result: handedResult(buildHandoff({ ...parsed.project, name }, path, (await $.fs.exists(script).catch(() => false)) ? script : null).context.join('\n')) }
       }
     }
     // The script being written is the project the person approved on the board: that was their answer.
@@ -127,7 +127,7 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
         answered = true
         const script = scriptFile(root, waiting)
 
-        return { result: waitingResult(waiting, buildHandoff(parsed.project, path, (await $.fs.exists(script).catch(() => false)) ? script : null).context.join('\n')) }
+        return { result: waitingResult(waiting, buildHandoff({ ...parsed.project, name: waiting }, path, (await $.fs.exists(script).catch(() => false)) ? script : null).context.join('\n')) }
       }
     }
     waiting = null

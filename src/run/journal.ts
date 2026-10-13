@@ -74,6 +74,8 @@ export function journalPhases(journalText: string): Map<string, string | null> {
   if (typeof journalText !== 'string') return phases
 
   for (const line of journalText.split('\n')) {
+    // Read again with every burst of spawns: a line that does not say the word (a result, with all it carries) is not parsed.
+    if (!line.includes('"started"')) continue
     const entry = parseLine(line)
     if (entry?.type !== 'started') continue
 

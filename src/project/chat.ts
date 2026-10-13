@@ -276,6 +276,24 @@ export function armNote(project: Project, id: string, beside: string): string | 
   return null
 }
 
+/** The blocks that stand at another place among the siblings they keep: a tree written in another order, which `diffProjects` does not compare. */
+function reordered(before: Project, after: Project): string[] {
+  const order = (project: Project): Map<string, string[]> => {
+    const out = new Map<string, string[]>()
+    for (const row of flatten(project)) out.set(row.parentId ?? '', [...(out.get(row.parentId ?? '') ?? []), row.node.id])
+    return out
+  }
+  const old = order(before)
+  const moved: string[] = []
+  for (const [parent, ids] of order(after)) {
+    const was = (old.get(parent) ?? []).filter(id => ids.includes(id))
+    ids.filter(id => was.includes(id)).forEach((id, index) => {
+      if (was[index] !== id) moved.push(id)
+    })
+  }
+  return moved
+}
+
 /**
  * Replaces the whole tree. A block whose id is in the project as it stood keeps
  * it; every other block is new and gets a fresh id, whatever id it came with,
@@ -333,17 +351,18 @@ export function replaceProject(before: Project, rawNodes: unknown): Edit {
   // Not serializeProject: it would trust shapes that have not been checked yet.
   const parsed = parseProject(JSON.stringify(candidate))
   if (!parsed.ok) return { ok: false, error: explain(parsed.error) }
-  return checked(before, parsed.project)
+  return checked(before, parsed.project, reordered(before, parsed.project))
 }
 
 // Where an op points: beside a sibling, or at the end of a container; the end of the top level with none.
 function placeOf(project: Project, op: Record<string, unknown>): Place | string {
+  // A null is a place not said, as one left out is.
   const beside = op.after ?? op.before
-  if (beside !== undefined) {
+  if (beside !== undefined && beside !== null) {
     if (typeof beside !== 'string') return 'after/before must be a block id'
     const row = flatten(project).find(one => one.node.id === beside)
     if (!row) return `no block ${beside}`
-    const index = op.after !== undefined ? row.index + 1 : row.index
+    const index = op.after !== undefined && op.after !== null ? row.index + 1 : row.index
     return row.parentId === undefined ? { index } : { parentId: row.parentId, index }
   }
   if (op.parent !== undefined && op.parent !== null) {
@@ -426,7 +445,7 @@ export function applyOps(before: Project, ops: unknown): Edit {
     }
     if (kind === 'move') {
       // The place is read with the block lifted out, as moveNode counts it.
-      if (op.after === undefined && op.before === undefined && (op.parent === undefined || op.parent === null)) return refuse('needs after, before or parent')
+      if ((op.after ?? op.before ?? op.parent ?? null) === null) return refuse('needs after, before or parent')
       const at = placeOf(removeNode(project, id).project, op)
       if (typeof at === 'string') return refuse(at.startsWith('no block') ? `${at} outside ${id}` : at)
       const moved = moveNode(project, id, at)

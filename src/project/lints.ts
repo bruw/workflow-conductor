@@ -43,6 +43,13 @@ function producer(node: ProjectNode): ProjectNode {
   return last && node.type !== 'branch' ? producer(last) : node
 }
 
+// Every node whose output that sibling receives: each arm of a parallel hands its own on, the rest as `producer`.
+function producers(node: ProjectNode): ProjectNode[] {
+  if (node.type === 'parallel' && (node.children?.length ?? 0) > 0) return (node.children ?? []).flatMap(producers)
+  const last = node.children?.at(-1)
+  return last && node.type !== 'branch' ? producers(last) : [node]
+}
+
 /** Containers whose blocks run one after the other: a block in one receives what the block before it made. */
 const CHAINS: readonly string[] = ['pipeline', 'loop', 'phase']
 
@@ -97,10 +104,10 @@ export function lint(project: Project): Lint[] {
 
     // 4. Code fed by free text. Structural: a `code` node whose previous sibling
     // is an `agent` with no `output` knob, or a container (not a branch) whose
-    // last stage is such an agent. The lint lands on the agent.
+    // last stage is such an agent (of a parallel: any arm's). The lint lands on the agent.
     if (node.type === 'code' && previous) {
-      const source = producer(previous)
-      if (source.type === 'agent' && blank(source.knobs?.output)) {
+      for (const source of producers(previous)) {
+        if (source.type !== 'agent' || !blank(source.knobs?.output)) continue
         lints.push({
           nodeId: source.id,
           rule: 'code-input-no-output',
@@ -155,8 +162,9 @@ export function lint(project: Project): Lint[] {
     // lint fires when that block is an agent with no `output` (free text: the
     // stop condition has nothing exact to test), or when it is a critic and
     // the loop states no stop condition (its gaps start another round, every round).
-    // A round that ends in `code`, a `branch` or a subworkflow is left alone.
-    if (node.type === 'loop' && (node.children?.length ?? 0) > 0) {
+    // A round that ends in `code`, a `branch` or a subworkflow is left alone, and so is
+    // a loop of kind `count` or `budget`: its stop test reads no block's result.
+    if (node.type === 'loop' && node.kind !== 'count' && node.kind !== 'budget' && (node.children?.length ?? 0) > 0) {
       const last = producer(node)
       const free = last.type === 'agent' && blank(last.knobs?.output)
       const endless = last.kind === 'critic' && blank(node.knobs?.stopCondition)
@@ -197,30 +205,32 @@ export function lint(project: Project): Lint[] {
 // Preflight: what a project implies before it is handed off
 
 /**
- * The fewest agents a block implies: one per agent block, the cheapest arm of a branch. Nothing typed
+ * The fewest agents a block implies: one per agent block, the cheapest arm of a branch (none where it has one arm, which may not run). Nothing typed
  * into a field is read for a count: what a block runs once per, its votes and a loop's rounds are words
  * for Claude, so a block that may run more than once counts once and makes the sum a floor (`unknownsOf`).
  */
 function leastAgents(node: ProjectNode): number {
   if (canHoldChildren(node.type)) {
     const kids = (node.children ?? []).map(leastAgents)
-    if (node.type === 'branch') return kids.length > 0 ? Math.min(...kids) : 0
+    if (node.type === 'branch') return kids.length > 1 ? Math.min(...kids) : 0
     return kids.reduce((sum, one) => sum + one, 0)
   }
   return node.type === 'agent' ? 1 : 0
 }
 
-/** Why the count of agents is only a floor: how many blocks of each type that may run its agents more than once. */
-export type Unknowns = { fanouts: number; loops: number; votes: number; subworkflows: number }
+/** Why the count of agents is only a floor: how many blocks of each type that may run its agents more than once, and how many branches whose arm picked decides the count. */
+export type Unknowns = { fanouts: number; loops: number; votes: number; subworkflows: number; branches: number }
 
-/** By type and kind alone: a pipeline or a parallel may fan out, a loop repeats, a verify or a judge votes, a subworkflow starts its own. */
+/** By type and kind alone: a pipeline or a parallel may fan out, a loop repeats, a verify or a judge votes, a subworkflow starts its own; and a branch whose arms do not all start as many agents (its one arm, against none). */
 function unknownsOf(project: Project): Unknowns {
-  const out: Unknowns = { fanouts: 0, loops: 0, votes: 0, subworkflows: 0 }
+  const out: Unknowns = { fanouts: 0, loops: 0, votes: 0, subworkflows: 0, branches: 0 }
   for (const { node } of flatten(project)) {
     if (node.type === 'pipeline' || node.type === 'parallel') out.fanouts++
     if (node.type === 'loop') out.loops++
     if (node.type === 'agent' && node.kind !== undefined && VOTING_KINDS.includes(node.kind)) out.votes++
     if (node.type === 'subworkflow') out.subworkflows++
+    const arms = node.type === 'branch' ? (node.children ?? []).map(leastAgents) : []
+    if (arms.length === 1 ? (arms[0] ?? 0) > 0 : new Set(arms).size > 1) out.branches++
   }
   return out
 }
@@ -234,7 +244,7 @@ export function preflight(project: Project): Preflight {
 
 /** The agents a project starts, as a count: `agents = 3` where every block runs once, `agents ≥ 12` where the number is only the fewest. */
 export function agentsCount(agents: number, unknowns: Unknowns): string {
-  return `agents ${unknowns.fanouts + unknowns.loops + unknowns.votes + unknowns.subworkflows > 0 ? '≥' : '='} ${agents}`
+  return `agents ${unknowns.fanouts + unknowns.loops + unknowns.votes + unknowns.subworkflows + unknowns.branches > 0 ? '≥' : '='} ${agents}`
 }
 
 /**
@@ -248,6 +258,7 @@ export function agentsText(agents: number, unknowns: Unknowns): string {
     unknowns.loops > 0 ? `${plural(unknowns.loops, 'loop repeats', 'loops repeat')}` : '',
     unknowns.votes > 0 ? `${plural(unknowns.votes, 'block votes', 'blocks vote')}` : '',
     unknowns.subworkflows > 0 ? `${plural(unknowns.subworkflows, 'subworkflow starts', 'subworkflows start')} its own` : '',
+    unknowns.branches > 0 ? `${plural(unknowns.branches, 'branch picks', 'branches pick')} an arm` : '',
   ].filter(part => part !== '')
   return `${agentsCount(agents, unknowns)}${why.length === 0 ? '' : ` (more: ${why.join(', ')})`}`
 }

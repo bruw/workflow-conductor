@@ -88,7 +88,6 @@ export function createTracker() {
   /** Whether the tracked run is a replay: no workflow is behind it. */
   let replayed = false
 
-  const dirs = new Map<string, string>()
   /** Agents of the tracked run still running, with their token total so far. */
   const totals = new Map<string, number>()
   /** Agents waiting for a phase, with the journal reads that missed them. */
@@ -156,7 +155,7 @@ export function createTracker() {
   const readJournal = (): void => {
     lastRead = ticks
     const runId = state.runId
-    const dir = runId === undefined ? undefined : dirs.get(runId)
+    const dir = state.transcriptDir
     if (!host || reading) return
 
     const settle = (phases: Map<string, string | null>): void => {
@@ -381,10 +380,9 @@ export function createTracker() {
     },
 
     runStarted(run: RunStarted): void {
-      if (run.transcriptDir) dirs.set(run.runId, run.transcriptDir)
       const isNew = state.runId !== run.runId || state.status !== 'running'
       if (isNew) begin(run.runId, run.project)
-      apply([{ kind: 'run-start', runId: run.runId, name: run.name }])
+      apply([{ kind: 'run-start', runId: run.runId, name: run.name, transcriptDir: run.transcriptDir || undefined }])
       // Its agents were seen before the run was announced, so it began with no name: they are placed again by its project.
       if (!isNew && run.project !== undefined && active?.name !== run.project.name) take(run.project)
     },
@@ -414,7 +412,8 @@ export function createTracker() {
       const total = totals.get(agentId)
       if (total === undefined) return
       totals.delete(agentId)
-      apply([{ kind: 'agent-end', agentId, ok: end.ok, durationMs: end.durationMs, tokens: end.tokens ?? total }])
+      // The end's own count is the agent's total; one that says none (absent, or 0) never takes away what was counted.
+      apply([{ kind: 'agent-end', agentId, ok: end.ok, durationMs: end.durationMs, tokens: end.tokens !== undefined && end.tokens > 0 ? end.tokens : total }])
     },
 
     /**

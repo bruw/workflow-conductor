@@ -560,8 +560,10 @@ function headSegs(node: ProjectNode, room: number, range: string): Seg[] {
   return segs
 }
 
-function openBox(node: ProjectNode, w: number, depth: number, parent: ProjectNode | undefined, index: number, ctx: Ctx): Box {
+/** `decide` is the width that decided it is open (`measure`): what it holds is opened by it too, as `viewShows` counts, never by the cells a last arm was left over. */
+function openBox(node: ProjectNode, w: number, depth: number, parent: ProjectNode | undefined, index: number, ctx: Ctx, decide: number = w): Box {
   const inner = Math.max(1, w - 4)
+  const within = Math.max(1, decide - 4)
   const kin = node.children ?? []
   const flow = childFlow(node.type)
   const lacks = missingOf(node)
@@ -577,12 +579,13 @@ function openBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
   let body = 0
   const deeper = depth + depthStep(node.type, depth)
   if (flow === 'chain') {
-    kids = kin.map((child, i) => measure(child, inner, inner, deeper, node, i, ctx))
+    kids = kin.map((child, i) => measure(child, inner, within, deeper, node, i, ctx))
     // Before the first block there is no arrow row for the open slot to stand on.
     lead = openHere && ctx.openAt?.index === 0 && kin.length > 0 ? 1 : 0
     if (kids.length > 0) body = kids.reduce((sum, kid) => sum + kid.h, 0) + kids.length - 1
   } else {
     const share = stackShare(inner, kin.length, node.type)
+    const arm = stackShare(within, kin.length, node.type).share
     gap = share.gap
     if (share.carousel) {
       // The window starts where it was asked to, and moves just far enough to hold the selected arm.
@@ -595,7 +598,7 @@ function openBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
     }
     const room = inner - (share.carousel ? 2 * GUTTER_W : 0)
     // Equal widths; the last arm in view takes the cells the division leaves over.
-    kids = kin.slice(first, first + share.shown).map((child, j) => measure(child, j === share.shown - 1 ? Math.max(share.share, room - (share.share + gap) * (share.shown - 1)) : share.share, share.share, deeper, node, first + j, ctx))
+    kids = kin.slice(first, first + share.shown).map((child, j) => measure(child, j === share.shown - 1 ? Math.max(share.share, room - (share.share + gap) * (share.shown - 1)) : share.share, arm, deeper, node, first + j, ctx))
     // Between two arms there is no row for the open slot: it gets one above them. (After the last arm it stands on the border.)
     lead = openHere && kin.length > 0 && (ctx.openAt?.index ?? 0) < kin.length ? 1 : 0
     if (kids.length > 0) body = Math.max(...kids.map(kid => kid.h))
@@ -610,7 +613,7 @@ function openBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
 /** `w` is the width it is drawn at, `share` the width that decides whether a container is open (an arm's, without the cells left over). */
 function measure(node: ProjectNode, w: number, share: number, depth: number, parent: ProjectNode | undefined, index: number, ctx: Ctx): Box {
   if (!canHoldChildren(node.type)) return leafBox(node, w, depth, parent, index, ctx)
-  return drawnOpen(depth, share) ? openBox(node, w, depth, parent, index, ctx) : collapsedBox(node, w, depth, parent, index, ctx)
+  return drawnOpen(depth, share) ? openBox(node, w, depth, parent, index, ctx, share) : collapsedBox(node, w, depth, parent, index, ctx)
 }
 
 export const CRUMB_SEP = '  ›  '
@@ -757,7 +760,8 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
       const rows = Math.max(1, Math.trunc(options.rows) || 1)
       const at = y + Math.max(y > oy ? 1 : 0, Math.floor((rows - (y - oy) - EMPTY_ROWS) / 2))
       slots.push({ ...base, x: ox, y: at, w: lw, h: 1, place: place(count), end: true, bar: 'row', open, mark: markAt(ox + Math.max(1, Math.floor((lw - EMPTY_W) / 2)), at, open ? SLOT_OPEN : SLOT, ox, lw) })
-      return Math.max(oy + rows, at + 1)
+      // As tall as the lines under the `[+]` reach, where the rows are short of them: they are panned to, not cut.
+      return Math.max(oy + rows, at + EMPTY_ROWS)
     }
     if (count === 0 && host) {
       // An empty container: its `[+]` is on its bottom border as any container's; a drop goes on the row above, the one that says `empty`.

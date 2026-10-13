@@ -15,8 +15,8 @@ import { fmtDuration, fmtTokens } from '../ui/rail'
 import { clip, wrapText } from '../ui/text'
 import { REDO_HINT, UNDO_HINT } from './history'
 import { agentsCount, lint, preflight } from './lints'
-import { NODE_TYPES, blockCount, canHoldChildren, emptyProject, findNode, flatten, goalOf, isBlank, kindsOf, parseProject, toKebab, typeName } from './model'
-import type { Project, ProjectNode, NodeType } from './model'
+import { NODE_TYPES, blockCount, canHoldChildren, emptyProject, findNode, flatten, goalOf, isBlank, isProjectName, kindsOf, parseProject, toKebab, typeName } from './model'
+import type { ParseResult, Project, ProjectNode, NodeType } from './model'
 import { addNode, addPlace, moveNode, placeFor, removeNode, retypeNode, stepKnob, updateNode } from './ops'
 import type { NodePatch, OpResult, Place } from './ops'
 import { PALETTE, defaultName, fieldWord, searchBlocks, startsName, teachOf, useWhen } from './teach'
@@ -116,7 +116,11 @@ export function isSaved(name: string): boolean {
 
 /** A project file's content as a list entry; a file that does not read as a project is listed as such. */
 export function savedProject(name: string, text: string): SavedProject {
-  const parsed = parseProject(text)
+  return savedEntry(name, parseProject(text))
+}
+
+/** The same of a file already parsed. */
+export function savedEntry(name: string, parsed: ParseResult): SavedProject {
   return parsed.ok ? { name, blocks: blockCount(parsed.project), goal: goalOf(parsed.project) } : { name, blocks: -1, goal: 'not a valid project file' }
 }
 
@@ -278,8 +282,9 @@ export function agentsOf(run: RunState, id: string): { shown: AgentLine[]; rest:
   return { shown, rest: sorted.length - shown.length }
 }
 
-export function projectName(args: string): string {
-  return toKebab(args.trim() || DEFAULT_PROJECT_NAME)
+/** A project's name out of what was typed or said: kebab-case, the default for nothing. Null where words were given and none of them can be kept (no letter a to z, no digit): never another project's name in their place. */
+export function projectName(args: string): string | null {
+  return toKebab(args.trim() || DEFAULT_PROJECT_NAME) || null
 }
 
 /** The project's file under the repo root. */
@@ -300,11 +305,14 @@ export function scriptFile(root: string, name: string): string {
 export function openProject(name: string, text: string | undefined, previous?: ProjectUi): Step {
   const ui: ProjectUi = { ...(previous ? carryUi(previous, initialUi()) : initialUi()), name }
   if (text === undefined) return { project: null, ui: { ...ui, status: 'pick' }, changed: false }
+  if (!isProjectName(name)) return { project: null, ui: { ...ui, status: 'error', error: "the file's name must be lowercase letters, digits and dashes (a-z, 0-9, -)" }, changed: false }
   const parsed = parseProject(text)
   if (!parsed.ok) return { project: null, ui: { ...ui, status: 'error', error: parsed.error }, changed: false }
+  // The file's name is the project's: a copy of a file, or one renamed by hand, still says the name it was made under.
+  const project = parsed.project.name === name ? parsed.project : { ...parsed.project, name }
   const left = ui.picks[name]
-  const selectedId = left !== undefined && findNode(parsed.project, left) ? left : firstPick(parsed.project)
-  return { project: parsed.project, ui: { ...ui, status: 'ready', selectedId }, changed: false }
+  const selectedId = left !== undefined && findNode(project, left) ? left : firstPick(project)
+  return { project, ui: { ...ui, status: 'ready', selectedId }, changed: false }
 }
 
 /** The block a project opens on: its first, the start block, whose goal is the first thing a new project is asked for. */
@@ -361,11 +369,13 @@ export const RESET_ID = 'ask-again'
  * replayed in the run view, and the row that forgets every stored "Always" and "Never" answer.
  */
 export function startEntries(saved: readonly SavedProject[], templates: readonly Template[] = TEMPLATES): StartEntry[] {
+  // Each template is made once: its count is said on two rows.
+  const blocks = templates.map(one => blockCount(one.make()))
   return [
     ...saved.map(one => ({ kind: 'saved' as const, id: one.name, title: one.name, blocks: one.blocks, note: one.goal })),
-    ...templates.map(one => ({ kind: 'template' as const, id: one.id, title: one.title, blocks: blockCount(one.make()), note: one.blurb })),
+    ...templates.map((one, at) => ({ kind: 'template' as const, id: one.id, title: one.title, blocks: blocks[at] ?? 0, note: one.blurb })),
     { kind: 'blank' as const, id: BLANK_TEMPLATE_ID, title: 'Blank', blocks: 0, note: 'An empty project' },
-    ...templates.map(one => ({ kind: 'replay' as const, id: one.id, title: one.title, blocks: blockCount(one.make()), note: 'A made-up run over the template, nothing saved' })),
+    ...templates.map((one, at) => ({ kind: 'replay' as const, id: one.id, title: one.title, blocks: blocks[at] ?? 0, note: 'A made-up run over the template, nothing saved' })),
     ...RECORDINGS.map(one => ({ kind: 'recording' as const, id: one, title: one, blocks: 0, note: 'A recorded run, in the run view' })),
     { kind: 'reset' as const, id: RESET_ID, title: 'Ask again', blocks: 0, note: 'Forget every "Always" and "Never" answer' },
   ]

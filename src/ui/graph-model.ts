@@ -110,7 +110,7 @@ export function parseGraphMessage(data: unknown): GraphMessage | undefined {
     const at = readPlace(data.at)
     return at ? { kind, at } : undefined
   }
-  if (kind === 'key') return typeof data.key === 'string' && data.key in KEY_OPS ? { kind, key: data.key } : undefined
+  if (kind === 'key') return typeof data.key === 'string' && Object.hasOwn(KEY_OPS, data.key) ? { kind, key: data.key } : undefined
   if (typeof id !== 'string') return undefined
   if (kind === 'knob') return typeof data.slot === 'number' && [1, 2].includes(data.slot) ? { kind, id, slot: data.slot } : undefined
   if (kind === 'slide') return typeof data.first === 'number' && Number.isInteger(data.first) && data.first >= 0 ? { kind, id, first: data.first } : undefined
@@ -241,8 +241,8 @@ const NAMED_KEYS: Record<string, string> = { return: ENTER, enter: ENTER, up: 'w
 
 /** The key of the table a key event of the graph stands for; undefined when it is none. */
 export function graphKey(input: Pick<GraphKey, 'key' | 'shift'>): string | undefined {
-  const key = NAMED_KEYS[input.key] ?? (input.key.length === 1 && input.shift ? input.key.toUpperCase() : input.key)
-  return key in KEY_OPS ? key : undefined
+  const key = (Object.hasOwn(NAMED_KEYS, input.key) ? NAMED_KEYS[input.key] : undefined) ?? (input.key.length === 1 && input.shift ? input.key.toUpperCase() : input.key)
+  return Object.hasOwn(KEY_OPS, key) ? key : undefined
 }
 
 function inWindow(context: GraphContext, x: number, y: number): boolean {

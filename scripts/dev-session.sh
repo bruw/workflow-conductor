@@ -15,22 +15,24 @@ DEBUG_LOG="$REPO/.capture/debug.log"
 # CONDUCTOR_EXTRA_PLUGIN_DIRS=spikes/probe scripts/dev-session.sh).
 EXTRA=""
 IFS=':' read -ra EXTRA_DIRS <<< "${CONDUCTOR_EXTRA_PLUGIN_DIRS:-}"
-for dir in "${EXTRA_DIRS[@]}"; do
+# (An empty array is unbound under `set -u` before bash 4.4.) Paths are quoted for the shell tmux runs the command in.
+for dir in ${EXTRA_DIRS[@]+"${EXTRA_DIRS[@]}"}; do
   [ -n "$dir" ] || continue
   case "$dir" in /*) ;; *) dir="$REPO/$dir" ;; esac
-  EXTRA="$EXTRA --plugin-dir '$dir'"
+  EXTRA="$EXTRA --plugin-dir $(printf '%q' "$dir")"
 done
 
 mkdir -p "$REPO/.capture"
 : > "$DEBUG_LOG"
 
-tmux kill-session -t "$SESSION" 2>/dev/null || true
+# `=`: this session and no other whose name starts with its name.
+tmux kill-session -t "=$SESSION" 2>/dev/null || true
 tmux new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS" -c "$REPO" \
-  "claude --plugin-dir '$REPO'$EXTRA --debug --debug-file '$DEBUG_LOG'"
+  "claude --plugin-dir $(printf '%q' "$REPO")$EXTRA --debug --debug-file $(printf '%q' "$DEBUG_LOG")"
 
 echo "session:   $SESSION (${COLS}x${ROWS})"
 echo "debug log: $DEBUG_LOG"
-echo "attach:    tmux attach -t $SESSION"
+echo "attach:    tmux attach -t '=$SESSION'"
 echo "send keys: scripts/send.sh '/conductor' Enter"
 echo "capture:   scripts/capture.sh"
-echo "stop:      tmux kill-session -t $SESSION"
+echo "stop:      tmux kill-session -t '=$SESSION'"

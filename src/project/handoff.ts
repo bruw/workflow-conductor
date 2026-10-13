@@ -17,6 +17,8 @@ const KNOB_KEYS = ['model', 'effort', 'isolation', 'agentType', 'output', 'onceP
 const WHEN_MAX = 72
 
 const clip = (value: string, max: number = 24): string => (value.length > max ? `${value.slice(0, max - 1)}…` : value).replace(/\s+/g, ' ')
+/** A block's name as these instructions spell it: on one line and in JSON quotes, so that no name ends its string or starts a line of its own. */
+const quoted = (value: string): string => JSON.stringify(value.replace(/\s+/g, ' ').trim())
 
 /** How an arm of a branch is picked, as its outline row opens: `IF no findings: `, `ELSE: `, `IF (no condition set): `; '' for any other block. */
 function armWords(project: Project, row: { node: { knobs?: { condition?: string } }; parentId: string | undefined; index: number }): string {
@@ -34,7 +36,7 @@ export function outline(project: Project): string[] {
   const lines = rows.slice(0, OUTLINE_MAX).map(row => {
     const knobs = KNOB_KEYS.filter(key => row.node.knobs?.[key] !== undefined).map(key => `${key}=${clip(String(row.node.knobs?.[key]))}`)
     const tail = [knobs.length > 0 ? `[${knobs.join(' ')}]` : '', row.node.logic ? '(has logic)' : ''].filter(Boolean).join(' ')
-    return `${'  '.repeat(row.depth + 1)}${armWords(project, row)}${row.node.id} ${typeName(row.node)} "${row.node.name}"${tail ? ` ${tail}` : ''}`
+    return `${'  '.repeat(row.depth + 1)}${armWords(project, row)}${row.node.id} ${typeName(row.node)} ${quoted(row.node.name)}${tail ? ` ${tail}` : ''}`
   })
   if (rows.length > OUTLINE_MAX) lines.push(`  … ${rows.length - OUTLINE_MAX} more blocks: see the file`)
   return lines.length > 0 ? lines : ['  (no blocks)']
@@ -67,12 +69,12 @@ export function buildHandoff(project: Project, projectPath: string, scriptPath: 
   const count = flatten(project).length
   // The start block is the goal and the input, not a stage: it gets no phase and no agent is labelled with it.
   const stages = project.nodes.filter(node => node.type !== 'start')
-  const phases = stages.map(node => `"${node.id} ${node.name}"`)
+  const phases = stages.map(node => quoted(`${node.id} ${node.name}`))
   // The label's example names a block that spawns agents itself, where the project has one; with a script, one the label rule is for.
   const first = flatten(project).find(row => !canHoldChildren(row.node.type) && row.node.type !== 'start' && row.node.type !== 'code' && (scriptPath === null || !row.node.match))?.node ?? stages[0]
   const goal = goalOf(project)
   const args = (project.nodes.find(node => node.type === 'start')?.knobs?.args ?? '').replace(/\s+/g, ' ').trim()
-  const example = first ? `${first.id}: ${first.name}` : 'n1: scout diff'
+  const example = quoted(first ? `${first.id}: ${first.name}` : 'n1: scout diff')
 
   const lines = [
     `Conductor handoff: ${scriptPath === null ? 'implement' : 'update'} and run the workflow project "${project.name}".`,
@@ -97,13 +99,13 @@ export function buildHandoff(project: Project, projectPath: string, scriptPath: 
     'So the run shows on the board:',
     ...(scriptPath === null
       ? [
-          `- every agent() sets label: "<nodeId>: <short text>", the id being the INNERMOST project node the agent belongs to, e.g. "${example}".`,
+          `- every agent() sets label: "<nodeId>: <short text>", the id being the INNERMOST project node the agent belongs to, e.g. ${example}.`,
           '- each top-level node (the `start` block left out) is one phase titled "<nodeId> <name>": list them in meta.phases in project',
           `  order and pass the title as \`phase\` on every agent() under that node.${phases.length > 0 ? ` Here: meta.phases = [${phases.join(', ')}]` : ''}`,
         ]
       : [
           '- a node with `match` is already wired by the labels or phase titles listed there (one ending in * is a prefix): keep them as they are.',
-          `- every agent() of a node without \`match\` sets label: "<nodeId>: <short text>", the id being the INNERMOST project node it belongs to, e.g. "${example}".`,
+          `- every agent() of a node without \`match\` sets label: "<nodeId>: <short text>", the id being the INNERMOST project node it belongs to, e.g. ${example}.`,
           "- keep the script's meta.phases and every `phase`; a top-level node with no phase gets one titled \"<nodeId> <name>\", in project order.",
         ]),
     `- meta.name = "${project.name}".`,

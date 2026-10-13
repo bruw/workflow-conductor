@@ -192,7 +192,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         choice = picked.choice
       }
 
-      return choice === 'skip' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeBrief(script, kept === null, workflow === undefined ? undefined : projectName(workflow))] }
+      return choice === 'skip' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeBrief(script, kept === null, workflow === undefined ? undefined : (projectName(workflow) ?? undefined))] }
     } catch {
       return answer
     }

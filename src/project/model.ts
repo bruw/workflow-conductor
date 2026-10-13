@@ -190,6 +190,12 @@ const TEXT_KNOBS: readonly string[] = ['goal', 'args', 'prompt', 'output', 'mode
 const PROJECT_KEYS: readonly string[] = ['version', 'name', 'nextId', 'nodes']
 const NODE_KEYS: readonly string[] = ['id', 'type', 'kind', 'name', 'logic', 'knobs', 'match', 'children']
 const ID_PATTERN = /^n(\d+)$/
+const NAME_PATTERN = /^[a-z0-9-]+$/
+
+/** Whether `name` can name a project: lowercase letters, digits and dashes, as its file, `meta.name` and the hand-off's sentence spell it. */
+export function isProjectName(name: unknown): name is string {
+  return typeof name === 'string' && NAME_PATTERN.test(name)
+}
 
 export function isNodeType(value: unknown): value is NodeType {
   return typeof value === 'string' && (NODE_TYPES as readonly string[]).includes(value)
@@ -210,19 +216,18 @@ export function idNumber(id: string): number {
   return match ? Number(match[1]) : 0
 }
 
-/** Lowercase kebab-case, as `meta.name` wants it. */
+/** Lowercase kebab-case, as `meta.name` wants it; '' for a name with no letter or digit it can keep (none of a to z, 0 to 9). */
 export function toKebab(name: string): string {
-  const kebab = name
+  return name
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-  return kebab || 'untitled'
 }
 
 /** A project with no block of its own: the start block and nothing else. */
 export function emptyProject(name: string): Project {
-  return withStart({ version: 1, name: toKebab(name), nodes: [] })
+  return withStart({ version: 1, name: toKebab(name) || 'untitled', nodes: [] })
 }
 
 /** The knobs only the start block has. */
@@ -287,6 +292,8 @@ function readNode(raw: unknown, where: string, seen: Set<string>): ProjectNode {
   if (!isRecord(raw)) fail(`${where} must be an object`)
   const { id, name, logic, match, children } = raw
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) fail(`${where}: id must look like "n1"`)
+  // Past that, two numbers read as one: the next id handed out would be one a block has.
+  if (!Number.isSafeInteger(idNumber(id))) fail(`${where}: the number in id ${id} is too large`)
   if (seen.has(id)) fail(`duplicate id ${id}`)
   seen.add(id)
   const stray = strayKey(raw, NODE_KEYS)
@@ -327,8 +334,9 @@ export function parseProject(json: string): ParseResult {
     const stray = strayKey(raw, PROJECT_KEYS)
     if (stray !== undefined) fail(`project: unknown key ${stray}`)
     const { name, nextId } = raw
-    if (typeof name !== 'string' || name === '') fail('name must be a non-empty string')
-    if (nextId !== undefined && !(typeof nextId === 'number' && Number.isInteger(nextId) && nextId >= 1)) {
+    // The name is spelled into what Claude is told (the hand-off, `meta.name`): nothing but the letters of a file's name.
+    if (!isProjectName(name)) fail('name must be lowercase letters, digits and dashes (a-z, 0-9, -)')
+    if (nextId !== undefined && !(typeof nextId === 'number' && Number.isSafeInteger(nextId) && nextId >= 1)) {
       fail('nextId must be a whole number of at least 1')
     }
     const nodes = readNodes(raw.nodes, 'nodes', new Set())

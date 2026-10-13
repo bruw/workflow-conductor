@@ -25,6 +25,14 @@ if (!dir || !name) {
   process.exit(1)
 }
 
+// The name is spelled into three paths under fixtures/: nothing that leaves that folder.
+if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+  console.error(`fixture name must be lowercase letters, digits and dashes: ${JSON.stringify(name)}`)
+  process.exit(1)
+}
+
+/** A field kept only as the text it should be: anything else an entry carries there is content, and stays out. */
+const text = (value: unknown) => (typeof value === 'string' ? value : undefined)
 const shortKey = (key: unknown) => (typeof key === 'string' ? key.slice(0, 11) : undefined)
 
 const lines: string[] = []
@@ -43,11 +51,10 @@ for (const line of readFileSync(join(dir, 'journal.jsonl'), 'utf8').split('\n'))
   if (entry.type === 'launched') {
     lines.push(JSON.stringify({ type: 'launched' }))
   } else if (entry.type === 'started') {
-    const { agentId, label, phase } = entry
-    lines.push(JSON.stringify({ type: 'started', key: shortKey(entry.key), agentId, label, phase }))
+    lines.push(JSON.stringify({ type: 'started', key: shortKey(entry.key), agentId: text(entry.agentId), label: text(entry.label), phase: text(entry.phase) }))
   } else if (entry.type === 'result') {
     const result = entry.result === null || entry.result === undefined ? null : true
-    lines.push(JSON.stringify({ type: 'result', key: shortKey(entry.key), agentId: entry.agentId, result }))
+    lines.push(JSON.stringify({ type: 'result', key: shortKey(entry.key), agentId: text(entry.agentId), result }))
   } else {
     skipped++
   }
@@ -58,7 +65,7 @@ for (const file of readdirSync(dir).sort()) {
   const match = /^agent-(.+)\.meta\.json$/.exec(file)
   if (!match?.[1]) continue
   const { description, workflowPhase } = JSON.parse(readFileSync(join(dir, file), 'utf8'))
-  metas[match[1]] = { description, workflowPhase }
+  metas[match[1]] = { description: text(description), workflowPhase: text(workflowPhase) }
 }
 
 const out = join(import.meta.dir, '..', 'fixtures')

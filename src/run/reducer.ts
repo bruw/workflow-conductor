@@ -70,10 +70,11 @@ export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): Run
   switch (event.kind) {
     case 'run-start': {
       // A repeated start for the run already in progress must not drop its agents.
+      const dir = event.transcriptDir === undefined ? {} : { transcriptDir: event.transcriptDir }
       if (state.status === 'running' && state.runId === event.runId) {
-        return event.name === undefined ? state : { ...state, name: event.name }
+        return event.name === undefined && (event.transcriptDir === undefined || event.transcriptDir === state.transcriptDir) ? state : { ...state, ...(event.name === undefined ? {} : { name: event.name }), ...dir }
       }
-      return { ...emptyRunState(), runId: event.runId, name: event.name, status: 'running' }
+      return { ...emptyRunState(), runId: event.runId, name: event.name, ...dir, status: 'running' }
     }
 
     case 'agent-start': {

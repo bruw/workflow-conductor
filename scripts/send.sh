@@ -4,4 +4,4 @@
 set -euo pipefail
 
 SESSION="${CONDUCTOR_SESSION:-conductor-dev}"
-exec tmux send-keys -t "$SESSION" "$@"
+exec tmux send-keys -t "=$SESSION:" "$@"
