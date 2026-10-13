@@ -66,11 +66,11 @@ export const KEY_OPS: Record<string, KeyOp> = {
   p: 'projects',
   '?': 'help',
   h: 'help',
-  M: 'minimize',
+  m: 'minimize',
 }
 
 /** The key that minimizes the pane into the band above the prompt, and expands the band into the pane: one key for both. */
-export const MINIMIZE_KEYS = 'Shift+M'
+export const MINIMIZE_KEYS = 'm'
 
 /** Characters that arrive at once are keys up to this many; more is a paste. */
 export const BURST_MAX = 8

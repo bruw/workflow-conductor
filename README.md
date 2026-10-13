@@ -15,7 +15,7 @@ implement and run, and watch the run's progress on the same project.
 ## Before you start
 
 - **Use a wide terminal and the docked pane.** The designer has one screen: the graph and the detail pane side by side. Its pane needs 80 columns and 20 rows inside, which a docked pane has from a terminal of 110 columns. A pane with less (above the prompt in a smaller terminal, or a dock dragged narrow) draws no squeezed designer: Conductor goes into its **compact view** in the band above the prompt, which says what the designer needs. Widen the terminal and the designer opens by itself.
-- **`Shift+M` minimizes the designer into the compact view, and expands it again.** Minimized, the transcript has its full width back and the band shows the project and its run. The same key expands it once the band has the keyboard (click the band, or `ctrl+x` `tab`); a click on `[ Shift+M Expand ]` or `/conductor` does too.
+- **`m` minimizes the designer into the compact view, and expands it again; from the prompt, `/conductor min` and `/conductor max` do the same with the keyboard anywhere, and so does a click on `[m] Minimize` in the header or `[m] Expand` in the band.** Minimized, the transcript has its full width back and the band shows the project and its run. The same key expands it once the band has the keyboard (click the band, or `ctrl+x` `tab`); a click on `[ m Expand ]` or `/conductor` does too.
 - **A dock width you once dragged is remembered by Claude Code** and wins over the width Conductor asks for. Drag the dock's border to change it.
 - **The pane says when the keyboard is not its own.** While letters go to Claude Code's prompt, the legend and the key hints are dim and the footer says `Input: prompt · click the graph or /conductor`: do one of the two to get the keys back. While the pane has the keyboard, letters are keys on the graph and text in an open field.
 - **Escape always hands the keyboard back to the prompt.** No mod can keep it. Text you typed into a field is not lost: it is saved as an edit (the pane says `n3 changed: notes`, and `u` undoes it) on Escape and on every other way out of a field: an arrow to another field, Enter, a click on the graph, a picker's choice, a `/conductor` command, a prompt you send, an edit from chat, a resize, closing the pane. Press `u` afterwards if you did not mean it.
@@ -56,6 +56,7 @@ Desktop app (no flag can be given): name the folder in the `env` block of `~/.cl
 | Command | What it does |
 | --- | --- |
 | `/conductor` | The board. With a run in progress: that run, on its project when it came from one. Otherwise the project last opened in this session, with the keyboard, or the start screen when there is none: the saved projects to open, rename or delete, above the templates for a new one. |
+| `/conductor min` · `/conductor max` | Minimizes the designer into the compact view above the prompt, and expands it into its pane again (`minimize` and `expand` are taken too). Typed at the prompt: neither the pane nor the band needs the keyboard. |
 | `/conductor <description…>` | Claude drafts a new project for the description, names it and shows it on the graph (see "Designing by talking"). Always a new project, unless your own words name an existing one to change. |
 
 There are no verbs: a project is opened, renamed and deleted on the start screen, and run with `r` on its board. Replays and the reset of stored answers are rows of the start screen too.
@@ -92,24 +93,24 @@ Four parts, each in a fixed place: a **header**, the **graph** of the workflow, 
 
 ### The compact view
 
-What Conductor draws in the band above the prompt while the designer is minimized: by you (`Shift+M`), or because its pane has no room. It is not a small designer. It has no graph and no detail pane, and nothing is edited in it (ask Claude in the prompt: edits from chat still reach the project).
+What Conductor draws in the band above the prompt while the designer is minimized: by you (`m`), or because its pane has no room. It is not a small designer. It has no graph and no detail pane, and nothing is edited in it (ask Claude in the prompt: edits from chat still reach the project).
 
 ```
-          conductor / demo / agents ≥ 9                                            COMPACT VIEW [-]
-          Goal: Answer a question from many sources: search several ways, read deeply, check f…
-          Projects  demo  splashtest  untitled  untitled-2
-          [ Shift+M Expand ]  The full designer needs a terminal 110+ columns wide
+╭───────────────────────────────────────────────────────────────────────────────────────────╮ [-]
+│           conductor / demo / agents ≥ 9                                      COMPACT VIEW │
+│           Projects  demo  splashtest  untitled  untitled-2                                │
+│           The full designer needs a terminal 110+ columns wide                 [m] Expand │
+╰───────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-(100 columns, from a real session; the conductor stands in the ten cells at the left of the first two rows, left out here.)
+(100 columns; the conductor stands in the ten cells at the left of the first two rows, left out here.)
 
 - **The conductor**, as in the designer's header: it conducts while a run is on.
-- **Row 1:** `conductor / <project> / agents ≥ 9`, and at the right `COMPACT VIEW` (no room for the designer) or `MINIMIZED` (your `Shift+M`).
-- **Row 2:** a run in progress, as a bar and in words (`████████     RUNNING · 6/9 agents done · 53.8k tokens · 4.1s`, the project's name first where it is not the open one); a run that is over stays on its own project until its results are put away. With no run, the project's goal; with no project open, what to do next.
-- **Projects:** the saved projects, in one row. A click on a name (or, with the keyboard in the band, `tab` to it and Enter) makes it the open project. In a terminal too small for the start screen this is where a project is picked.
-- **The last row:** `[ Shift+M Expand ]`, and what the designer needs where its pane had no room: a wider terminal, the fullscreen layout, a wider dock, a taller terminal.
-- **Fewer rows, fewer parts:** under four rows the projects go, under three the last row, and one row alone is the name, the run and the button on one line.
-- **Back to the designer:** `Shift+M` with the keyboard in the band (plain `m` does too: the band's keys have no case), a click on the button, or `/conductor`. Where the compact view came up by itself, widening the terminal to 110 columns opens the designer by itself.
+- **Row 1:** `conductor / <project> / agents ≥ 9`, and at the right `COMPACT VIEW` (no room for the designer) or `MINIMIZED` (your `m`).
+- **Row 2, the projects:** the saved projects, in one row. A click on a name (or, with the keyboard in the band, `tab` to it and Enter) makes it the open project. In a terminal too small for the start screen this is where a project is picked.
+- **The last row:** a run in progress, as a bar and in words (`████████     RUNNING · 6/9 agents done · 53.8k tokens · 4.1s`, the project's name first where it is not the open one); a run that is over stays on its own project until its results are put away. With no run: what the designer needs where its pane had no room (a wider terminal, the fullscreen layout, a wider dock, a taller terminal), else the project's goal, else what to do next. At its right, the button `[m] Expand`.
+- **The border** is drawn from four rows. **Fewer rows, fewer parts:** under five rows the projects go, under four the border, and one row alone is the name, the run and the button on one line.
+- **Back to the designer:** `/conductor max` (or bare `/conductor`) from the prompt, a click on the button, or `m` with the keyboard in the band. Where the compact view came up by itself, widening the terminal to 110 columns opens the designer by itself.
 - **It comes up by itself** when a run starts on a project, or Claude edits one, in a terminal too small for the pane; the band then shows what the pane would.
 - The band is Claude Code's: its `[-]` (or `ctrl+x` `ctrl+a`) hides it, and a survey takes its place while one is up.
 
@@ -232,7 +233,7 @@ Letters are keys while the pane has the keyboard and no field is open. Case matt
 | `1` `2` | step a knob of the selected block, as its chips show: `1` model (inherit → haiku → sonnet → opus → inherit), `2` effort (inherit → low → medium → high → xhigh → max → inherit). Only the ones the block has |
 | `o` `b` | open the selected container as the view / back up one level |
 | `i` | hide or show the detail pane |
-| `Shift+M` | minimize the designer into the compact view above the prompt; there, with the keyboard in the band, expand it again |
+| `m` | minimize the designer into the compact view above the prompt; there, with the keyboard in the band, expand it again (from the prompt: `/conductor min`, `/conductor max`) |
 | `u` `y` | undo and redo. Every change to a project can be undone: add, delete, move, retype, a field, a knob, the goal, a drop, and what Claude changed from chat. Fifty steps per project, for the session |
 | `q` | Claude review: puts `Review the "<name>" workflow project as it is on the board now (read it first, it may have changed by hand): is the structure right for its goal, what is missing, what is wasteful?` in the prompt, not sent; the keys go to the prompt |
 | `r` | implement and run: hands the project to Claude at once (the prompt `Implement and run the "<name>" workflow project …` is sent for you) and the keys go to the prompt. Claude first confirms the design and asks what to run it on, in chat; your answer starts the work. A toast says what the project implies: `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats) · problems in n3, n5`. Where the prompt box already holds text the request is left there for you to send |

@@ -994,7 +994,7 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['1 2', 'step the model, the effort (the chips on the selected card)'],
   ['o  b', 'open the selected container as the view / back up one level'],
   ['i', 'hide or show this pane'],
-  ['Shift+M', 'minimize the designer into the band above the prompt; there, once the band has the keys (a click on it), the same key expands it again'],
+  ['m', 'minimize the designer into the band above the prompt; there, once the band has the keys (a click on it), the same key expands it again. From the prompt: /conductor min, /conductor max'],
   ['u  y', 'undo / redo'],
   ['q', 'Claude review: asks Claude to review the project (fills the prompt)'],
   ['r', 'implement and run: hands the project to Claude at once; Claude confirms the design and asks what to run it on'],

@@ -1,5 +1,5 @@
 // The compact view: what Conductor draws in the band above the prompt while the designer is minimized, by
-// the person (`Shift+M`) or because its pane has no room for the graph and the detail pane side by side. It is
+// the person (`m`) or because its pane has no room for the graph and the detail pane side by side. It is
 // no small designer: the conductor, the project and the run in a few rows, the saved projects to pick from, and
 // the way back to the full screen. Pure TypeScript: no `$`, no engine imports.
 
@@ -53,6 +53,12 @@ export const COMPACT_BAR_W = 12
 /** Cells between two names of the designs' row, and the row's label. */
 export const LIST_GAP = 2
 export const LIST_LABEL = 'Projects'
+/** The rows the band must give for the view to have its border, and the cells the border and its padding take of a row. */
+export const BORDER_ROWS = SMALL_ROWS + 2
+export const BORDER_CELLS = 4
+/** The button that expands, in the pane's style: `[m] Expand`. */
+export const EXPAND_WORD = 'Expand'
+export const EXPAND_W = `[${MINIMIZE_KEYS}] ${EXPAND_WORD}`.length
 
 /** What the compact view shows. */
 export type CompactInput = {
@@ -81,13 +87,12 @@ export type CompactView = {
   name: string
   facts: string | null
   state: string
-  /** The second row: the run, else the goal, else what to do with no project open. */
-  second: { bar: string | null; text: string; color: 'claude' | 'success' | 'error' | null }
+  /** The last row: the run, else the goal, else what to do with no project open. The button that expands is at its right. */
+  status: { bar: string | null; text: string; color: 'claude' | 'success' | 'error' | null }
+  /** The second row, where there are rows for it: the saved projects. */
   list: CompactList | null
-  /** What the full designer needs, where the pane could not hold it; null where the person minimized it. */
-  hint: string | null
-  /** The key that expands, as its Button says it. */
-  expand: string
+  /** Whether the view has its border: from `BORDER_ROWS` rows. */
+  bordered: boolean
   /** The rows the view takes. */
   taken: number
 }
@@ -122,15 +127,16 @@ export function compactView(input: CompactInput): CompactView {
   const { shell, run } = input
   const columns = Math.max(20, input.columns)
   const rows = Math.max(1, input.rows)
-  const expand = `${MINIMIZE_KEYS} Expand`
   const state = run !== null ? '' : shell.minimized === 'person' ? 'MINIMIZED' : 'COMPACT VIEW'
   const name = input.name ?? 'no project open'
-  const text = run !== null ? run.text : input.name === null ? 'pick one below · /conductor <what you want> has Claude draft one' : input.goal === '' ? 'Goal: not said yet' : `Goal: ${input.goal}`
-  const second = { bar: run?.bar ?? null, text, color: run?.color ?? null }
-  const hint = shell.minimized === 'auto' && shell.why !== null ? WHY_TEXT[shell.why] : null
+  // Minimized for want of room, the row says what the designer needs.
+  const why = shell.minimized === 'auto' && shell.why !== null ? WHY_TEXT[shell.why] : null
+  const text = run !== null ? run.text : why !== null ? why : input.name === null ? 'pick one above · /conductor <what you want> has Claude draft one' : input.goal === '' ? 'Goal: not said yet' : `Goal: ${input.goal}`
+  const status = { bar: run?.bar ?? null, text, color: run?.color ?? null }
   const oneLine = rows < SMALL_ROWS
-  // The projects have a row from four: under the conductor's two, over the one that says the way back.
-  const list = rows >= SMALL_ROWS + 2 ? compactList(input.saved, input.name, columns - SMALL_W) : null
-  const taken = oneLine ? 1 : SMALL_ROWS + (rows > SMALL_ROWS ? 1 : 0) + (list === null ? 0 : 1)
-  return { oneLine, name, facts: input.facts, state, second, list, hint, expand, taken }
+  const bordered = rows >= BORDER_ROWS
+  // The projects have a row once the border has its two: under the name's, over the run's.
+  const list = rows >= BORDER_ROWS + 1 ? compactList(input.saved, input.name, columns - SMALL_W - BORDER_CELLS) : null
+  const taken = oneLine ? 1 : SMALL_ROWS + (list === null ? 0 : 1) + (bordered ? 2 : 0)
+  return { oneLine, name, facts: input.facts, state, status, list, bordered, taken }
 }

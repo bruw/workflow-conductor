@@ -56,8 +56,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'conductor',
-      description: 'Workflow designer and run view: no argument opens the board (a run in progress, the project last opened, or the start screen to pick one); with a description, Claude drafts a new project for it',
-      argumentHint: '[what the workflow should do]',
+      description: 'Workflow designer and run view: no argument opens the board (a run in progress, the project last opened, or the start screen to pick one); with a description, Claude drafts a new project for it; min and max move the designer between its pane and the band above the prompt',
+      argumentHint: '[what the workflow should do | min | max]',
     })
 
     // A run a previous load of the module was following: when it came from a project, its

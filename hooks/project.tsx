@@ -89,9 +89,9 @@ import { replayProjectEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
 import { NOT_SET, UNMAPPED_ID, canOpen } from '../src/ui/graph-layout'
 import { parseGraphMessage } from '../src/ui/graph-model'
-import { COMPACT_BAR_W, LIST_GAP, LIST_LABEL, compactView, initialShell, whyCompact, wouldDock } from '../src/ui/compact'
+import { BORDER_CELLS, BORDER_ROWS, COMPACT_BAR_W, EXPAND_W, EXPAND_WORD, LIST_GAP, LIST_LABEL, compactView, initialShell, whyCompact, wouldDock } from '../src/ui/compact'
 import type { CompactWhy, Minimized } from '../src/ui/compact'
-import { ENTER, KEY_OPS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
+import { ENTER, KEY_OPS, MINIMIZE_KEYS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
 import { FAILED, bar, fmtTokens } from '../src/ui/rail'
 import { BEAT_MS, GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, draftPose, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene, waitScene } from '../src/ui/persona'
@@ -131,6 +131,8 @@ const DRAFT_LABEL = '[Draft using claude]'
 const NAME_BUTTON_KEY = 'projects-button'
 /** A button of the pane's last row, before its key: `act:r`. */
 const ACT_KEY = 'act:'
+/** The header's Minimize, a button among the legend's keys. */
+const MINIMIZE_BUTTON_KEY = 'project-minimize'
 /** Why a list's arrow is refused its move: the ring stays where it is, and the mark moves. */
 const ARROWS_CHOOSE = 'the arrows choose a row'
 /** Saved projects the start screen lists at once where it is short of rows: a window around the marked one. */
@@ -836,7 +838,10 @@ const watchBox = ($: EngineInterface): void => {
   look()
 }
 
-/** The band's Button that expands: `m` presses it while the band holds the keys, with Shift or without (a Button's hotkey has no case). */
+/** What `/conductor` takes for the same two moves, typed at the prompt: no focus on the pane or the band is needed. */
+const MINIMIZE_WORDS: readonly string[] = ['min', 'minimize']
+const EXPAND_WORDS: readonly string[] = ['max', 'expand']
+/** The band's Button that expands:`m` presses it while the band holds the keys (a Button's hotkey has no case, so `M` does too). */
 const EXPAND_KEY = 'conductor-expand'
 const EXPAND_HOTKEY = 'm'
 const BAND_PROJECT_KEY = 'conductor-project:'
@@ -1644,8 +1649,18 @@ export const registerProject = (on: On, tracker: Tracker): void => {
   // them and names it. With none it is the board: a run in progress on its project (run.tsx's phase view when it came
   // from none), else the project last opened, with the keyboard, else the start screen.
   on('command.run', { command: COMMAND }, async ($, e, next) => {
-    const words = e.args.trim().replace(/\s+/g, ' ')
+    const typed = e.args.trim().replace(/\s+/g, ' ')
+    // Two words are no description: they move the designer between its pane and the band, from the prompt.
+    const shellWord = typed.toLowerCase()
+    // `max` is the bare command: the board, in its pane, with the keyboard.
+    const words = EXPAND_WORDS.includes(shellWord) ? '' : typed
     terminalColumns = e.presentation?.columns ?? terminalColumns
+    if (MINIMIZE_WORDS.includes(shellWord)) {
+      if ((await read($, shellAtom)).minimized === 'person') return { text: `The designer is minimized already: /${COMMAND} max expands it.` }
+      minimize($, 'person')
+
+      return { text: `Designer minimized into the band above the prompt: /${COMMAND} max expands it.` }
+    }
     // Whatever was typed into a field and not sent is saved before the command acts (it may open another project).
     await flushDrafts($)
     // The person is at the prompt, sending a command: nothing waits there for the keys any more.
@@ -2203,6 +2218,28 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         ])}
       </Text>
     )
+    // The header's legend: the same row, with Minimize a button, so a click minimizes while the keys are in the prompt.
+    const headLegend = (row: readonly LegendItem[]) =>
+      row.flatMap((item, index) => {
+        const label = (
+          <Text>
+            <Text color={focused || item.keys === MINIMIZE_KEYS ? 'claude' : FADED}>{`[${item.keys}]`}</Text>
+            <Text color={item.keys === MINIMIZE_KEYS ? TEXT : FADED}>{` ${item.word}`}</Text>
+          </Text>
+        )
+        return [
+          ...(index > 0 ? [<Box width={LEGEND_GAP} flexShrink={0} />] : []),
+          <Box flexShrink={0}>
+            {item.keys === MINIMIZE_KEYS ? (
+              <Button key={MINIMIZE_BUTTON_KEY} plain onPress={() => minimize($, 'person')}>
+                {label}
+              </Button>
+            ) : (
+              label
+            )}
+          </Box>,
+        ]
+      })
     // The header's two rows. After the name its state, quiet, then in a colour of its own the project's facts (the agents
     // it starts). Short of room the facts go first, then the state; the name keeps eight cells at the least.
     // Row 2 is the legend: one row, and what does not fit is left to the help pages.
@@ -2230,7 +2267,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           {count !== null && <Text key="project-facts" color="suggestion">{count}</Text>}
         </Box>,
         <Box key="project-legend" flexDirection="row" height={1} flexShrink={0}>
-          {keys.length > 0 ? legendRow(legendRows(keys, headColumns, 1)[0] ?? []) : <Text color={TEXT}> </Text>}
+          {keys.length > 0 ? headLegend(legendRows(keys, headColumns, 1)[0] ?? []) : <Text color={TEXT}> </Text>}
         </Box>,
       ]
     }
@@ -3082,7 +3119,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
   })
 
   // The compact view: what is drawn in the band above the prompt (`AbovePrompt`) while the designer is minimized, by
-  // the person's Shift+M or because its pane has no room for the graph and the detail pane side by side
+  // the person's m or because its pane has no room for the graph and the detail pane side by side
   // (`compact.ts`). The conductor, the open project and the run, the saved projects to pick from, and the way back to
   // the pane. Nothing while the pane is on screen: beside a dock the band has the transcript's few cells (API-NOTES
   // S18), and an inline pane shares its rows.
@@ -3131,7 +3168,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const asked = await read($, personaAtom)
     const pose: Pose = asked !== 'idle' ? asked : ((tracked ? runPose(run.status, clock) : null) ?? 'idle')
     const columns = e.props.bodyColumns
-    const room = Math.max(8, columns - SMALL_W)
+    // The border and its padding take their cells from every row.
+    const room = Math.max(8, columns - SMALL_W - (e.props.maxRows >= BORDER_ROWS ? BORDER_CELLS : 0))
     const agents = Object.values(run.agents)
     const settled = agents.filter(agent => agent.status !== 'running').length
     const summary = tracked ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, room - COMPACT_BAR_W - 2)) : null
@@ -3149,15 +3187,27 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     })
 
     const terminal = e.viewport?.columns
+    // The pane's kind of button: the key in brackets, then the word.
     const expandButton = (
-      <Button key={EXPAND_KEY} hotkey={EXPAND_HOTKEY} onPress={() => press($, () => expand($, true, terminal))}>
-        {view.expand}
-      </Button>
+      <Box flexDirection="row" flexShrink={0}>
+        <Button key={EXPAND_KEY} plain onPress={() => press($, () => expand($, true, terminal))}>
+          <Text>
+            <Text color="claude">{`[${EXPAND_HOTKEY}]`}</Text>
+            <Text color={TEXT}>{` ${EXPAND_WORD}`}</Text>
+          </Text>
+        </Button>
+        {/* The key itself: a Button with a hotkey writes it before its label (`m: `), so this one is in the tree and not drawn. */}
+        <Box key="conductor-expand-key" display="none">
+          <Button key={`${EXPAND_KEY}:key`} hotkey={EXPAND_HOTKEY} onPress={() => press($, () => expand($, true, terminal))}>
+            {EXPAND_WORD}
+          </Button>
+        </Box>
+      </Box>
     )
-    const secondRow = (width: number) => (
+    const statusRow = (width: number) => (
       <Text wrap="truncate-end">
-        {view.second.bar !== null && <Text color={view.second.color ?? TEXT}>{`${view.second.bar} `}</Text>}
-        <Text color={view.second.color ?? FADED}>{clip(view.second.text, Math.max(4, width - (view.second.bar === null ? 0 : COMPACT_BAR_W + 1)))}</Text>
+        {view.status.bar !== null && <Text color={view.status.color ?? TEXT}>{`${view.status.bar} `}</Text>}
+        <Text color={view.status.color ?? FADED}>{clip(view.status.text, Math.max(4, width - (view.status.bar === null ? 0 : COMPACT_BAR_W + 1)))}</Text>
       </Text>
     )
 
@@ -3166,7 +3216,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       return (
         <Box flexDirection="row" height={1}>
           <Text bold color="claude">{`${clip(lead, Math.max(8, Math.floor(columns / 3)))}  `}</Text>
-          <Box flexGrow={1} flexShrink={1}>{secondRow(columns - lead.length - view.expand.length - 8)}</Box>
+          <Box flexGrow={1} flexShrink={1}>{statusRow(columns - lead.length - EXPAND_W - 4)}</Box>
           <Box flexShrink={0}>{expandButton}</Box>
         </Box>
       )
@@ -3175,54 +3225,56 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const stateW = view.state.length
     const factsW = view.facts === null ? 0 : view.facts.length + 3
     const nameW = Math.max(8, room - COMMAND.length - 3 - stateW - 2 - factsW)
-    return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" height={SMALL_ROWS}>
-          <Box key="conductor-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
-            {smallPersona(pose).map(row => (
-              <Box flexDirection="row" height={1} flexShrink={0}>
-                {row.map(span => (
-                  <Text color={span.color ?? TEXT} backgroundColor={span.ground}>{span.text}</Text>
-                ))}
-              </Box>
-            ))}
-          </Box>
-          <Box flexDirection="column" width={room} flexShrink={0}>
-            <Box flexDirection="row" justifyContent="space-between" height={1}>
-              <Text wrap="truncate-end">
-                <Text bold color="claude">{COMMAND}</Text>
-                <Text color={FADED}>{' / '}</Text>
-                <Text bold color={TEXT}>{clip(view.name, nameW)}</Text>
-                {view.facts !== null && <Text color={FADED}>{' / '}</Text>}
-                {view.facts !== null && <Text color="suggestion">{view.facts}</Text>}
-              </Text>
-              <Box flexShrink={0}>
-                <Text color={FADED}>{view.state}</Text>
-              </Box>
+    const rows = view.taken - (view.bordered ? 2 : 0)
+    const body = (
+      <Box flexDirection="row" height={rows}>
+        <Box key="conductor-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
+          {smallPersona(pose).map(row => (
+            <Box flexDirection="row" height={1} flexShrink={0}>
+              {row.map(span => (
+                <Text color={span.color ?? TEXT} backgroundColor={span.ground}>{span.text}</Text>
+              ))}
             </Box>
-            <Box flexDirection="row" height={1}>{secondRow(room)}</Box>
+          ))}
+        </Box>
+        <Box flexDirection="column" width={room} flexShrink={0}>
+          <Box flexDirection="row" justifyContent="space-between" height={1}>
+            <Text wrap="truncate-end">
+              <Text bold color="claude">{COMMAND}</Text>
+              <Text color={FADED}>{' / '}</Text>
+              <Text bold color={TEXT}>{clip(view.name, nameW)}</Text>
+              {view.facts !== null && <Text color={FADED}>{' / '}</Text>}
+              {view.facts !== null && <Text color="suggestion">{view.facts}</Text>}
+            </Text>
+            <Box flexShrink={0}>
+              <Text color={FADED}>{view.state}</Text>
+            </Box>
+          </Box>
+          {view.list !== null && (
+            <Box flexDirection="row" height={1}>
+              <Text color="suggestion">{LIST_LABEL}</Text>
+              {view.list.names.map(name => (
+                <Box flexDirection="row" flexShrink={0}>
+                  <Text>{' '.repeat(LIST_GAP)}</Text>
+                  <Button key={`${BAND_PROJECT_KEY}${name}`} plain onPress={() => press($, () => showSaved($, name))}>
+                    <Text color={name === view.list?.current ? 'claude' : TEXT} bold={name === view.list?.current ? true : undefined}>{name}</Text>
+                  </Button>
+                </Box>
+              ))}
+              {view.list.more > 0 && <Text color={FADED}>{`${' '.repeat(LIST_GAP)}+${view.list.more} more`}</Text>}
+            </Box>
+          )}
+          <Box flexDirection="row" justifyContent="space-between" height={1}>
+            <Box flexGrow={1} flexShrink={1}>{statusRow(room - EXPAND_W - 2)}</Box>
+            <Box flexShrink={0}>{expandButton}</Box>
           </Box>
         </Box>
-        {view.list !== null && (
-          <Box flexDirection="row" height={1} paddingLeft={SMALL_W}>
-            <Text color="suggestion">{LIST_LABEL}</Text>
-            {view.list.names.map(name => (
-              <Box flexDirection="row" flexShrink={0}>
-                <Text>{' '.repeat(LIST_GAP)}</Text>
-                <Button key={`${BAND_PROJECT_KEY}${name}`} plain onPress={() => press($, () => showSaved($, name))}>
-                  <Text color={name === view.list?.current ? 'claude' : TEXT} bold={name === view.list?.current ? true : undefined}>{name}</Text>
-                </Button>
-              </Box>
-            ))}
-            {view.list.more > 0 && <Text color={FADED}>{`${' '.repeat(LIST_GAP)}+${view.list.more} more`}</Text>}
-          </Box>
-        )}
-        {view.taken > SMALL_ROWS + (view.list === null ? 0 : 1) && (
-          <Box flexDirection="row" height={1} paddingLeft={SMALL_W}>
-            <Box flexShrink={0}>{expandButton}</Box>
-            <Text color={FADED} wrap="truncate-end">{`  ${view.hint ?? `click here, then ${EXPAND_HOTKEY.toUpperCase()} · or /${COMMAND}`}`}</Text>
-          </Box>
-        )}
+      </Box>
+    )
+    if (!view.bordered) return body
+    return (
+      <Box flexDirection="column" width={columns} borderStyle="round" borderColor={RULE} paddingX={1}>
+        {body}
       </Box>
     )
   })
