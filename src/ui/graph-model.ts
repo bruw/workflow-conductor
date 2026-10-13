@@ -5,8 +5,8 @@
 // add list and the delete question live in the hooks module's state: the graph
 // draws them from props. Pure TypeScript: no `$`, no engine imports.
 
-import type { Design } from '../design/model'
-import type { Place } from '../design/ops'
+import type { Project } from '../project/model'
+import type { Place } from '../project/ops'
 import { cardOf, dropTarget, graphAt, graphRows, layoutGraph, panTo, samePlace, slideBy } from './graph-layout'
 import type { GraphCard, GraphDrop, GraphHit, GraphLayout } from './graph-layout'
 import type { RunOverlay } from './graph-paint'
@@ -26,7 +26,7 @@ export type GraphMessage =
   | { kind: 'addAt'; at: Place }
   /** A click on a chip of the selected card: its knob steps, as its digit does. */
   | { kind: 'knob'; id: string; slot: number }
-  /** A click on a crumb (`id` null: the whole design), or a second click on the selected container: that view. */
+  /** A click on a crumb (`id` null: the whole project), or a second click on the selected container: that view. */
   | { kind: 'view'; id: string | null }
   /** A click on a carousel's gutter: container `id` shows its arms from `first`. */
   | { kind: 'slide'; id: string; first: number }
@@ -35,18 +35,18 @@ export type GraphMessage =
   /** A key pressed while the graph has the keyboard, as the key catcher would have got it: the character, or `enter`. */
   | { kind: 'key'; key: string }
 
-/** `run` while a run of this design is in progress: editing is locked. */
-export type GraphMode = 'design' | 'run'
+/** `run` while a run of this project is in progress: editing is locked. */
+export type GraphMode = 'project' | 'run'
 
 /** The wheel's rows as the hooks module counts them. A count begun anew (the module loaded again) has another `from`. */
 export type GraphWheel = { from: string; rows: number }
 
 /** What the hooks module hands the Client. */
 export type GraphProps = {
-  design: Design
+  project: Project
   mode: GraphMode
   selectedId: string | null
-  /** The container shown as the view; null for the whole design. */
+  /** The container shown as the view; null for the whole project. */
   viewRootId: string | null
   /** Each block's own problems, by id. */
   problems: Record<string, number>
@@ -63,7 +63,7 @@ export type GraphProps = {
   wheel: GraphWheel
   /** What an empty graph says in place of its `[+]`: Claude is drafting it. */
   emptyNote?: string
-  /** The run of this design, drawn over its cards. */
+  /** The run of this project, drawn over its cards. */
   run?: RunOverlay
   /** Blocks an edit from chat just touched: marked for FLASH_MS. A new `seq` is a new edit. */
   flash?: { ids: string[]; seq: number }
@@ -74,8 +74,8 @@ export type GraphProps = {
 }
 
 /** The layout the props describe: the hooks module walks the same one the Client draws. */
-export function graphLayout(props: Pick<GraphProps, 'design' | 'mode' | 'selectedId' | 'viewRootId' | 'problems' | 'openAt' | 'scroll' | 'columns' | 'rows' | 'unmapped'>): GraphLayout {
-  return layoutGraph(props.design, {
+export function graphLayout(props: Pick<GraphProps, 'project' | 'mode' | 'selectedId' | 'viewRootId' | 'problems' | 'openAt' | 'scroll' | 'columns' | 'rows' | 'unmapped'>): GraphLayout {
+  return layoutGraph(props.project, {
     columns: props.columns,
     rows: props.rows,
     selectedId: props.selectedId,
@@ -302,7 +302,7 @@ function reducePointer(state: GraphState, input: GraphPointer, context: GraphCon
     }
     const { card } = hit
     if (card.id !== context.selectedId) return { state: { ...base, drag: { ...pan, post: { kind: 'select', id: card.id } } } }
-    // Only the selected card is picked up by a drag: not the view's frame, not while a run locks the design.
+    // Only the selected card is picked up by a drag: not the view's frame, not while a run locks the project.
     if (!context.locked && card.type !== 'unmapped' && card.id !== layout.viewRootId) return { state: { ...base, drag: { kind: 'card', id: card.id, downX: x, downY: y, x, y, active: false, open: opens(card, context) } } }
     return { state: { ...base, drag: opens(card, context) ? { ...pan, post: { kind: 'view', id: card.id } } : pan } }
   }
@@ -404,7 +404,7 @@ function withIncoming(motion: Motion, layout: GraphLayout, clock: number): Motio
 
 /**
  * Takes the cards' places about to be drawn into the motion state. Cards slide and grow when the
- * design changed under them (a move, a block added or deleted, an undo) or a carousel slid. A
+ * project changed under them (a move, a block added or deleted, an undo) or a carousel slid. A
  * selection that moved (its card opens its notes) and another view are drawn in place: the keys
  * never wait on a tween. Returns `state` itself when no place changed.
  */

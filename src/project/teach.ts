@@ -129,11 +129,11 @@ export const TEACH: Record<NodeType, Teach> = {
     glyph: '⇢',
     name: 'start',
     hint: 'Entry: goal and args',
-    when: 'always: every design has one, first',
+    when: 'always: every project has one, first',
     card: [
-      'Says the goal of the workflow, in a sentence: Claude reads it when it writes the script, and reviews the design against it.',
+      'Says the goal of the workflow, in a sentence: Claude reads it when it writes the script, and reviews the project against it.',
       'Says the args, the input the script reads from `args`: what it is, or its shape. Left empty, the workflow takes no input.',
-      'Every design has one, always its first block: it is not added, moved or deleted.',
+      'Every project has one, always its first block: it is not added, moved or deleted.',
       'Later blocks draw on the args: a fan-out over "the files in args", a prompt that quotes the question.',
       'The values come from the request the workflow is run with.',
       'Spawns no agent and costs no tokens.',
@@ -143,7 +143,7 @@ export const TEACH: Record<NodeType, Teach> = {
     glyph: '▭',
     name: 'phase',
     hint: 'Named group, no logic',
-    when: 'a long design reads better in named parts: gather, check, write up',
+    when: 'a long project reads better in named parts: gather, check, write up',
     card: [
       'A frame with a name and nothing else: no knobs, no fan-out, no condition.',
       'Its blocks run one after the other where the phase stands, exactly as if it were not there.',
@@ -486,7 +486,7 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
  * (`output`); a block that holds blocks says its one rule: what it runs once per (`oncePer`)
  * or when it stops (`stopCondition`). A branch's rule is on its arms (`condition`). A container hands on
  * what its last block makes, so it has no `output` of its own. The start block says the two
- * things the whole design is for: its goal and its args; it has no name to set and no logic.
+ * things the whole project is for: its goal and its args; it has no name to set and no logic.
  */
 export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
   agent: ['prompt', 'output', 'model', 'effort', 'isolation', 'agentType'],
@@ -556,7 +556,7 @@ export function fieldWord(field: string): string {
 }
 
 export const FIELD_PLACEHOLDER = {
-  logic: 'what this block does and why, for whoever reads the design',
+  logic: 'what this block does and why, for whoever reads the project',
   goal: 'what this workflow is for, in a sentence',
   args: 'what it is run on, e.g. { target? }: a branch or a path; empty: no input',
   prompt: 'the intent of its prompt; Claude writes the wording',
@@ -581,7 +581,7 @@ export function placeholderOf(block: BlockRef, field: TextField, parent?: BlockR
   return (kind === undefined ? undefined : KIND_TEACH[kind].hints?.[field]) ?? TYPE_HINTS[block.type]?.[field] ?? FIELD_PLACEHOLDER[field]
 }
 
-/** The add list's order: the blocks that do work, then the ones that hold blocks. `start` is not in it: every design has that block, and no second. */
+/** The add list's order: the blocks that do work, then the ones that hold blocks. `start` is not in it: every project has that block, and no second. */
 export const PALETTE: PaletteEntry[] = [
   { type: 'agent', group: 'work' },
   { type: 'code', group: 'work' },

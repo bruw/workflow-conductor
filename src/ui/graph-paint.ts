@@ -4,8 +4,8 @@
 // role of a word gets its look, and what is laid over the cards is drawn: the
 // run, the pointer, a card in the hand, cards on the move, the window's edges.
 
-import type { NodeType } from '../design/model'
-import type { Place } from '../design/ops'
+import type { NodeType } from '../project/model'
+import type { Place } from '../project/ops'
 import type { NodeRun, RunStatus } from '../run/events'
 import { CRUMB_PAD, CRUMB_SEP, EMPTY_KEYS, EMPTY_NOTE, UNMAPPED_ID, edgeMarks, graphRows, samePlace, stickyCards } from './graph-layout'
 import type { GraphCard, GraphDrop, GraphLayout, Seg } from './graph-layout'
@@ -21,7 +21,7 @@ export type Span = { text: string; color?: string; bold?: true; inverse?: true; 
 
 type Look = Omit<Span, 'text' | 'ground'>
 
-/** A run laid over the design: counts by node id, and the sum of the agents no block claims. */
+/** A run laid over the project: counts by node id, and the sum of the agents no block claims. */
 export type RunOverlay = {
   status: RunStatus
   byNode: Record<string, NodeRun>
@@ -82,7 +82,7 @@ export type GraphPaintOptions = {
   /** The slot under the pointer: its `[+]` is lit. */
   hoverAt?: Place | null
   run?: RunOverlay
-  /** A run locks the design: no slots, and the chips cannot be pressed. */
+  /** A run locks the project: no slots, and the chips cannot be pressed. */
   locked?: boolean
   /** A card in the pointer's hand: `x`, `y` are window cells; `hint` says what a release would do. */
   drag?: { id: string; target: GraphDrop | null; x: number; y: number; hint?: string } | null
@@ -90,7 +90,7 @@ export type GraphPaintOptions = {
   offsets?: Record<string, { dx: number; dy: number; dh?: number }>
   /** Colours and hovers left out: what a graph too large for one tree falls back to. */
   plain?: boolean
-  /** Said on an empty graph in place of its `[+]`: Claude is drafting the design. */
+  /** Said on an empty graph in place of its `[+]`: Claude is drafting the project. */
   emptyNote?: string
   /** Blocks an edit just touched: drawn in `claude`, their name inverse while `strong`. */
   flash?: { ids: readonly string[]; strong: boolean } | null
@@ -344,7 +344,7 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
   // Arrows, the words between arms, gutters and slots stand where the cards will be: left out while cards slide.
   if (!moving) {
     const drafting = options.emptyNote !== undefined && options.emptyNote !== '' && layout.blank
-    // A design with no block of its own: under its `[+]`, dim, how to start. Read-only (the start screen's Blank) the `[+]` is dim too, and no key is named.
+    // A project with no block of its own: under its `[+]`, dim, how to start. Read-only (the start screen's Blank) the `[+]` is dim too, and no key is named.
     const first = layout.blank ? layout.slots.find(slot => slot.mark !== null) : undefined
     // While Claude drafts, the note stands where that `[+]` would.
     if (drafting) put(1, first?.mark?.y ?? 0, clip(options.emptyNote ?? '', Math.max(1, width - 2)), look({ color: 'claude' }))

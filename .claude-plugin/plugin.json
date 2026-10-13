@@ -1,7 +1,7 @@
 {
   "name": "conductor",
   "version": "0.1.0",
-  "description": "Design a workflow visually, hand it to Claude, watch the run on the same design",
+  "description": "Design a workflow visually, hand it to Claude, watch the run on the same project",
   "author": { "name": "artdiev" },
   "types": "./types/index.d.ts"
 }

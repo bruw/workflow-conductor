@@ -1,4 +1,4 @@
-// The design model: the shapes from docs/SPEC.md plus parsing, serializing and
+// The project model: the shapes from docs/SPEC.md plus parsing, serializing and
 // tree helpers. Pure TypeScript: no `$`, no engine imports, no fs.
 
 export const NODE_TYPES = [
@@ -60,7 +60,7 @@ export type Knobs = {
   condition?: string
 }
 
-export type DesignNode = {
+export type ProjectNode = {
   id: string
   type: NodeType
   /** The pattern the block is used for; left out for the plain block (the first of its type's kinds). */
@@ -71,28 +71,28 @@ export type DesignNode = {
   logic?: string
   knobs?: Knobs
   /**
-   * On a design drawn of a script that exists: the script's own strings this block stands for, each an agent
+   * On a project drawn of a script that exists: the script's own strings this block stands for, each an agent
    * label or a phase title, exact, or a prefix when it ends in `*` (`review:*`). The run is put on the block by them.
    */
   match?: string[]
-  children?: DesignNode[]
+  children?: ProjectNode[]
 }
 
-export type Design = {
+export type Project = {
   version: 1
   name: string
   // SPEC deviation: a high-water mark so an id is never handed out twice, even
-  // after the node with the highest number was removed. Optional: a design
+  // after the node with the highest number was removed. Optional: a project
   // without it derives the next id from the ids present. Maintained by ops.ts.
   nextId?: number
-  nodes: DesignNode[]
+  nodes: ProjectNode[]
 }
 
-export type ParseResult = { ok: true; design: Design } | { ok: false; error: string }
+export type ParseResult = { ok: true; project: Project } | { ok: false; error: string }
 
-export type Row = { node: DesignNode; depth: number; parentId: string | undefined; index: number }
+export type Row = { node: ProjectNode; depth: number; parentId: string | undefined; index: number }
 
-export type WalkInfo = { parent: DesignNode | undefined; depth: number; index: number }
+export type WalkInfo = { parent: ProjectNode | undefined; depth: number; index: number }
 
 /** The only types that may hold children. */
 export const CONTAINER_TYPES: readonly NodeType[] = ['pipeline', 'parallel', 'loop', 'branch', 'phase']
@@ -108,12 +108,12 @@ export function plainKind(type: NodeType): Kind | undefined {
 }
 
 /** A block's kind, the plain one where it says none; undefined for a type that has no kinds. */
-export function kindOf(node: Pick<DesignNode, 'type' | 'kind'>): Kind | undefined {
+export function kindOf(node: Pick<ProjectNode, 'type' | 'kind'>): Kind | undefined {
   return node.kind ?? plainKind(node.type)
 }
 
 /** A block as the add list and a message name it: `agent verify`, `loop dry`, and the bare type for a plain block. */
-export function typeName(node: Pick<DesignNode, 'type' | 'kind'>): string {
+export function typeName(node: Pick<ProjectNode, 'type' | 'kind'>): string {
   return node.kind === undefined || node.kind === plainKind(node.type) ? node.type : `${node.type} ${node.kind}`
 }
 
@@ -132,57 +132,57 @@ export function readType(type: unknown, kind?: unknown): { type: NodeType; kind?
   return found === kinds[0] ? { type } : { type, kind: found }
 }
 
-/** Where the `start` block stands, as a refusal says it: every design has one, and nothing stands before it. */
-export const START_PLACE = 'the start block is the first block of the design: at the top level, before every other block'
+/** Where the `start` block stands, as a refusal says it: every project has one, and nothing stands before it. */
+export const START_PLACE = 'the start block is the first block of the project: at the top level, before every other block'
 
-/** The design's `start` block: its first block. Every design that was parsed or made here has one (`withStart`). */
-export function startOf(design: Pick<Design, 'nodes'>): DesignNode | undefined {
-  return design.nodes[0]?.type === 'start' ? design.nodes[0] : undefined
+/** The project's `start` block: its first block. Every project that was parsed or made here has one (`withStart`). */
+export function startOf(project: Pick<Project, 'nodes'>): ProjectNode | undefined {
+  return project.nodes[0]?.type === 'start' ? project.nodes[0] : undefined
 }
 
 /** The goal of the workflow, on one line: the start block's `goal`, empty while it is not set. */
-export function goalOf(design: Pick<Design, 'nodes'>): string {
-  return (startOf(design)?.knobs?.goal ?? '').replace(/\s+/g, ' ').trim()
+export function goalOf(project: Pick<Project, 'nodes'>): string {
+  return (startOf(project)?.knobs?.goal ?? '').replace(/\s+/g, ' ').trim()
 }
 
-/** The design with `goal` on its start block (cleared by an empty one); as it is where it has no start block. */
-export function withGoal(design: Design, goal: string): Design {
-  const start = startOf(design)
-  if (!start) return design
+/** The project with `goal` on its start block (cleared by an empty one); as it is where it has no start block. */
+export function withGoal(project: Project, goal: string): Project {
+  const start = startOf(project)
+  if (!start) return project
   const { goal: _old, ...rest } = start.knobs ?? {}
   const said = goal.replace(/\s+/g, ' ').trim()
   const knobs: Knobs = said === '' ? rest : { goal: said, ...rest }
   const { knobs: _knobs, ...bare } = start
-  return { ...design, nodes: [Object.keys(knobs).length > 0 ? { ...bare, knobs } : bare, ...design.nodes.slice(1)] }
+  return { ...project, nodes: [Object.keys(knobs).length > 0 ? { ...bare, knobs } : bare, ...project.nodes.slice(1)] }
 }
 
-/** Whether a design has no block of its own yet: nothing but the start block every design has. */
-export function isBlank(design: Pick<Design, 'nodes'>): boolean {
-  return design.nodes.every(node => node.type === 'start')
+/** Whether a project has no block of its own yet: nothing but the start block every project has. */
+export function isBlank(project: Pick<Project, 'nodes'>): boolean {
+  return project.nodes.every(node => node.type === 'start')
 }
 
 /**
  * The number the next new node gets: one more than the highest number ever
- * present. `design.nextId` remembers numbers of removed nodes; a design that
+ * present. `project.nextId` remembers numbers of removed nodes; a project that
  * lacks it (hand-written, or a template) falls back to the highest id present.
  */
-export function nextIdNumber(design: Pick<Design, 'nodes' | 'nextId'>): number {
+export function nextIdNumber(project: Pick<Project, 'nodes' | 'nextId'>): number {
   let highest = 0
-  const visit = (nodes: readonly DesignNode[]): void => {
+  const visit = (nodes: readonly ProjectNode[]): void => {
     for (const node of nodes) {
       highest = Math.max(highest, idNumber(node.id))
       if (node.children) visit(node.children)
     }
   }
-  visit(design.nodes)
-  return Math.max(design.nextId ?? 1, highest + 1)
+  visit(project.nodes)
+  return Math.max(project.nextId ?? 1, highest + 1)
 }
 
-/** The design with its start block: as it is when it has one, else with a new, empty one put first. */
-export function withStart(design: Design): Design {
-  if (startOf(design)) return design
-  const number = nextIdNumber(design)
-  return { ...design, nextId: number + 1, nodes: [{ id: `n${number}`, type: 'start', name: 'start' }, ...design.nodes] }
+/** The project with its start block: as it is when it has one, else with a new, empty one put first. */
+export function withStart(project: Project): Project {
+  if (startOf(project)) return project
+  const number = nextIdNumber(project)
+  return { ...project, nextId: number + 1, nodes: [{ id: `n${number}`, type: 'start', name: 'start' }, ...project.nodes] }
 }
 
 const KNOB_KEYS = ['goal', 'args', 'prompt', 'output', 'model', 'effort', 'isolation', 'agentType', 'oncePer', 'stopCondition', 'condition'] as const
@@ -218,8 +218,8 @@ export function toKebab(name: string): string {
   return kebab || 'untitled'
 }
 
-/** A design with no block of its own: the start block and nothing else. */
-export function emptyDesign(name: string): Design {
+/** A project with no block of its own: the start block and nothing else. */
+export function emptyProject(name: string): Project {
   return withStart({ version: 1, name: toKebab(name), nodes: [] })
 }
 
@@ -227,7 +227,7 @@ export function emptyDesign(name: string): Design {
 export const START_KNOBS: readonly (keyof Knobs)[] = ['goal', 'args']
 
 /** Why a block's knobs are not its type's to say, or undefined: the goal and the args are the start block's alone. */
-export function startOnly(node: Pick<DesignNode, 'type' | 'knobs'>): string | undefined {
+export function startOnly(node: Pick<ProjectNode, 'type' | 'knobs'>): string | undefined {
   const stray = node.type === 'start' ? undefined : START_KNOBS.find(key => node.knobs?.[key] !== undefined)
   return stray === undefined ? undefined : `knob ${stray} is the start block's: ${aType(node.type)} block has none`
 }
@@ -272,12 +272,12 @@ function readKnobs(raw: unknown, where: string): Knobs | undefined {
   return Object.keys(knobs).length > 0 ? (knobs as Knobs) : undefined
 }
 
-function readNodes(raw: unknown, where: string, seen: Set<string>): DesignNode[] {
+function readNodes(raw: unknown, where: string, seen: Set<string>): ProjectNode[] {
   if (!Array.isArray(raw)) fail(`${where} must be an array`)
   return raw.map((one: unknown, index) => readNode(one, `${where}[${index}]`, seen))
 }
 
-function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
+function readNode(raw: unknown, where: string, seen: Set<string>): ProjectNode {
   if (!isRecord(raw)) fail(`${where} must be an object`)
   const { id, name, logic, match, children } = raw
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) fail(`${where}: id must look like "n1"`)
@@ -289,7 +289,7 @@ function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
   if (typeof name !== 'string') fail(`${id}: name must be a string`)
   if (logic !== undefined && typeof logic !== 'string') fail(`${id}: logic must be a string`)
 
-  const node: DesignNode = { id, type, name }
+  const node: ProjectNode = { id, type, name }
   if (kind !== undefined) node.kind = kind
   if (logic !== undefined) node.logic = logic
   const knobs = readKnobs(raw.knobs, id)
@@ -309,12 +309,12 @@ function readNode(raw: unknown, where: string, seen: Set<string>): DesignNode {
 
 /**
  * Validates shape, version, unique ids, known types and kinds, where `start` stands and that only it
- * says a goal and args. Never throws. A design read with no start block is given an empty one.
+ * says a goal and args. Never throws. A project read with no start block is given an empty one.
  */
-export function parseDesign(json: string): ParseResult {
+export function parseProject(json: string): ParseResult {
   try {
     const raw: unknown = JSON.parse(json)
-    if (!isRecord(raw)) fail('design must be an object')
+    if (!isRecord(raw)) fail('project must be an object')
     if (raw.version !== 1) fail(`unsupported version ${JSON.stringify(raw.version)}; expected 1`)
     const { name, nextId } = raw
     if (typeof name !== 'string' || name === '') fail('name must be a non-empty string')
@@ -322,23 +322,23 @@ export function parseDesign(json: string): ParseResult {
       fail('nextId must be a whole number of at least 1')
     }
     const nodes = readNodes(raw.nodes, 'nodes', new Set())
-    const design: Design = { version: 1, name, nodes }
-    if (typeof nextId === 'number') design.nextId = nextId
-    walk(design, (node, info) => {
+    const project: Project = { version: 1, name, nodes }
+    if (typeof nextId === 'number') project.nextId = nextId
+    walk(project, (node, info) => {
       if (node.type === 'start' && (info.parent !== undefined || info.index !== 0)) fail(`${node.id}: ${START_PLACE}`)
       const stray = startOnly(node)
       if (stray) fail(`${node.id}: ${stray}`)
     })
-    return { ok: true, design: withStart(design) }
+    return { ok: true, project: withStart(project) }
   } catch (error) {
     if (error instanceof Invalid) return { ok: false, error: error.message }
-    return { ok: false, error: error instanceof SyntaxError ? `not valid JSON: ${error.message}` : 'design could not be read' }
+    return { ok: false, error: error instanceof SyntaxError ? `not valid JSON: ${error.message}` : 'project could not be read' }
   }
 }
 
 // Rebuilds every object so keys come out in one fixed order whatever order
-// the design was assembled in.
-function orderedNode(node: DesignNode): Record<string, unknown> {
+// the project was assembled in.
+function orderedNode(node: ProjectNode): Record<string, unknown> {
   const out: Record<string, unknown> = { id: node.id, type: node.type }
   if (node.kind !== undefined && node.kind !== plainKind(node.type)) out.kind = node.kind
   out.name = node.name
@@ -354,41 +354,41 @@ function orderedNode(node: DesignNode): Record<string, unknown> {
 }
 
 /** Stable key order, 2-space indent, trailing newline. */
-export function serializeDesign(design: Design): string {
-  const out: Record<string, unknown> = { version: design.version, name: design.name }
-  if (design.nextId !== undefined) out.nextId = design.nextId
-  out.nodes = design.nodes.map(orderedNode)
+export function serializeProject(project: Project): string {
+  const out: Record<string, unknown> = { version: project.version, name: project.name }
+  if (project.nextId !== undefined) out.nextId = project.nextId
+  out.nodes = project.nodes.map(orderedNode)
   return `${JSON.stringify(out, null, 2)}\n`
 }
 
 /** Depth-first, parents before children, siblings in order. */
-export function walk(design: Design, fn: (node: DesignNode, info: WalkInfo) => void): void {
-  const visit = (nodes: readonly DesignNode[], parent: DesignNode | undefined, depth: number): void => {
+export function walk(project: Project, fn: (node: ProjectNode, info: WalkInfo) => void): void {
+  const visit = (nodes: readonly ProjectNode[], parent: ProjectNode | undefined, depth: number): void => {
     nodes.forEach((node, index) => {
       fn(node, { parent, depth, index })
       if (node.children) visit(node.children, node, depth + 1)
     })
   }
-  visit(design.nodes, undefined, 0)
+  visit(project.nodes, undefined, 0)
 }
 
-export function findNode(design: Design, id: string): DesignNode | undefined {
-  let found: DesignNode | undefined
-  walk(design, node => {
+export function findNode(project: Project, id: string): ProjectNode | undefined {
+  let found: ProjectNode | undefined
+  walk(project, node => {
     if (node.id === id) found ??= node
   })
   return found
 }
 
-/** How many blocks a design has, as a count says it: the start block, which every design has, is not one of them. */
-export function blockCount(design: Design): number {
-  return flatten(design).filter(row => row.node.type !== 'start').length
+/** How many blocks a project has, as a count says it: the start block, which every project has, is not one of them. */
+export function blockCount(project: Project): number {
+  return flatten(project).filter(row => row.node.type !== 'start').length
 }
 
-/** Every node as a row, in the order the design lists them: parents before what they hold. */
-export function flatten(design: Design): Row[] {
+/** Every node as a row, in the order the project lists them: parents before what they hold. */
+export function flatten(project: Project): Row[] {
   const rows: Row[] = []
-  walk(design, (node, info) => {
+  walk(project, (node, info) => {
     rows.push({ node, depth: info.depth, parentId: info.parent?.id, index: info.index })
   })
   return rows

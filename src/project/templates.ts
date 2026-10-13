@@ -1,29 +1,29 @@
-// Starting designs for the empty state. Each call returns a fresh Design.
+// Starting projects for the empty state. Each call returns a fresh Project.
 
 import { readType } from './model'
-import type { Design, DesignNode, Kind, Knobs, NodeType } from './model'
+import type { Project, ProjectNode, Kind, Knobs, NodeType } from './model'
 
-export type Template = { id: string; title: string; blurb: string; make: () => Design }
+export type Template = { id: string; title: string; blurb: string; make: () => Project }
 
-// Every design opens with its start block: what the template is for, and what it is run on.
-function start(id: string, goal: string, args: string): DesignNode {
+// Every project opens with its start block: what the template is for, and what it is run on.
+function start(id: string, goal: string, args: string): ProjectNode {
   return { id, type: 'start', name: 'start', knobs: { goal, args } }
 }
 
 /** A block's type, or its type and kind: `agent`, `agent verify`. */
 type Block = NodeType | `${NodeType} ${Kind}`
 
-function node(id: string, block: Block, name: string, logic: string, knobs: Knobs, children?: DesignNode[]): DesignNode {
+function node(id: string, block: Block, name: string, logic: string, knobs: Knobs, children?: ProjectNode[]): ProjectNode {
   const [type, kind] = block.split(' ')
   const read = readType(type, kind)
   if ('error' in read) throw new Error(`template block ${id}: ${read.error}`)
-  const made: DesignNode = { id, ...read, name, logic }
+  const made: ProjectNode = { id, ...read, name, logic }
   if (Object.keys(knobs).length > 0) made.knobs = knobs
   if (children) made.children = children
   return made
 }
 
-export function review(): Design {
+export function review(): Project {
   return {
     version: 1,
     name: 'review-changes',
@@ -58,7 +58,7 @@ export function review(): Design {
   }
 }
 
-export function research(): Design {
+export function research(): Project {
   return {
     version: 1,
     name: 'research',
@@ -107,7 +107,7 @@ export function research(): Design {
   }
 }
 
-export function migrate(): Design {
+export function migrate(): Project {
   return {
     version: 1,
     name: 'migrate',
@@ -139,7 +139,7 @@ export function migrate(): Design {
   }
 }
 
-export function judgePanel(): Design {
+export function judgePanel(): Project {
   return {
     version: 1,
     name: 'judge-panel',

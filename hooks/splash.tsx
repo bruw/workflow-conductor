@@ -4,7 +4,7 @@ import { BEAT_MS, SPLASH_BEATS, splashScene } from '../src/ui/persona'
 import { TEXT } from '../src/ui/theme'
 
 // The splash's scene: a surface module, so that its beats are counted where
-// they are drawn. It has no `$` and posts nothing: hooks/design.tsx shows it
+// they are drawn. It has no `$` and posts nothing: hooks/project.tsx shows it
 // for the splash's time and then draws the designer in its place.
 
 type SplashProps = { rows: number }

@@ -1,9 +1,9 @@
-// Advisory lints over a Design. Every rule is structural: it reads what blocks
+// Advisory lints over a Project. Every rule is structural: it reads what blocks
 // there are, where they stand and which fields are empty, never the words or
 // the numbers typed into a field. Lints never block anything.
 
 import { KINDS, blockCount, typeName, canHoldChildren, flatten, kindOf, walk } from './model'
-import type { Design, DesignNode } from './model'
+import type { Project, ProjectNode } from './model'
 import { KIND_TEACH, SELF_BRIEFED, VOTING_KINDS, placeholderOf } from './teach'
 
 export type LintRule =
@@ -24,12 +24,12 @@ function blank(text: string | undefined): boolean {
 }
 
 /** Whether a block is an agent that has to be told its task: every agent but the kinds whose name is the task. */
-export function needsBrief(node: Pick<DesignNode, 'type' | 'kind'>): boolean {
+export function needsBrief(node: Pick<ProjectNode, 'type' | 'kind'>): boolean {
   return node.type === 'agent' && !(node.kind !== undefined && SELF_BRIEFED.includes(node.kind))
 }
 
 /** Whether a loop has to say when it stops: every loop but the kind `dry`, whose pattern is its bound. */
-export function needsStop(node: Pick<DesignNode, 'type' | 'kind'>): boolean {
+export function needsStop(node: Pick<ProjectNode, 'type' | 'kind'>): boolean {
   return node.type === 'loop' && node.kind !== 'dry'
 }
 
@@ -38,7 +38,7 @@ const LOOP_STOPS: Readonly<Record<string, string | undefined>> = Object.fromEntr
 
 // The node whose output a sibling placed right after `node` receives: the
 // node itself, or the last stage of a pipeline, parallel, sweep or loop.
-function producer(node: DesignNode): DesignNode {
+function producer(node: ProjectNode): ProjectNode {
   const last = node.children?.at(-1)
   return last && node.type !== 'branch' ? producer(last) : node
 }
@@ -52,8 +52,8 @@ const CHAINS: readonly string[] = ['pipeline', 'loop', 'phase']
  * fans out over items, or when it sits in a loop beside other blocks (the round
  * before feeds it). The top level is a chain.
  */
-function hasInput(design: Design, id: string): boolean {
-  const rows = flatten(design)
+function hasInput(project: Project, id: string): boolean {
+  const rows = flatten(project)
   let row = rows.find(one => one.node.id === id)
   while (row) {
     const parent = row.parentId === undefined ? undefined : rows.find(one => one.node.id === row?.parentId)
@@ -67,17 +67,17 @@ function hasInput(design: Design, id: string): boolean {
   return false
 }
 
-export function lint(design: Design): Lint[] {
+export function lint(project: Project): Lint[] {
   const lints: Lint[] = []
 
-  walk(design, (node, info) => {
-    const siblings = info.parent?.children ?? design.nodes
+  walk(project, (node, info) => {
+    const siblings = info.parent?.children ?? project.nodes
     const previous = siblings[info.index - 1]
 
-    // 0. A design that says no goal. Structural: the `start` block with an empty `goal`.
+    // 0. A project that says no goal. Structural: the `start` block with an empty `goal`.
     // The graph writes `Goal [not set]` on the same block.
     if (node.type === 'start' && blank(node.knobs?.goal)) {
-      lints.push({ nodeId: node.id, rule: 'start-no-goal', message: 'the workflow has no goal: say in goal what it is for, in a sentence; Claude writes the script, and reviews the design, against it' })
+      lints.push({ nodeId: node.id, rule: 'start-no-goal', message: 'the workflow has no goal: say in goal what it is for, in a sentence; Claude writes the script, and reviews the project, against it' })
     }
 
     // 1, 2. (Barrier not needed, worktree on a reader: gone, they guessed from the words of a block.)
@@ -123,7 +123,7 @@ export function lint(design: Design): Lint[] {
     // 7. (A vote with no count: gone with the `votes` knob. The numbers after it stay.)
 
     // 8. A verify with nothing to verify. Structural: see `hasInput`.
-    if (node.kind === 'verify' && !hasInput(design, node.id)) {
+    if (node.kind === 'verify' && !hasInput(project, node.id)) {
       lints.push({
         nodeId: node.id,
         rule: 'verify-nothing-before',
@@ -192,14 +192,14 @@ export function lint(design: Design): Lint[] {
 }
 
 // ---------------------------------------------------------------------------
-// Preflight: what a design implies before it is handed off
+// Preflight: what a project implies before it is handed off
 
 /**
  * The fewest agents a block implies: one per agent block, the cheapest arm of a branch. Nothing typed
  * into a field is read for a count: what a block runs once per, its votes and a loop's rounds are words
  * for Claude, so a block that may run more than once counts once and makes the sum a floor (`unknownsOf`).
  */
-function leastAgents(node: DesignNode): number {
+function leastAgents(node: ProjectNode): number {
   if (canHoldChildren(node.type)) {
     const kids = (node.children ?? []).map(leastAgents)
     if (node.type === 'branch') return kids.length > 0 ? Math.min(...kids) : 0
@@ -212,9 +212,9 @@ function leastAgents(node: DesignNode): number {
 export type Unknowns = { fanouts: number; loops: number; votes: number; subworkflows: number }
 
 /** By type and kind alone: a pipeline or a parallel may fan out, a loop repeats, a verify or a judge votes, a subworkflow starts its own. */
-function unknownsOf(design: Design): Unknowns {
+function unknownsOf(project: Project): Unknowns {
   const out: Unknowns = { fanouts: 0, loops: 0, votes: 0, subworkflows: 0 }
-  for (const { node } of flatten(design)) {
+  for (const { node } of flatten(project)) {
     if (node.type === 'pipeline' || node.type === 'parallel') out.fanouts++
     if (node.type === 'loop') out.loops++
     if (node.type === 'agent' && node.kind !== undefined && VOTING_KINDS.includes(node.kind)) out.votes++
@@ -226,17 +226,17 @@ function unknownsOf(design: Design): Unknowns {
 export type Preflight = { blocks: number; agents: number; lintIds: string[]; unknowns: Unknowns }
 
 /** What a hand-off is about to start: how many blocks, the fewest agents they imply (and what makes the real count larger), and which blocks a lint stands on. */
-export function preflight(design: Design): Preflight {
-  return { blocks: blockCount(design), agents: design.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lintIds: lintIds(lint(design)), unknowns: unknownsOf(design) }
+export function preflight(project: Project): Preflight {
+  return { blocks: blockCount(project), agents: project.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lintIds: lintIds(lint(project)), unknowns: unknownsOf(project) }
 }
 
-/** The agents a design starts, as a count: `agents = 3` where every block runs once, `agents ≥ 12` where the number is only the fewest. */
+/** The agents a project starts, as a count: `agents = 3` where every block runs once, `agents ≥ 12` where the number is only the fewest. */
 export function agentsCount(agents: number, unknowns: Unknowns): string {
   return `agents ${unknowns.fanouts + unknowns.loops + unknowns.votes + unknowns.subworkflows > 0 ? '≥' : '='} ${agents}`
 }
 
 /**
- * The agents a design starts, as far as the drawing says. Every block runs once: `agents = 3`. Otherwise the
+ * The agents a project starts, as far as the drawing says. Every block runs once: `agents = 3`. Otherwise the
  * floor is marked as one and the reason follows: `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats)`.
  */
 export function agentsText(agents: number, unknowns: Unknowns): string {
@@ -272,8 +272,8 @@ export const LINT_IDS_MAX = 6
  * `agents = 3 · problems in n3, n5`, or `agents ≥ 12 (more: …)` where a block may run more than once; the
  * blocks that have a problem are named, and nothing is said of problems where there are none. It informs; nothing is blocked.
  */
-export function preflightLine(design: Design): string {
-  const { agents, lintIds: ids, unknowns } = preflight(design)
+export function preflightLine(project: Project): string {
+  const { agents, lintIds: ids, unknowns } = preflight(project)
   const named = `${ids.slice(0, LINT_IDS_MAX).join(', ')}${ids.length > LINT_IDS_MAX ? ', …' : ''}`
   return [agentsText(agents, unknowns), ...(ids.length === 0 ? [] : [`problems in ${named}`])].join(' · ')
 }

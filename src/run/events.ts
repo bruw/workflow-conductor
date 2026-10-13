@@ -27,9 +27,9 @@ export type RunState = {
   status: RunStatus
   /** By agentId. */
   agents: Record<string, AgentRun>
-  /** By design node id. */
+  /** By project node id. */
   byNode: Record<string, NodeRun>
-  /** By phase title (used when no design is loaded). */
+  /** By phase title (used when no project is loaded). */
   byPhase: Record<string, NodeRun>
   /** AgentIds whose label carries no known node id. */
   unmapped: string[]

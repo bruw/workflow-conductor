@@ -1,5 +1,5 @@
-import { flatten, idNumber } from '../design/model'
-import type { Design } from '../design/model'
+import { flatten, idNumber } from '../project/model'
+import type { Project } from '../project/model'
 
 import type { RunEvent } from './events'
 import { journalToEvents } from './journal'
@@ -50,24 +50,24 @@ export function replayDue(total: number, step: number, steps: number): number {
   return Math.min(total, Math.max(0, Math.ceil((total * step) / steps)))
 }
 
-/** Labels of the agents a design replay adds that no node of the design claims. */
+/** Labels of the agents a project replay adds that no node of the project claims. */
 export const REPLAY_STRAYS = ['fix lint', 'stray check'] as const
 
-/** How many agents a design replay gives a leaf: 2 to 4, by its id. */
+/** How many agents a project replay gives a leaf: 2 to 4, by its id. */
 function replayAgents(id: string): number {
   return 2 + (idNumber(id) % 3)
 }
 
 /**
- * A made-up run of a design, for the overlay: several agents per leaf node, labelled
+ * A made-up run of a project, for the overlay: several agents per leaf node, labelled
  * `<nodeId>: <title> <k>` as a handed-off script would, node after node; one agent
- * fails; two more carry labels no node claims (one plain, one with an id the design
+ * fails; two more carry labels no node claims (one plain, one with an id the project
  * does not hold). Token counts are made up. `code`, `start` and empty `phase` nodes spawn nothing.
  */
-export function replayDesignEvents(design: Design, name: string = design.name): RunEvent[] {
-  const runId = `replay:design:${name}`
+export function replayProjectEvents(project: Project, name: string = project.name): RunEvent[] {
+  const runId = `replay:project:${name}`
   const events: RunEvent[] = [{ kind: 'run-start', runId, name }]
-  const rows = flatten(design)
+  const rows = flatten(project)
   const leaves = rows.filter(row => (row.node.children?.length ?? 0) === 0 && row.node.type !== 'code' && row.node.type !== 'start' && row.node.type !== 'phase')
   const phaseOf = new Map<string, string>()
   let phase = ''

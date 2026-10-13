@@ -7,8 +7,8 @@
 // (one pixel of the source's grid each). A pixel is half a cell tall, so a
 // sprite of 28 rows is drawn on 14.
 
-import { flatten } from '../design/model'
-import type { Design } from '../design/model'
+import { flatten } from '../project/model'
+import type { Project } from '../project/model'
 
 export type Pose = 'idle' | 'ready' | 'conducting' | 'complete'
 
@@ -341,11 +341,11 @@ export function beatAt(ms: number): number {
 export const GESTURE_MS = 900
 
 /**
- * What a change to the design calls for: the cue (`ready`) for a block added,
+ * What a change to the project calls for: the cue (`ready`) for a block added,
  * the downbeat (`conducting`) for blocks that changed place; null for any
  * other change.
  */
-export function gestureOf(before: Design | null, after: Design | null): Pose | null {
+export function gestureOf(before: Project | null, after: Project | null): Pose | null {
   if (!before || !after || before === after) return null
   const was = flatten(before)
   const now = flatten(after)
@@ -359,7 +359,7 @@ export function gestureOf(before: Design | null, after: Design | null): Pose | n
   return now.every(row => ids.has(row.node.id)) ? 'conducting' : null
 }
 
-/** The pose while a run is laid over the design: the bars of it while it runs, the bow once it is done. */
+/** The pose while a run is laid over the project: the bars of it while it runs, the bow once it is done. */
 export function runPose(status: 'idle' | 'running' | 'done' | 'failed', clockMs: number): Pose | null {
   if (status === 'running') return Math.floor(clockMs / (BEAT_MS * 2)) % 2 === 0 ? 'conducting' : 'ready'
   if (status === 'done') return 'complete'

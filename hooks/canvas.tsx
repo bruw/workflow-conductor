@@ -9,7 +9,7 @@ import { TEXT } from '../src/ui/theme'
 
 // The graph: a surface module. It owns only transient view state (the pan, a
 // drag in flight, the slot under the pointer, cards sliding) and has no `$`:
-// every click, drop and key is a message posted to hooks/design.tsx, which
+// every click, drop and key is a message posted to hooks/project.tsx, which
 // answers with new props.
 
 /** Past this the graph is drawn without colours: fewer spans, a smaller tree. */

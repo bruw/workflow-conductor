@@ -28,7 +28,7 @@ export type KeyOp =
   | 'review'
   | 'run'
   | 'clearRun'
-  | 'project'
+  | 'projects'
   | 'help'
   /** No key of its own: the add list's `cancel`. */
   | 'cancel'
@@ -62,7 +62,7 @@ export const KEY_OPS: Record<string, KeyOp> = {
   q: 'review',
   r: 'run',
   c: 'clearRun',
-  p: 'project',
+  p: 'projects',
   '?': 'help',
   h: 'help',
 }
@@ -73,8 +73,8 @@ export const BURST_MAX = 8
 /** What is said of a paste. */
 export const PASTE_NOTICE = 'pasted text is not keys: nothing was done'
 
-/** The keys that still act while a run locks the design. */
-export const LOCKED_OPS: readonly KeyOp[] = ['left', 'right', 'up', 'down', 'open', 'back', 'detail', 'help', 'clearRun', 'project']
+/** The keys that still act while a run locks the project. */
+export const LOCKED_OPS: readonly KeyOp[] = ['left', 'right', 'up', 'down', 'open', 'back', 'detail', 'help', 'clearRun', 'projects']
 
 /** What a key the table does not hold says. */
 export function unboundNotice(key: string): string {
@@ -90,7 +90,7 @@ export function burstKeys(text: string): { keys: string[] } | { paste: true } {
 // ---------------------------------------------------------------------------
 // The legend
 
-/** Where the ring is: on the catcher (`graph`), in a field of the block, in the add list's filter; `start` is the catcher on the start screen and on the list of the project's designs. */
+/** Where the ring is: on the catcher (`graph`), in a field of the block, in the add list's filter; `start` is the catcher on the start screen and on the list of projects. */
 export type RingPlace = 'graph' | 'fields' | 'list' | 'start'
 
 /** What decides which keys work right now. */
@@ -104,13 +104,13 @@ export type LegendState = {
   opens?: boolean
   /** The add list shows a block's kinds: `b` goes back to the blocks. */
   kinds?: boolean
-  /** The design holds no block of its own (the start block alone): nothing to run or to review. */
+  /** The project holds no block of its own (the start block alone): nothing to run or to review. */
   empty: boolean
   /** The selected block is the start block: it does not move and is not deleted. */
   fixed?: boolean
   /** A help page is open: `x` closes it, it deletes nothing. */
   helping: boolean
-  /** A run locks the design. */
+  /** A run locks the project. */
   locked: boolean
   /** A block is selected. */
   selected: boolean
@@ -124,7 +124,7 @@ export type LegendState = {
   redo: boolean
   /** The detail pane is hidden: it has no rows to name its keys on, and the header names the one that shows it. */
   hidden: boolean
-  /** The start screen was opened from a design (`p`): `x` goes back to it. */
+  /** The start screen was opened from a project (`p`): `x` goes back to it. */
   back?: boolean
 }
 
@@ -136,7 +136,7 @@ export type LegendAction = { key: string; word: string; on: boolean }
 
 /**
  * The keys that work now, each named in one place: the graph's and the pane's own on the header's second row, the
- * ones that act on the detail pane on its last rows. `actions` are the keys that hand the design to Claude or put a
+ * ones that act on the detail pane on its last rows. `actions` are the keys that hand the project to Claude or put a
  * run away, not edits of it: buttons on the pane's last row.
  */
 export type Legend = { header: LegendItem[]; actions: LegendAction[]; detail: LegendItem[] }
@@ -154,7 +154,7 @@ export function legendItems(state: LegendState): Legend {
     return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, help], actions: [], detail: choose }
   }
   const edits = !state.locked
-  // The run and the review are asked of Claude, not done to the design: they are pressed on the last row. In a field
+  // The run and the review are asked of Claude, not done to the project: they are pressed on the last row. In a field
   // and in the add list the letters are text, and they wait.
   const ready = edits && !state.empty && state.ring === 'graph'
   const actions: LegendAction[] = [
@@ -184,9 +184,9 @@ export function legendItems(state: LegendState): Legend {
   const header: (LegendItem | false)[] = [
     // With no detail pane to say it, the header names the one key that brings it back, first: it is the last to go where the room is short.
     state.hidden && { keys: 'i', word: 'Show details', core: true },
-    // The designs of the project: the one shown is changed for another there.
-    { keys: 'p', word: 'Project', core: true },
-    // Every design has a card to walk to: its start block. With Shift the same keys move the block, where it can move.
+    // The projects: the one shown is changed for another there.
+    { keys: 'p', word: 'Projects', core: true },
+    // Every project has a card to walk to: its start block. With Shift the same keys move the block, where it can move.
     moves ? { keys: '⇧+WASD', word: '(Move) Navigate', core: true } : { keys: 'WASD', word: 'Navigate', core: true },
     edits && { keys: 'n', word: 'New', core: true },
     moves && { keys: 'x', word: 'Delete', core: true },

@@ -313,7 +313,7 @@ export function currentPhase(state: RunState): string | undefined {
 
 /**
  * Status line while the pane is closed: `wf 7/12 ▸ verify`. With `titles` (the
- * run came from a design: its blocks' titles by id, in design order) it names
+ * run came from a project: its blocks' titles by id, in project order) it names
  * the block that is running, the last in that order: `wf 3/4 ▸ n3 review`.
  * Agents with no phase are not named: there is nothing to say of them.
  */

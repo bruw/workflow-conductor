@@ -30,7 +30,7 @@ agent.spawn.after {"result":{"model":"claude-haiku-5-5","agentId":"a7d5df6f5c088
 - `agentId` is **not on the event**. It is on what `await next(e)` resolves to (`{ model, agentId }`).
   The run hook must call `next` and read the id from the result. SPEC's "agent.spawn: agentId" is wrong in that detail.
 - No phase field. `workflow` holds only `runId` and `agentIndex`. Phase comes from the journal (S3) or from
-  the node id in the label, which is enough for `byNode`. `byPhase` (no design loaded) needs the journal.
+  the node id in the label, which is enough for `byNode`. `byPhase` (no project loaded) needs the journal.
 - Spawn events of one `parallel` batch arrive out of order (`agentIndex` 2 before 1). Never assume order.
 - `name` and `cwd` keys exist with undefined values; `model` is the alias as written (`haiku`).
 
@@ -98,7 +98,7 @@ probe-fs meta: {"agentType":"workflow-subagent","description":"n2: three","workf
 - The `context` entry is recorded as a hidden message and read on the next turn, where it won over the typed `hi`.
 - Consequence: `/conductor run <name>` alone does not start the implementation. Options, in order:
   1. The command's hook calls `$.prompt.submit(...)` (declared in the types, **untested**) with a visible
-     one-line prompt such as "Implement and run the workflow design <name>", conventions staying in `context`.
+     one-line prompt such as "Implement and run the workflow project <name>", conventions staying in `context`.
   2. Fallback: the command answers `text` telling the person to press Enter on a prompt it filled with
      `$.prompt.fill`. The Run button already uses `$.prompt.fill`.
   Test option 1 first in P2; it is one small turn.

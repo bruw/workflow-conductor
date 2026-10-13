@@ -1,4 +1,4 @@
-// The graph's layout: a Design as cards, arrows and slots in character cells,
+// The graph's layout: a Project as cards, arrows and slots in character cells,
 // top to bottom only, never wider than the columns it is given. Pure
 // TypeScript: no `$`, no engine imports.
 //
@@ -12,12 +12,12 @@
 // The layout says the words too (what is on a border, in a row, how it is cut
 // to fit) as segments with a role; the paint only gives each role its look.
 
-import { needsBrief, needsStop } from '../design/lints'
-import { canHoldChildren, flatten, isBlank, plainKind } from '../design/model'
-import type { Design, DesignNode, NodeType, Row } from '../design/model'
-import { defaultName } from '../design/teach'
-import { START_STAY, addPlace, quickKnob } from '../design/ops'
-import type { Place, QuickKnob } from '../design/ops'
+import { needsBrief, needsStop } from '../project/lints'
+import { canHoldChildren, flatten, isBlank, plainKind } from '../project/model'
+import type { Project, ProjectNode, NodeType, Row } from '../project/model'
+import { defaultName } from '../project/teach'
+import { START_STAY, addPlace, quickKnob } from '../project/ops'
+import type { Place, QuickKnob } from '../project/ops'
 import { cappedLines, clip, moreLines } from './text'
 
 export type Rect = { x: number; y: number; w: number; h: number }
@@ -58,12 +58,12 @@ export const SLOT = '[+]'
 export const SLOT_OPEN = '[+] Add block here'
 /** What a container that holds nothing says where its blocks would stand. */
 export const EMPTY = 'empty'
-/** Under an empty design's `[+]`, dim: the keys that start it (left out while the pane does not hold the keyboard), then what Claude can do. */
+/** Under an empty project's `[+]`, dim: the keys that start it (left out while the pane does not hold the keyboard), then what Claude can do. */
 export const EMPTY_KEYS: readonly (readonly [string, string])[] = [
   ['n', 'add a block'],
   ['e', 'say what this workflow is for'],
 ]
-export const EMPTY_NOTE: readonly string[] = ['A plain message to Claude in the prompt', 'can draft the design, or change it later.']
+export const EMPTY_NOTE: readonly string[] = ['A plain message to Claude in the prompt', 'can draft the project, or change it later.']
 /** The cells and rows the empty state takes: its `[+]`, a blank row, the lines under it. */
 export const EMPTY_W = Math.max(SLOT.length, ...EMPTY_KEYS.map(([key, text]) => key.length + 2 + text.length), ...EMPTY_NOTE.map(line => line.length))
 export const EMPTY_ROWS = 2 + EMPTY_KEYS.length + 1 + EMPTY_NOTE.length
@@ -104,7 +104,7 @@ export type SegRole =
   /** Cells of a border left as they are, between two things written on it. */
   | 'rule'
 
-export type { QuickKnob } from '../design/ops'
+export type { QuickKnob } from '../project/ops'
 
 export type Seg = { text: string; role: SegRole; chip?: QuickKnob }
 
@@ -174,7 +174,7 @@ export type GraphLayout = {
   height: number
   /** Rows pinned above the graph: in a nested view the breadcrumb and the rule under it (the breadcrumb alone where the rows are few), else 0. */
   top: number
-  /** The container shown as the frame; null at the root. Null too when the id asked for is no container of the design. */
+  /** The container shown as the frame; null at the root. Null too when the id asked for is no container of the project. */
   viewRootId: string | null
   selectedId: string | null
   /** Parents before their children. Blocks inside a collapsed container and arms out of a carousel's window have none. */
@@ -192,9 +192,9 @@ export type GraphLayout = {
   carousels: Record<string, GraphCarousel>
   /** The offsets to keep: what was asked, moved so that each carousel holds the selected arm, and clamped. */
   scroll: Record<string, number>
-  /** Every block of the design, drawn or not, parents first: what a run is summed over. */
+  /** Every block of the project, drawn or not, parents first: what a run is summed over. */
   blocks: { id: string; type: NodeType; parentId: string | undefined }[]
-  /** The whole design is shown and has no block of its own (the start block at the most): its `[+]` stands over the lines that say how to start. */
+  /** The whole project is shown and has no block of its own (the start block at the most): its `[+]` stands over the lines that say how to start. */
   blank: boolean
 }
 
@@ -203,7 +203,7 @@ export type GraphOptions = {
   /** The rows the graph has: they cap the selected card's notes. */
   rows: number
   selectedId?: string | null
-  /** The container to show as the view; null or absent for the whole design. */
+  /** The container to show as the view; null or absent for the whole project. */
   viewRootId?: string | null
   /** By container id: the first arm its carousel shows. */
   scroll?: Readonly<Record<string, number>>
@@ -211,9 +211,9 @@ export type GraphOptions = {
   problems?: Readonly<Record<string, number>>
   /** The place whose add list is open: its slot reads `[+] Add block here`, on a row of its own where it has none. */
   openAt?: Place | null
-  /** Agents no block claims: more than 0 adds their card after the design (at the root only). */
+  /** Agents no block claims: more than 0 adds their card after the project (at the root only). */
   unmapped?: number
-  /** A run locks the design: the selected card has no chips to press, and says its model and effort as any other. */
+  /** A run locks the project: the selected card has no chips to press, and says its model and effort as any other. */
   locked?: boolean
 }
 
@@ -235,7 +235,7 @@ export function childFlow(type: NodeType | undefined): Flow {
 }
 
 /** What a card says under its name: the block's notes, or with none what its prompt asks; the start block's goal. */
-function cardText(node: DesignNode): string {
+function cardText(node: ProjectNode): string {
   if (node.type === 'start') return (node.knobs?.goal ?? '').trim()
   const notes = (node.logic ?? '').trim()
   return notes !== '' ? notes : (node.knobs?.prompt ?? '').trim()
@@ -271,7 +271,7 @@ export function drawnOpen(depth: number, width: number): boolean {
 const KNOB_MAX = 14
 
 /** The quick knobs a block has by its type and kind, each with the digit that steps it (`stepKnob` in ops.ts): `1` model, `2` effort. */
-export function quickKnobs(node: Pick<DesignNode, 'type' | 'kind'>): { key: string; knob: QuickKnob }[] {
+export function quickKnobs(node: Pick<ProjectNode, 'type' | 'kind'>): { key: string; knob: QuickKnob }[] {
   const out: { key: string; knob: QuickKnob }[] = []
   for (const slot of [1, 2]) {
     const knob = quickKnob(node, slot)
@@ -281,7 +281,7 @@ export function quickKnobs(node: Pick<DesignNode, 'type' | 'kind'>): { key: stri
 }
 
 /** One chip: its digit in brackets, as a key of the legend is, then the knob's value when it is set (lit), else the knob's name (dim): `[1] sonnet`, `[2] effort`. */
-function chipSegs(node: DesignNode, knob: QuickKnob, key: string): Seg[] {
+function chipSegs(node: ProjectNode, knob: QuickKnob, key: string): Seg[] {
   const value = node.knobs?.[knob]
   const set = value !== undefined && value !== ''
   const text = !set ? knob : clip(clean(String(value)), KNOB_MAX)
@@ -292,14 +292,14 @@ function chipSegs(node: DesignNode, knob: QuickKnob, key: string): Seg[] {
 }
 
 /** Every quick knob of a block as chips, two cells between two. */
-function chipsOf(node: DesignNode): Seg[] {
+function chipsOf(node: ProjectNode): Seg[] {
   return quickKnobs(node).flatMap((quick, i) => [...(i > 0 ? [{ text: '  ', role: 'rule' as const }] : []), ...chipSegs(node, quick.knob, quick.key)])
 }
 
 const MANY: readonly NodeType[] = ['pipeline', 'parallel']
 
 /** What a block hands on is what its last block does, where it is a phase: a phase only frames. */
-function lastOf(node: DesignNode): DesignNode {
+function lastOf(node: ProjectNode): ProjectNode {
   const last = node.type === 'phase' ? node.children?.at(-1) : undefined
   return last ? lastOf(last) : node
 }
@@ -310,14 +310,14 @@ function lastOf(node: DesignNode): DesignNode {
  * done: a barrier when `from` yields many results (a pipeline, a parallel: by its type, never by what its
  * fields say), a plain hand-off when it yields one.
  */
-function edgeKind(parent: NodeType | undefined, from: DesignNode): EdgeKind {
+function edgeKind(parent: NodeType | undefined, from: ProjectNode): EdgeKind {
   if (parent === 'pipeline') return 'stream'
   const source = lastOf(from)
   return MANY.includes(source.type) ? 'barrier' : 'stream'
 }
 
 /** What a block needs and lacks, said in its place before `[not set]`: an agent's brief, a loop's stop, the start block's goal. */
-function missingOf(node: DesignNode): string {
+function missingOf(node: ProjectNode): string {
   if (needsBrief(node) && cardText(node) === '') return 'Instruction'
   if (needsStop(node) && clean(node.knobs?.stopCondition ?? '') === '') return 'Stop'
   if (node.type === 'start' && cardText(node) === '') return 'Goal'
@@ -332,7 +332,7 @@ function depthStep(type: NodeType, depth: number): number {
 /** A block's place among the arms of a branch, as its top border says it. */
 type Arm = { word: 'IF' | 'ELSE'; when: string }
 
-function armOf(node: DesignNode, parent: DesignNode | undefined, index: number): Arm | null {
+function armOf(node: ProjectNode, parent: ProjectNode | undefined, index: number): Arm | null {
   if (parent?.type !== 'branch') return null
   const when = clean(node.knobs?.condition ?? '')
   if (when !== '') return { word: 'IF', when }
@@ -357,17 +357,17 @@ function armWidth(arm: Arm): number {
 const BADGE = ' ! '
 
 /** A block's type as a card says it, with its kind where it is not the plain one: `AGENT`, `AGENT verify`, `LOOP dry`. */
-export function typeLabel(block: Pick<DesignNode, 'type' | 'kind'>): string {
+export function typeLabel(block: Pick<ProjectNode, 'type' | 'kind'>): string {
   return `${block.type.toUpperCase()}${block.kind === undefined || block.kind === plainKind(block.type) ? '' : ` ${block.kind}`}`
 }
 
 /** Whether a block still has the name it was added with (its kind's, or its type's): a card then says the type alone. */
-function unnamed(block: Pick<DesignNode, 'type' | 'kind'>, title: string): boolean {
+function unnamed(block: Pick<ProjectNode, 'type' | 'kind'>, title: string): boolean {
   return title === '' || title.toLowerCase() === defaultName(block)
 }
 
 /** `TYPE kind / Title` in at most `room` cells: the type and kind whole, then the title cut. */
-function nameSegs(block: Pick<DesignNode, 'type' | 'kind'>, title: string, room: number, prefix: string = ''): Seg[] {
+function nameSegs(block: Pick<ProjectNode, 'type' | 'kind'>, title: string, room: number, prefix: string = ''): Seg[] {
   const segs: Seg[] = []
   let left = room
   if (prefix !== '' && left > prefix.length + 2) {
@@ -401,7 +401,7 @@ type Ctx = {
 }
 
 type Box = {
-  node: DesignNode
+  node: ProjectNode
   kind: CardKind
   w: number
   h: number
@@ -420,16 +420,16 @@ type Box = {
   gap: number
 }
 
-function insideOf(node: DesignNode): number {
+function insideOf(node: ProjectNode): number {
   return (node.children ?? []).reduce((sum, child) => sum + 1 + insideOf(child), 0)
 }
 
-function problemsIn(node: DesignNode, problems: Readonly<Record<string, number>>): number {
+function problemsIn(node: ProjectNode, problems: Readonly<Record<string, number>>): number {
   return (problems[node.id] ?? 0) + (node.children ?? []).reduce((sum, child) => sum + problemsIn(child, problems), 0)
 }
 
 /** What a card's top border says, cut to `w`: the arm's condition and `head` at the left, the problem mark (with `problems` above 0) and the id at the right. */
-function topRow(node: DesignNode, w: number, arm: Arm | null, problems: number, head: (room: number) => Seg[], headMin: number, chips: Seg[] = [], headKeep: number = headMin): CardRow {
+function topRow(node: ProjectNode, w: number, arm: Arm | null, problems: number, head: (room: number) => Seg[], headMin: number, chips: Seg[] = [], headKeep: number = headMin): CardRow {
   const right: Seg[] = []
   // Corners, one cell of border at each end, one between the two sides.
   const span = w - 5
@@ -472,11 +472,11 @@ function clipSegs(segs: readonly Seg[], room: number): Seg[] {
 }
 
 /** The first line of a block's notes (its prompt with none), on one line. */
-function firstLine(node: DesignNode): string {
+function firstLine(node: ProjectNode): string {
   return clean(cardText(node).split(/\r?\n/).find(line => line.trim() !== '') ?? '')
 }
 
-function leafBox(node: DesignNode, w: number, depth: number, parent: DesignNode | undefined, index: number, ctx: Ctx): Box {
+function leafBox(node: ProjectNode, w: number, depth: number, parent: ProjectNode | undefined, index: number, ctx: Ctx): Box {
   const inner = Math.max(1, w - 4)
   const selected = node.id === ctx.selectedId
   const knobs = node.knobs ?? {}
@@ -526,7 +526,7 @@ function leafBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
 }
 
 /** A container as one card: `▸ TYPE / Title` and how many blocks, then their titles and how to open it. */
-function collapsedBox(node: DesignNode, w: number, depth: number, parent: DesignNode | undefined, index: number, ctx: Ctx): Box {
+function collapsedBox(node: ProjectNode, w: number, depth: number, parent: ProjectNode | undefined, index: number, ctx: Ctx): Box {
   const inner = Math.max(1, w - 4)
   const kin = node.children ?? []
   const inside = insideOf(node)
@@ -541,7 +541,7 @@ function collapsedBox(node: DesignNode, w: number, depth: number, parent: Design
 }
 
 /** A container's header on its top border: `TYPE kind / Title · once per: … · stop: … · 2–4 of 9`, with what fits `room`. */
-function headSegs(node: DesignNode, room: number, range: string): Seg[] {
+function headSegs(node: ProjectNode, room: number, range: string): Seg[] {
   const title = clean(node.name)
   // The carousel's window is said before any knob: it is the one fact found nowhere else.
   const kept = range !== '' && room - (range.length + 3) >= typeLabel(node).length + Math.min(title.length + 3, 9) ? range.length + 3 : 0
@@ -560,7 +560,7 @@ function headSegs(node: DesignNode, room: number, range: string): Seg[] {
   return segs
 }
 
-function openBox(node: DesignNode, w: number, depth: number, parent: DesignNode | undefined, index: number, ctx: Ctx): Box {
+function openBox(node: ProjectNode, w: number, depth: number, parent: ProjectNode | undefined, index: number, ctx: Ctx): Box {
   const inner = Math.max(1, w - 4)
   const kin = node.children ?? []
   const flow = childFlow(node.type)
@@ -608,7 +608,7 @@ function openBox(node: DesignNode, w: number, depth: number, parent: DesignNode 
 }
 
 /** `w` is the width it is drawn at, `share` the width that decides whether a container is open (an arm's, without the cells left over). */
-function measure(node: DesignNode, w: number, share: number, depth: number, parent: DesignNode | undefined, index: number, ctx: Ctx): Box {
+function measure(node: ProjectNode, w: number, share: number, depth: number, parent: ProjectNode | undefined, index: number, ctx: Ctx): Box {
   if (!canHoldChildren(node.type)) return leafBox(node, w, depth, parent, index, ctx)
   return drawnOpen(depth, share) ? openBox(node, w, depth, parent, index, ctx) : collapsedBox(node, w, depth, parent, index, ctx)
 }
@@ -623,16 +623,16 @@ export const CRUMB_RULE_ROWS = 8
 const CRUMB_LEAST_W = 36
 
 /**
- * The breadcrumb row: `LEVEL 2   design  ›  n4 Deep read  ›  n9 Close gaps` in `columns` cells, the middle left out
+ * The breadcrumb row: `LEVEL 2   project  ›  n4 Deep read  ›  n9 Close gaps` in `columns` cells, the middle left out
  * as `…` when it is too long. The level is how many containers down the view is.
  */
-function crumbsFor(design: Design, trail: readonly DesignNode[], columns: number): { crumbs: GraphCrumb[]; level: string } {
+function crumbsFor(project: Project, trail: readonly ProjectNode[], columns: number): { crumbs: GraphCrumb[]; level: string } {
   const word = `LEVEL ${trail.length}`
   const level = columns - word.length - 3 >= CRUMB_LEAST_W ? word : ''
   // The level stands one cell in, two cells before the first crumb.
   const lead = level === '' ? 0 : 1 + level.length + 2
   const room = columns - lead
-  let parts: { id: string | null | undefined; text: string }[] = [{ id: null, text: design.name }, ...trail.map(node => ({ id: node.id, text: `${node.id} ${clean(node.name)}`.trim() }))]
+  let parts: { id: string | null | undefined; text: string }[] = [{ id: null, text: project.name }, ...trail.map(node => ({ id: node.id, text: `${node.id} ${clean(node.name)}`.trim() }))]
   const width = (): number => parts.reduce((sum, part) => sum + part.text.length + CRUMB_PAD * 2, 0) + CRUMB_SEP.length * (parts.length - 1)
   // Too long: the crumbs in the middle go first, then the names are cut.
   while (width() > room && parts.length > 3) parts = [...parts.slice(0, 1), { id: undefined, text: '…' }, ...parts.slice(parts[1]?.id === undefined ? 3 : 2)]
@@ -653,14 +653,14 @@ function crumbsFor(design: Design, trail: readonly DesignNode[], columns: number
 
 type Index = { rows: Row[]; byId: Map<string, Row> }
 
-function indexOf(design: Design): Index {
-  const rows = flatten(design)
+function indexOf(project: Project): Index {
+  const rows = flatten(project)
   return { rows, byId: new Map(rows.map(row => [row.node.id, row])) }
 }
 
 /** The containers around a block, outermost first; the block itself is not among them. */
-function ancestors(index: Index, id: string): DesignNode[] {
-  const out: DesignNode[] = []
+function ancestors(index: Index, id: string): ProjectNode[] {
+  const out: ProjectNode[] = []
   for (let row = index.byId.get(id); row?.parentId !== undefined; ) {
     row = index.byId.get(row.parentId)
     if (row) out.unshift(row.node)
@@ -668,10 +668,10 @@ function ancestors(index: Index, id: string): DesignNode[] {
   return out
 }
 
-/** The graph for a design: every card, arrow, slot, gutter and chip, in cells from the graph's top left. */
-export function layoutGraph(design: Design, options: GraphOptions): GraphLayout {
+/** The graph for a project: every card, arrow, slot, gutter and chip, in cells from the graph's top left. */
+export function layoutGraph(project: Project, options: GraphOptions): GraphLayout {
   const columns = Math.max(GRAPH_MIN_W, Math.trunc(options.columns) || 0)
-  const index = indexOf(design)
+  const index = indexOf(project)
   const selectedId = options.selectedId ?? null
   const rootRow = options.viewRootId ? index.byId.get(options.viewRootId) : undefined
   const root = rootRow && canHoldChildren(rootRow.node.type) ? rootRow : undefined
@@ -702,7 +702,7 @@ export function layoutGraph(design: Design, options: GraphOptions): GraphLayout 
   const chips: GraphChip[] = []
 
   const isOpen = (place: Place): boolean => samePlace(openAt, place)
-  const blank = !root && isBlank(design)
+  const blank = !root && isBlank(project)
   /** A slot's mark, kept inside the cells `from` … `from + room`. */
   const markAt = (x: number, y: number, label: string, from: number, room: number): { x: number; y: number; label: string } => {
     const text = clip(label, Math.max(1, room))
@@ -744,7 +744,7 @@ export function layoutGraph(design: Design, options: GraphOptions): GraphLayout 
     const endMark = (card: GraphCard, open: boolean): NonNullable<GraphSlot['mark']> => markAt(arrowX - 1, card.y + card.h - 1, open ? SLOT_OPEN : SLOT, card.x + 2, card.w - 4)
 
     if (!host && blank) {
-      // A design with no block of its own: the start block every design has, then its `[+]` in the middle of the rows
+      // A project with no block of its own: the start block every project has, then its `[+]` in the middle of the rows
       // left, over the lines that say how to start (the paint's).
       let y = oy
       for (const kid of kids) {
@@ -849,10 +849,10 @@ export function layoutGraph(design: Design, options: GraphOptions): GraphLayout 
     frame.top = topRow(root.node, columns, null, ctx.problems[root.node.id] ?? 0, room => headSegs(root.node, room, rangeOf(ctx.carousels[root.node.id])), typeLabel(root.node).length, root.node.id === selectedId && !ctx.locked ? chipsOf(root.node) : [], root.node.type.length + 12 + rangeOf(ctx.carousels[root.node.id]).length)
     put(frame, 0, 0)
     height = frame.h
-    ;({ crumbs, level } = crumbsFor(design, [...ancestors(index, root.node.id), root.node], columns))
+    ;({ crumbs, level } = crumbsFor(project, [...ancestors(index, root.node.id), root.node], columns))
   } else {
     height = putList(
-      design.nodes.map((node, i) => measure(node, columns, columns, 1, undefined, i, ctx)),
+      project.nodes.map((node, i) => measure(node, columns, columns, 1, undefined, i, ctx)),
       undefined,
       0,
       0,
@@ -860,15 +860,15 @@ export function layoutGraph(design: Design, options: GraphOptions): GraphLayout 
     )
     const strays = options.unmapped ?? 0
     if (strays > 0) {
-      // Not a block of the design: a card of its own after it, with no slot around it.
+      // Not a block of the project: a card of its own after it, with no slot around it.
       const title = strays > 1 ? `${strays} agents no block claims` : 'an agent no block claims'
-      cards.push({ x: 0, y: height, w: columns, h: 3, id: UNMAPPED_ID, type: 'unmapped', kind: 'leaf', title, depth: 1, parentId: undefined, index: design.nodes.length, selected: selectedId === UNMAPPED_ID, flow: null, inside: 0, top: { left: [], right: [] }, rows: [{ left: [{ text: clip(title, columns - 4), role: 'title' }], right: [] }] })
+      cards.push({ x: 0, y: height, w: columns, h: 3, id: UNMAPPED_ID, type: 'unmapped', kind: 'leaf', title, depth: 1, parentId: undefined, index: project.nodes.length, selected: selectedId === UNMAPPED_ID, flow: null, inside: 0, top: { left: [], right: [] }, rows: [{ left: [{ text: clip(title, columns - 4), role: 'title' }], right: [] }] })
       height += 3
     }
   }
 
   // The one `[+]` the keyboard adds at: where the add list is open, else where `n` would open it.
-  const keyAt = openAt ?? addPlace(design, selectedId, root?.node.id ?? null)
+  const keyAt = openAt ?? addPlace(project, selectedId, root?.node.id ?? null)
   for (const slot of slots) slot.target = samePlace(slot.place, keyAt)
 
   const scroll: Record<string, number> = {}
@@ -1065,16 +1065,16 @@ export function dropTarget(layout: GraphLayout, id: string, x: number, y: number
   return { slot: best, to: parentId === undefined ? { index: at } : { parentId, index: at } }
 }
 
-/** A design read for walking: each block's row, its container's, its siblings, and how the list it is in runs. */
-function walker(design: Design, layout: GraphLayout) {
-  const index = indexOf(design)
+/** A project read for walking: each block's row, its container's, its siblings, and how the list it is in runs. */
+function walker(project: Project, layout: GraphLayout) {
+  const index = indexOf(project)
   const parentOf = (row: Row): Row | undefined => (row.parentId === undefined ? undefined : index.byId.get(row.parentId))
-  const siblingsOf = (row: Row): readonly DesignNode[] => parentOf(row)?.node.children ?? design.nodes
+  const siblingsOf = (row: Row): readonly ProjectNode[] => parentOf(row)?.node.children ?? project.nodes
   const flowOf = (row: Row): Flow => childFlow(parentOf(row)?.node.type)
   /** Drawn open, with something in it: a block can be stepped into. */
-  const enterable = (node: DesignNode): boolean => cardOf(layout, node.id)?.kind === 'open' && (node.children?.length ?? 0) > 0
+  const enterable = (node: ProjectNode): boolean => cardOf(layout, node.id)?.kind === 'open' && (node.children?.length ?? 0) > 0
   /** The block a step into a container lands on: its first, or the first arm its carousel shows. */
-  const firstIn = (node: DesignNode): DesignNode | undefined => node.children?.[childFlow(node.type) === 'stack' ? (layout.carousels[node.id]?.first ?? 0) : 0]
+  const firstIn = (node: ProjectNode): ProjectNode | undefined => node.children?.[childFlow(node.type) === 'stack' ? (layout.carousels[node.id]?.first ?? 0) : 0]
   return { index, parentOf, siblingsOf, flowOf, enterable, firstIn }
 }
 
@@ -1088,8 +1088,8 @@ function walker(design: Design, layout: GraphLayout) {
  * arm (the block of it nearest in height); elsewhere `right` goes into a container and `left` out
  * to the one around the selection.
  */
-export function navigate(design: Design, layout: GraphLayout, id: string | null, direction: Direction): string | null {
-  const { index, parentOf, siblingsOf, flowOf, enterable, firstIn } = walker(design, layout)
+export function navigate(project: Project, layout: GraphLayout, id: string | null, direction: Direction): string | null {
+  const { index, parentOf, siblingsOf, flowOf, enterable, firstIn } = walker(project, layout)
   const rootId = layout.viewRootId
   const here = id === null ? undefined : index.byId.get(id)
   // Nothing selected, or a block this view does not draw: the view's first card.
@@ -1153,8 +1153,8 @@ export type MoveTarget = { to: Place; reason?: undefined } | { to: null; reason:
  * an arm is the next arm. `right` / `left` swap an arm with the one beside it, and move nothing
  * else. A block never leaves the view.
  */
-export function moveTarget(design: Design, layout: GraphLayout, id: string | null, direction: Direction): MoveTarget {
-  const { index, parentOf, siblingsOf, flowOf } = walker(design, layout)
+export function moveTarget(project: Project, layout: GraphLayout, id: string | null, direction: Direction): MoveTarget {
+  const { index, parentOf, siblingsOf, flowOf } = walker(project, layout)
   const here = id === null ? undefined : index.byId.get(id)
   if (!here) return { to: null, reason: id === null ? 'no block is selected' : `no block ${id}` }
   if (here.node.id === layout.viewRootId) return { to: null, reason: `${here.node.id} is the view: b goes up a level, then it can move` }
@@ -1184,9 +1184,9 @@ export function moveTarget(design: Design, layout: GraphLayout, id: string | nul
   return { to: parent.parentId === undefined ? { index: at } : { parentId: parent.parentId, index: at } }
 }
 
-/** Whether the view rooted at `viewRootId` (null: the whole design) draws a block in `columns` columns: every container around it is open there. */
-export function viewShows(design: Design, viewRootId: string | null, id: string, columns: number): boolean {
-  const index = indexOf(design)
+/** Whether the view rooted at `viewRootId` (null: the whole project) draws a block in `columns` columns: every container around it is open there. */
+export function viewShows(project: Project, viewRootId: string | null, id: string, columns: number): boolean {
+  const index = indexOf(project)
   if (!index.byId.has(id)) return false
   if (viewRootId === id) return canHoldChildren(index.byId.get(id)?.node.type ?? 'agent')
   const around = ancestors(index, id)
@@ -1195,7 +1195,7 @@ export function viewShows(design: Design, viewRootId: string | null, id: string,
   // The width and the depth each container on the way down is given, as the layout gives them.
   let width = Math.max(GRAPH_MIN_W, Math.trunc(columns) || 0)
   let depth = 0
-  let list: DesignNode | undefined = around[from]
+  let list: ProjectNode | undefined = around[from]
   for (let i = from + 1; i < around.length; i++) {
     const node = around[i]
     if (!node) return false
@@ -1210,25 +1210,25 @@ export function viewShows(design: Design, viewRootId: string | null, id: string,
 
 /**
  * The view that can show a block: `viewRootId` when it draws the block already, else the whole
- * design (null) when that does, else the outermost container that does (the one the block stands
- * in, at the latest). Null too for an id the design does not have.
+ * project (null) when that does, else the outermost container that does (the one the block stands
+ * in, at the latest). Null too for an id the project does not have.
  */
-export function viewFor(design: Design, viewRootId: string | null, id: string, columns: number): string | null {
-  if (viewShows(design, viewRootId, id, columns)) return viewRootId
-  if (viewShows(design, null, id, columns)) return null
-  const index = indexOf(design)
-  return ancestors(index, id).find(node => viewShows(design, node.id, id, columns))?.id ?? index.byId.get(id)?.parentId ?? null
+export function viewFor(project: Project, viewRootId: string | null, id: string, columns: number): string | null {
+  if (viewShows(project, viewRootId, id, columns)) return viewRootId
+  if (viewShows(project, null, id, columns)) return null
+  const index = indexOf(project)
+  return ancestors(index, id).find(node => viewShows(project, node.id, id, columns))?.id ?? index.byId.get(id)?.parentId ?? null
 }
 
-/** The view one level up from a view's root, for `b`: the container around it, or null for the whole design. */
-export function parentView(design: Design, viewRootId: string | null): string | null {
+/** The view one level up from a view's root, for `b`: the container around it, or null for the whole project. */
+export function parentView(project: Project, viewRootId: string | null): string | null {
   if (viewRootId === null) return null
-  return indexOf(design).byId.get(viewRootId)?.parentId ?? null
+  return indexOf(project).byId.get(viewRootId)?.parentId ?? null
 }
 
 /** Whether `o` can open a block as the view: a container, and not the one the view already shows. */
-export function canOpen(design: Design, viewRootId: string | null, id: string | null): boolean {
+export function canOpen(project: Project, viewRootId: string | null, id: string | null): boolean {
   if (id === null || id === viewRootId) return false
-  const row = indexOf(design).byId.get(id)
+  const row = indexOf(project).byId.get(id)
   return row !== undefined && canHoldChildren(row.node.type)
 }

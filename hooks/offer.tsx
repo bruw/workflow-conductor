@@ -1,8 +1,8 @@
 import type { On } from 'claude-code'
 
-import { offerBrief } from '../src/design/chat'
-import { buildHandoff } from '../src/design/handoff'
-import { isBlank, parseDesign } from '../src/design/model'
+import { offerBrief } from '../src/project/chat'
+import { buildHandoff } from '../src/project/handoff'
+import { isBlank, parseProject } from '../src/project/model'
 import {
   ASK_PREFIX,
   ASK_USAGE,
@@ -22,14 +22,14 @@ import {
   storedChoice,
   typedResult,
   waitingResult,
-} from '../src/design/offer'
-import { designFile, scriptFile } from '../src/design/session'
+} from '../src/project/offer'
+import { projectFile, scriptFile } from '../src/project/session'
 import type { Tracker } from '../src/run/tracker'
 
 /** "Conductor" was answered and the draft it asks Claude for has not landed yet. A module variable: it lasts a turn. */
 let offered = false
 
-/** Whether the design being written is the one the person just asked for in the question; asking spends it. */
+/** Whether the project being written is the one the person just asked for in the question; asking spends it. */
 export const takeOffered = (): boolean => {
   const was = offered
   offered = false
@@ -38,19 +38,19 @@ export const takeOffered = (): boolean => {
 }
 
 /**
- * The design the last "Conductor" answer led to, until it is handed off or run: while it waits on the board the question
- * is not asked again (Claude would draft a second design, or write a script the board knows nothing of).
+ * The project the last "Conductor" answer led to, until it is handed off or run: while it waits on the board the question
+ * is not asked again (Claude would draft a second project, or write a script the board knows nothing of).
  */
 let waiting: string | null = null
-/** The tool already answered in this turn that a design waits: a second call is for another workflow, and asks. */
+/** The tool already answered in this turn that a project waits: a second call is for another workflow, and asks. */
 let answered = false
 
-/** The draft a "Conductor" answer asked for has landed, as design `name`. */
+/** The draft a "Conductor" answer asked for has landed, as project `name`. */
 export const offerDrafted = (name: string): void => {
   waiting = name
 }
 
-/** Design `name` was handed off, or a run of it started: it waits for no approval. */
+/** Project `name` was handed off, or a run of it started: it waits for no approval. */
 export const offerSettled = (name: string): void => {
   if (waiting === name) waiting = null
 }
@@ -63,7 +63,7 @@ export const offerPrompted = (): void => {
 
 export const registerOffer = (on: On, tracker: Tracker): void => {
   // Not deferred: Claude calls a tool before a workflow only when its description is in front of it (API-NOTES S13, S14).
-  // The matcher is always true: run.tsx holds the unmatched session.start, design.tsx the one on `cwd`.
+  // The matcher is always true: run.tsx holds the unmatched session.start, project.tsx the one on `cwd`.
   on('session.start', { isInteractive: [true, false] }, async ($, e, next) => {
     await $.tool.register({ name: OFFER_TOOL_NAME, description: OFFER_TOOL_DESCRIPTION, isDeferred: false })
 
@@ -89,22 +89,22 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
     }
     // A workflow's own agents, and any subagent: the person is asked by the conversation, once.
     if (e.agentId !== undefined) return { result: standardResult('subagent') }
-    // The script being written is the design the person approved on the board: that was their answer.
+    // The script being written is the project the person approved on the board: that was their answer.
     if (tracker.awaitsRun()) return { result: standardResult('handoff') }
-    // A `-p` run draws nowhere: nobody reads a question, and nobody would review a design.
+    // A `-p` run draws nowhere: nobody reads a question, and nobody would review a project.
     const surfaces = await $.session.surfaces().catch(() => undefined)
     if (surfaces !== undefined && surfaces.length === 0) return { result: standardResult('headless') }
-    // The design drafted after the last "Conductor" answer still waits for the person: said once a turn, with what an
+    // The project drafted after the last "Conductor" answer still waits for the person: said once a turn, with what an
     // approval given in chat is carried out by. Gone, emptied or said already: the question is asked as for any workflow.
     if (waiting !== null && !answered) {
       const root = await $.session.root()
-      const path = designFile(root, waiting)
-      const parsed = parseDesign(await $.fs.read(path).catch(() => ''))
-      if (parsed.ok && !isBlank(parsed.design)) {
+      const path = projectFile(root, waiting)
+      const parsed = parseProject(await $.fs.read(path).catch(() => ''))
+      if (parsed.ok && !isBlank(parsed.project)) {
         answered = true
         const script = scriptFile(root, waiting)
 
-        return { result: waitingResult(waiting, buildHandoff(parsed.design, path, (await $.fs.exists(script).catch(() => false)) ? script : null).context.join('\n')) }
+        return { result: waitingResult(waiting, buildHandoff(parsed.project, path, (await $.fs.exists(script).catch(() => false)) ? script : null).context.join('\n')) }
       }
     }
     waiting = null

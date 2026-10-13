@@ -4,8 +4,8 @@
 // chat.ts's (`offerBrief`), beside the draft's it shares its words with.
 // Pure TypeScript: no `$`, no engine imports, no imports at all (handoff.ts names the tool).
 
-/** The tool Claude drafts a design with: chat.ts `TOOL_FULL_NAME`, spelled again because chat.ts imports this file (by way of handoff.ts). */
-const DESIGN_TOOL = 'mcp__conductor__design'
+/** The tool Claude drafts a project with: chat.ts `TOOL_FULL_NAME`, spelled again because chat.ts imports this file (by way of handoff.ts). */
+const PROJECT_TOOL = 'mcp__conductor__project'
 
 /** The tool's short name; the model calls it as `mcp__conductor__before_workflow`. */
 export const OFFER_TOOL_NAME = 'before_workflow'
@@ -60,7 +60,7 @@ export function standardResult(why: StandardReason): string {
 }
 
 /** What the person says in chat after a question that got no choice is their answer: Claude acts on it, and the tool is not called for it again. */
-const IN_CHAT = `Once they have answered in chat, act on that answer without calling this tool again: for a design to review first, draft one with ${DESIGN_TOOL} (action "write") and stop there; for the standard way, author the Workflow script and run it.`
+const IN_CHAT = `Once they have answered in chat, act on that answer without calling this tool again: for a project to review first, draft one with ${PROJECT_TOOL} (action "write") and stop there; for the standard way, author the Workflow script and run it.`
 
 /** Esc and the engine's "Chat about this" row arrive alike (API-NOTES S9), and so does an answer typed empty: no choice was made. */
 export const DISMISSED_RESULT = `The user dismissed the question without choosing. Do not author or run a Workflow script yet: ask them in chat how they want to proceed. ${IN_CHAT}`
@@ -71,16 +71,16 @@ export function typedResult(text: string): string {
 }
 
 /**
- * What the tool answers, with no question, while the design its last "Conductor" answer led to waits on the board
+ * What the tool answers, with no question, while the project its last "Conductor" answer led to waits on the board
  * unapproved: Claude neither drafts again nor writes a script the board knows nothing of. `handoff` is what
  * `/conductor run <name>` tells Claude (handoff.ts): an approval given in chat is carried out by it.
  */
 export function waitingResult(name: string, handoff: string): string {
   return [
-    `The user was not asked: design "${name}", drafted when they chose Conductor here, is on the Conductor board and they have not approved it yet. They approve it on the board with r, or with /conductor run ${name}. Which of these three is true decides what you do:`,
-    `1. The user has not told you to run it: do not draft another design and do not author or run a Workflow script. Tell them the design waits on the board for their approval.`,
-    `2. The user told you in chat to run it ("run it", "go ahead"): that is their approval of design "${name}" as it is on the board now. Do not draft again. Carry out the handoff below, which is what /conductor run ${name} would have given you.`,
-    '3. This call is for a different workflow than that design: call this tool once more, and the user is asked.',
+    `The user was not asked: project "${name}", drafted when they chose Conductor here, is on the Conductor board and they have not approved it yet. They approve it on the board with r, or with /conductor run ${name}. Which of these three is true decides what you do:`,
+    `1. The user has not told you to run it: do not draft another project and do not author or run a Workflow script. Tell them the project waits on the board for their approval.`,
+    `2. The user told you in chat to run it ("run it", "go ahead"): that is their approval of project "${name}" as it is on the board now. Do not draft again. Carry out the handoff below, which is what /conductor run ${name} would have given you.`,
+    '3. This call is for a different workflow than that project: call this tool once more, and the user is asked.',
     '',
     handoff,
   ].join('\n')
@@ -99,7 +99,7 @@ export function resetText(cleared: number): string {
     : `Stored "Always" and "Never" answers cleared (${cleared}): Conductor asks again before a workflow, and whether to visualize a run.`
 }
 
-// The second question: a workflow that started with no design is asked about once it runs (run.tsx),
+// The second question: a workflow that started with no project is asked about once it runs (run.tsx),
 // whether to draw one of it. The brief for a "Visualize" answer is chat.ts's (`visualizeBrief`).
 
 export const VISUALIZE_QUESTION = 'Visualize this run in Conductor?'
@@ -132,7 +132,7 @@ export function visualizeTyped(text: string): string {
   return `Conductor asked the user whether to visualize this run; they picked none of the options and typed this instead: "${text.trim()}". Take it as what they said to you. The workflow is running: leave it be unless they ask otherwise.`
 }
 
-/** What the person sees when a run is put on a saved design without a question. `placed` is false when the board could not open by itself. */
+/** What the person sees when a run is put on a saved project without a question. `placed` is false when the board could not open by itself. */
 export function reusedToast(name: string, placed: boolean): string {
-  return `conductor: this run is shown on design ${name}${placed ? '' : ` · /conductor design ${name} opens it`}`
+  return `conductor: this run is shown on project ${name}${placed ? '' : ` · /conductor project ${name} opens it`}`
 }

@@ -1,9 +1,9 @@
 // The $.state contract. Every $.state key the mod uses is declared here.
 // Self-contained by rule (no imports), so shapes are spelled out again: the run
-// shapes mirror src/run/events.ts, the design shapes mirror src/design/model.ts and
-// src/design/session.ts. `tsc` fails where a mirror drifts from its source.
+// shapes mirror src/run/events.ts, the project shapes mirror src/project/model.ts and
+// src/project/session.ts. `tsc` fails where a mirror drifts from its source.
 
-export type ConductorDesignNode = {
+export type ConductorProjectNode = {
   id: string
   type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'start' | 'phase'
   kind?:
@@ -27,19 +27,19 @@ export type ConductorDesignNode = {
     condition?: string
   }
   match?: string[]
-  children?: ConductorDesignNode[]
+  children?: ConductorProjectNode[]
 }
 
-export type ConductorDesign = { version: 1; name: string; nextId?: number; nodes: ConductorDesignNode[] }
+export type ConductorProject = { version: 1; name: string; nextId?: number; nodes: ConductorProjectNode[] }
 
-export type ConductorDesignUi = {
+export type ConductorProjectUi = {
   name: string
   status: 'closed' | 'pick' | 'ready' | 'error'
   error: string | null
   selectedId: string | null
   help: number
   notice: string | null
-  picker: { at: { parentId?: string; index: number }; query: string; retypeId?: string; anchorId?: string; where?: 'after' | 'inside' | 'before'; pick?: number; block?: ConductorDesignNode['type']; nav?: string; lead?: string } | null
+  picker: { at: { parentId?: string; index: number }; query: string; retypeId?: string; anchorId?: string; where?: 'after' | 'inside' | 'before'; pick?: number; block?: ConductorProjectNode['type']; nav?: string; lead?: string } | null
   confirmId: string | null
   viewRootId: string | null
   carousels: Record<string, number>
@@ -86,14 +86,14 @@ declare module 'claude-code' {
       runUi: { expanded: string[]; collapsed: string[] }
       /** The run's tick clock in ms; advances only while an agent runs. */
       runClock: number
-      /** The design the tracked run was started from; null when it came from none. */
-      runDesign: string | null
-      /** The tracked run's script file, and the design drawn of that run after it started (`attach`); null with no run of a script. */
+      /** The project the tracked run was started from; null when it came from none. */
+      runProject: string | null
+      /** The tracked run's script file, and the project drawn of that run after it started (`attach`); null with no run of a script. */
       runScript: { runId: string; path: string; drawn: string | null } | null
-      /** When the tracked run began and ended, in `$.clock.now()`'s ms (RunTimes in src/design/session.ts). */
+      /** When the tracked run began and ended, in `$.clock.now()`'s ms (RunTimes in src/project/session.ts). */
       runTimes: { runId: string | null; startedAt: number | null; endedAt: number | null; seenAt: number | null }
-      design: ConductorDesign | null
-      designUi: ConductorDesignUi
+      project: ConductorProject | null
+      projectUi: ConductorProjectUi
       /** Whether this session has seen the splash. */
       splashed: boolean
       /** The gesture the header's persona holds (Pose in src/ui/persona.ts); `idle` at rest. */

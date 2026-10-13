@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-// Prints the graph of a design as the pane would paint it, so its look can be
+// Prints the graph of a project as the pane would paint it, so its look can be
 // reviewed with no live session.
 //
-//   bun scripts/render-graph.ts <template | design.json | stress case> [options]
+//   bun scripts/render-graph.ts <template | project.json | stress case> [options]
 //
 //   --cols N        columns of the graph (default 120)
 //   --rows N        rows of the window (default 45)
@@ -15,45 +15,45 @@
 //   --pan N         the first row shown (default: the one that shows the selection)
 //   --full          the whole graph, whatever its height
 //   --run           a made-up finished run laid over it
-//   --no-lints      no problem marks (default: the design's real lints, by block)
+//   --no-lints      no problem marks (default: the project's real lints, by block)
 //   --ansi          colours, mapped from the theme keys
 //   --list          the names that can be rendered
 //
 // Templates: review, research, migrate, judge-panel. Stress cases: see STRESS below.
 
 import { readFileSync } from 'node:fs'
-import { lint } from '../src/design/lints'
-import { flatten, parseDesign, readType, withGoal, withStart } from '../src/design/model'
-import type { Design, DesignNode, Kind, Knobs, NodeType } from '../src/design/model'
-import type { Place } from '../src/design/ops'
-import { TEMPLATES } from '../src/design/templates'
+import { lint } from '../src/project/lints'
+import { flatten, parseProject, readType, withGoal, withStart } from '../src/project/model'
+import type { Project, ProjectNode, Kind, Knobs, NodeType } from '../src/project/model'
+import type { Place } from '../src/project/ops'
+import { TEMPLATES } from '../src/project/templates'
 import type { NodeRun } from '../src/run/events'
 import { layoutGraph, panTo } from '../src/ui/graph-layout'
 import { paintGraph } from '../src/ui/graph-paint'
 import type { RunOverlay, Span } from '../src/ui/graph-paint'
 
 // `block` is a type, or a type and a kind: `agent`, `agent verify`.
-function node(id: string, block: NodeType | `${NodeType} ${Kind}`, name: string, logic: string, knobs: Knobs = {}, children?: DesignNode[]): DesignNode {
+function node(id: string, block: NodeType | `${NodeType} ${Kind}`, name: string, logic: string, knobs: Knobs = {}, children?: ProjectNode[]): ProjectNode {
   const [type, kind] = block.split(' ')
   const read = readType(type, kind)
   if ('error' in read) throw new Error(`${id}: ${read.error}`)
-  const made: DesignNode = { id, ...read, name }
+  const made: ProjectNode = { id, ...read, name }
   if (logic !== '') made.logic = logic
   if (Object.keys(knobs).length > 0) made.knobs = knobs
   if (children) made.children = children
   return made
 }
 
-function design(name: string, goal: string, nodes: DesignNode[]): Design {
+function project(name: string, goal: string, nodes: ProjectNode[]): Project {
   return withGoal(withStart({ version: 1, name, nodes }), goal)
 }
 
 const LONG = 'Reads every source in full, however long, and writes down each claim that bears on the question together with the exact quote that supports it, the page or line it was found at, how confident the reader is in it and why, and which other claims it agrees or disagrees with, so that the checker after it has all it needs and never has to open the source again.'
 
-export const STRESS: Record<string, () => Design> = {
+export const STRESS: Record<string, () => Project> = {
   /** A stack with more arms than any width holds: the carousel. */
   'parallel-9': () =>
-    design('nine-arms', 'One question, nine lenses at once, then one answer', [
+    project('nine-arms', 'One question, nine lenses at once, then one answer', [
       node('n1', 'agent', 'scope', 'Split the question into what each lens should look at.', { effort: 'low', output: '{ lenses: [{ name, focus }] }' }),
       node(
         'n2',
@@ -69,7 +69,7 @@ export const STRESS: Record<string, () => Design> = {
     ]),
   /** Containers nested six deep: the innermost ones are drawn collapsed until opened as the view. */
   'deep-6': () =>
-    design('six-deep', 'A nest of containers, each inside the one before', [
+    project('six-deep', 'A nest of containers, each inside the one before', [
       node('n1', 'pipeline', 'outer', '', { oncePer: '×4 areas' }, [
         node('n2', 'agent', 'plan area', 'Say what to look at in this area.', {}),
         node('n3', 'loop', 'rounds', '', { stopCondition: '2 dry rounds' }, [
@@ -90,7 +90,7 @@ export const STRESS: Record<string, () => Design> = {
     ]),
   /** The mock-up's case: a branch of three arms with a `condition`, one not set, one arm a loop holding an agent. */
   'branch-when': () =>
-    design('research-answer', 'Answer a question from many sources: search, read, check gaps, write up.', [
+    project('research-answer', 'Answer a question from many sources: search, read, check gaps, write up.', [
       node('n1', 'pipeline', 'Deep read', '', { oncePer: 'deduped sources' }, [
         node('n2', 'agent', 'Search', 'Find relevant sources.', { model: 'haiku', effort: 'low', output: 'sources' }),
         node('n3', 'agent verify', 'Check claims', '2 votes: try to refute the claims.', { model: 'sonnet', effort: 'high', output: 'verdict + reason' }),
@@ -103,16 +103,16 @@ export const STRESS: Record<string, () => Design> = {
         node('n9', 'loop', 'Close gaps', '', {}, [node('n10', 'agent', 'Investigate gaps', '', { model: 'sonnet', effort: 'high' })]),
       ]),
     ]),
-  empty: () => design('nothing-yet', '', []),
+  empty: () => project('nothing-yet', '', []),
   'empty-container': () =>
-    design('one-empty-box', 'A container with nothing in it yet', [
+    project('one-empty-box', 'A container with nothing in it yet', [
       node('n1', 'agent', 'before', 'Something to do first.', {}),
       node('n2', 'pipeline', 'Per file', '', { oncePer: 'changed files' }, []),
       node('n3', 'branch', 'Pick', '', {}, []),
     ]),
   /** Titles, notes, knobs and conditions far longer than any card. */
   long: () =>
-    design('a-design-whose-name-is-much-longer-than-a-design-name-has-any-business-being', LONG, [
+    project('a-project-whose-name-is-much-longer-than-a-project-name-has-any-business-being', LONG, [
       node('n1', 'agent', 'Read every single source from the first page to the last and extract all of the claims', LONG, { model: 'claude-opus-with-a-very-long-custom-model-name', effort: 'xhigh', output: '{ claims: [{ claim, quote, page, line, confidence, why, agrees_with[], disagrees_with[] }] }', oncePer: 'each of the deduped sources that survived the first two filters' }),
       node('n2', 'pipeline', 'A pipeline with a title that goes on and on well past the width of its own border', LONG, { oncePer: '×12 of the sources that the reader before it marked as worth a second and slower look', output: '{ verdicts[] }' }, [
         node('n3', 'agent verify', 'Refute each and every claim against the quoted source text, defaulting to refuted', `5 votes. ${LONG}\n\nSecond paragraph: ${LONG}`, { model: 'sonnet', output: '{ refuted: boolean, reason: string, quote: string }' }),
@@ -154,19 +154,19 @@ function ansi(spans: readonly Span[]): string {
     .join('')
 }
 
-function load(name: string): Design {
+function load(name: string): Project {
   const template = TEMPLATES.find(one => one.id === name)
   if (template) return template.make()
   const stress = STRESS[name]
-  // As the pane has them: every design opens with its start block.
+  // As the pane has them: every project opens with its start block.
   if (stress) return withStart(stress())
-  const parsed = parseDesign(readFileSync(name, 'utf8'))
+  const parsed = parseProject(readFileSync(name, 'utf8'))
   if (!parsed.ok) throw new Error(`${name}: ${parsed.error}`)
-  return parsed.design
+  return parsed.project
 }
 
 /** A finished run in which every leaf but the last got agents, and one of them failed. */
-function fakeRun(made: Design): RunOverlay {
+function fakeRun(made: Project): RunOverlay {
   const byNode: Record<string, NodeRun> = {}
   const leaves = flatten(made).filter(row => row.node.children === undefined)
   for (const [i, row] of leaves.slice(0, -1).entries()) byNode[row.node.id] = { total: 4, running: 0, done: i === 1 ? 3 : 4, failed: i === 1 ? 1 : 0, tokens: 10200 * (i + 1) }
@@ -187,7 +187,7 @@ function main(): void {
   const all = [...TEMPLATES.map(one => one.id), ...Object.keys(STRESS)]
   const name = names[0]
   if (flags.has('--list') || name === undefined) {
-    console.log(`usage: bun scripts/render-graph.ts <${all.join(' | ')} | design.json> [--cols N] [--rows N] [--select id] [--view id] [--scroll id=n] [--open p:i] [--hover p:i] [--quiet] [--pan N] [--full] [--run] [--no-lints] [--ansi]`)
+    console.log(`usage: bun scripts/render-graph.ts <${all.join(' | ')} | project.json> [--cols N] [--rows N] [--select id] [--view id] [--scroll id=n] [--open p:i] [--hover p:i] [--quiet] [--pan N] [--full] [--run] [--no-lints] [--ansi]`)
     process.exit(name === undefined && !flags.has('--list') ? 1 : 0)
   }
   const made = load(name)

@@ -14,7 +14,7 @@ import { replayDue } from './replay'
 export const TICK_MS = 96
 /** No agent running and no spawn for this long: the run is held finished. */
 export const QUIET_MS = 8000
-/** A handoff waits this long for a run under another name than its design's; a prompt from the person starts the wait again. */
+/** A handoff waits this long for a run under another name than its project's; a prompt from the person starts the wait again. */
 export const HANDOFF_MS = 180_000
 /** A slow replay spreads its events over this long. */
 export const REPLAY_MS = 10_000
@@ -40,13 +40,13 @@ export type TrackerHost = {
   paneShown: () => Promise<boolean>
   status: (text: string | undefined) => unknown
   toast: (text: string) => unknown
-  /** Stores which design the tracked run belongs to; null when it was not started from one. */
-  design?: (name: string | null) => unknown
+  /** Stores which project the tracked run belongs to; null when it was not started from one. */
+  project?: (name: string | null) => unknown
 }
 
 /**
- * A design's claim on a run: handed off, the next run that starts is its run; adopted, the run already tracked is.
- * `match` is each block's own, by id in design order, for a run whose labels carry no block id.
+ * A project's claim on a run: handed off, the next run that starts is its run; adopted, the run already tracked is.
+ * `match` is each block's own, by id in project order, for a run whose labels carry no block id.
  */
 export type Handoff = { name: string; nodeIds: readonly string[]; titles?: Readonly<Record<string, string>>; match?: Readonly<Record<string, readonly string[]>> }
 
@@ -54,8 +54,8 @@ type Claim = Mapping & { name: string; titles?: Readonly<Record<string, string>>
 
 const claimOf = (from: Handoff): Claim => ({ name: from.name, ids: new Set(from.nodeIds), titles: from.titles, match: from.match })
 
-/** `design` is the saved design named as the run's workflow, when there is one: the run is that design's, handed off or not. */
-export type RunStarted = { runId: string; name?: string; transcriptDir?: string; design?: Handoff }
+/** `project` is the saved project named as the run's workflow, when there is one: the run is that project's, handed off or not. */
+export type RunStarted = { runId: string; name?: string; transcriptDir?: string; project?: Handoff }
 export type AgentSpawned = { runId: string; agentId: string; label: string; index?: number }
 export type AgentEnded = { ok: boolean; durationMs?: number; tokens?: number }
 
@@ -80,7 +80,7 @@ export function createTracker() {
   let pending: Claim | undefined
   let active: Claim | undefined
   let expiry: Timer | undefined
-  /** The design whose handoff is being worked on: from the handoff until the person's next prompt after its claim is spent. A run of it meanwhile (the first, a retry) comes out of the handoff. */
+  /** The project whose handoff is being worked on: from the handoff until the person's next prompt after its claim is spent. A run of it meanwhile (the first, a retry) comes out of the handoff. */
   let handed: string | undefined
 
   const dirs = new Map<string, string>()
@@ -247,7 +247,7 @@ export function createTracker() {
     expiry = host?.after(HANDOFF_MS, dropPending)
   }
 
-  /** Forgets the run held so far so that `runId` can start clean. `own` is the saved design the run is named as. */
+  /** Forgets the run held so far so that `runId` can start clean. `own` is the saved project the run is named as. */
   const begin = (runId: string, own?: Handoff): void => {
     replaying?.cancel()
     replaying = undefined
@@ -255,28 +255,28 @@ export function createTracker() {
     totals.clear()
     noPhase.clear()
     if (own !== undefined) {
-      // Named as a saved design: that design's run, whatever waits. A handoff of another design goes on waiting for its own.
+      // Named as a saved project: that project's run, whatever waits. A handoff of another project goes on waiting for its own.
       active = claimOf(own)
       if (pending?.name === own.name) dropPending()
-      call(h => h.design?.(own.name))
+      call(h => h.project?.(own.name))
     } else if (pending !== undefined || state.runId !== runId) {
-      // Another run, or the one a handoff waited for: it belongs to that design, or to none.
+      // Another run, or the one a handoff waited for: it belongs to that project, or to none.
       active = pending
       dropPending()
-      // Said for every run, the same design's next one too: the host's copy is the session's and starts over on a /clear, this one does not.
+      // Said for every run, the same project's next one too: the host's copy is the session's and starts over on a /clear, this one does not.
       const name = active?.name ?? null
-      call(h => h.design?.(name))
+      call(h => h.project?.(name))
     }
     if (state.runId !== undefined && state.runId !== runId) superseded.add(state.runId)
     superseded.delete(runId)
   }
 
-  /** The run tracked now is `claim`'s design's: every agent seen so far is placed again by it. */
+  /** The run tracked now is `claim`'s project's: every agent seen so far is placed again by it. */
   const take = (claim: Handoff): void => {
     const before = active
     active = claimOf(claim)
     if (pending?.name === claim.name) dropPending()
-    if (active.name !== before?.name) call(h => h.design?.(claim.name))
+    if (active.name !== before?.name) call(h => h.project?.(claim.name))
     state = remap(state, active)
     flush()
   }
@@ -287,8 +287,8 @@ export function createTracker() {
 
     /**
      * Gives the tracker its host. `stored` is the state a previous load of the module
-     * left behind: a run in it is picked up where it was, with `claim` as the design it
-     * came from (the node ids are not stored; the caller reads them from the design file).
+     * left behind: a run in it is picked up where it was, with `claim` as the project it
+     * came from (the node ids are not stored; the caller reads them from the project file).
      */
     attach(next: TrackerHost, stored?: RunState, claim?: Handoff): void {
       host = next
@@ -305,7 +305,7 @@ export function createTracker() {
     },
 
     /**
-     * A design was handed off: the first run to start within HANDOFF_MS is counted against
+     * A project was handed off: the first run to start within HANDOFF_MS is counted against
      * its node ids. After that the claim is dropped, so a later unrelated run is not taken.
      */
     handoff(next: Handoff): void {
@@ -317,8 +317,8 @@ export function createTracker() {
 
     /**
      * The person sent a prompt in the main conversation. While a handoff waits for its run they are answering what
-     * Claude asked about the design: the wait starts again. With none waiting, the handoff's work is over: a later
-     * run of the design is one the person asked for anew.
+     * Claude asked about the project: the wait starts again. With none waiting, the handoff's work is over: a later
+     * run of the project is one the person asked for anew.
      */
     prompted(): void {
       if (pending === undefined) handed = undefined
@@ -326,7 +326,7 @@ export function createTracker() {
     },
 
     /**
-     * Gives the run tracked now, running or over and still shown, a design after the fact: a design drawn of the
+     * Gives the run tracked now, running or over and still shown, a project after the fact: a project drawn of the
      * script it runs. Every agent seen so far is placed again by the claim, and the ones still to come are placed
      * by it. Returns the labels of the agents no block claims, one per agent; null when there is no run to give it to.
      */
@@ -336,13 +336,13 @@ export function createTracker() {
       return state.unmapped.map(id => state.agents[id]?.label ?? '')
     },
 
-    /** Whether a design was handed off and its run has not started yet: Claude is writing the script for it. */
+    /** Whether a project was handed off and its run has not started yet: Claude is writing the script for it. */
     awaitsRun: (): boolean => pending !== undefined,
 
-    /** The design the tracked run was started from, if any. */
-    design: (): string | undefined => active?.name,
+    /** The project the tracked run was started from, if any. */
+    project: (): string | undefined => active?.name,
 
-    /** Whether the tracked run comes out of a handoff of its design (the run it waited for, or a retry of it), not only out of its name. */
+    /** Whether the tracked run comes out of a handoff of its project (the run it waited for, or a retry of it), not only out of its name. */
     handedOff: (): boolean => active !== undefined && active.name === handed,
 
     paneOpened(): void {
@@ -353,10 +353,10 @@ export function createTracker() {
     runStarted(run: RunStarted): void {
       if (run.transcriptDir) dirs.set(run.runId, run.transcriptDir)
       const isNew = state.runId !== run.runId || state.status !== 'running'
-      if (isNew) begin(run.runId, run.design)
+      if (isNew) begin(run.runId, run.project)
       apply([{ kind: 'run-start', runId: run.runId, name: run.name }])
-      // Its agents were seen before the run was announced, so it began with no name: they are placed again by its design.
-      if (!isNew && run.design !== undefined && active?.name !== run.design.name) take(run.design)
+      // Its agents were seen before the run was announced, so it began with no name: they are placed again by its project.
+      if (!isNew && run.project !== undefined && active?.name !== run.project.name) take(run.project)
     },
 
     agentSpawned(agent: AgentSpawned): void {

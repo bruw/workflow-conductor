@@ -3,19 +3,19 @@ import type { AgentRun, NodeRun, RunEvent, RunState } from './events'
 
 const NODE_ID = /^(n\d+)\b/
 
-/** Design node id carried at the start of an agent label, e.g. `n3: verify auth` → `n3`. */
+/** Project node id carried at the start of an agent label, e.g. `n3: verify auth` → `n3`. */
 export function parseNodeId(label: string): string | undefined {
   if (typeof label !== 'string') return undefined
   return NODE_ID.exec(label)?.[1]
 }
 
 /**
- * What ties a run to a design: the ids of its blocks, and for the blocks that have one their `match`
- * (the script's own agent labels and phase titles, a prefix where one ends in `*`), in design order.
+ * What ties a run to a project: the ids of its blocks, and for the blocks that have one their `match`
+ * (the script's own agent labels and phase titles, a prefix where one ends in `*`), in project order.
  */
 export type Mapping = { ids: ReadonlySet<string>; match?: Readonly<Record<string, readonly string[]>> }
 
-/** The block whose `match` names `text`: an exact string before any prefix, the longest prefix among those, the first block in design order on a tie. */
+/** The block whose `match` names `text`: an exact string before any prefix, the longest prefix among those, the first block in project order on a tie. */
 export function matchNode(text: string, match: Mapping['match']): string | undefined {
   let found: string | undefined
   let length = -1
@@ -32,7 +32,7 @@ export function matchNode(text: string, match: Mapping['match']): string | undef
 }
 
 /**
- * The block an agent belongs to: the id its label opens with (any id with no design, else one the design has),
+ * The block an agent belongs to: the id its label opens with (any id with no project, else one the project has),
  * else the block that matches its label, else the one that matches its phase title. Undefined: unmapped.
  */
 export function nodeOf(label: string, phase: string | undefined, mapping?: Mapping): string | undefined {
@@ -63,7 +63,7 @@ function tokenCount(value: unknown): number | undefined {
 
 /**
  * Folds one run event into the state and returns a new state; the input is never mutated.
- * `mapping`, when given, is the loaded design: an agent no block of it claims (`nodeOf`)
+ * `mapping`, when given, is the loaded project: an agent no block of it claims (`nodeOf`)
  * counts as unmapped.
  */
 export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): RunState {
@@ -161,7 +161,7 @@ export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): Run
 }
 
 /**
- * The state with every agent placed again under `mapping`: the design a run was given after it started.
+ * The state with every agent placed again under `mapping`: the project a run was given after it started.
  * Each agent's block, the per-block counts and the unmapped list are made anew; the phases stay.
  */
 export function remap(state: RunState, mapping?: Mapping): RunState {

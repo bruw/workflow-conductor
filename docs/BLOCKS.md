@@ -2,7 +2,7 @@
 
 Nine blocks, the ones a workflow script is written in. A pattern is a **kind** of the block it is made of. Each block's kinds answer one question about it; the first kind listed is the plain block and is not written in the file.
 
-The source of truth is `KINDS` in `src/design/model.ts` and `KIND_TEACH` / `KNOBS_BY_TYPE` in `src/design/teach.ts`.
+The source of truth is `KINDS` in `src/project/model.ts` and `KIND_TEACH` / `KNOBS_BY_TYPE` in `src/project/teach.ts`.
 
 ## Fields per block
 
@@ -61,4 +61,4 @@ Prefill is written into the field when the block is added; a hint shows while th
 - A pattern that spans several blocks (judge panel: attempts, judge, merge) is a template, not a kind.
 - Changing a block's kind keeps every value that was typed; a value still as the old kind filled it in is replaced by the new kind's.
 - A loop of kind pass or dry is added with its starter blocks in one edit (one undo).
-- No field is read for a count or a meaning. `once per`, a stop condition and the votes in a logic are words for Claude; the agent count takes one per agent block and says `≥` when the design holds a pipeline, a parallel, a loop, a verify, a judge or a subworkflow.
+- No field is read for a count or a meaning. `once per`, a stop condition and the votes in a logic are words for Claude; the agent count takes one per agent block and says `≥` when the project holds a pipeline, a parallel, a loop, a verify, a judge or a subworkflow.
