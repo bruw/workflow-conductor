@@ -45,7 +45,7 @@ Type `/conductor review this PR thoroughly`. Claude drafts this and puts it on t
 
 You can read that in ten seconds. That's the whole point of it.
 
-Don't like it? Say so, in plain words: *"add a verify with 3 votes after n3"*, *"set this block to low effort"*. Or do it by hand: `n` adds a block, `x` deletes one, `1` and `2` step the model and the effort, `u` takes back anything, Claude's edits included.
+Don't like it? Say so, in plain words: *"add a verify with 3 votes after n3"*, *"set this block to low effort"*.
 
 Then press `r`. Claude confirms the design, asks what to run it on, writes a real Workflow script from the project, and runs it. The board becomes the run:
 
@@ -73,19 +73,19 @@ Then press `r`. Claude confirms the design, asks what to run it on, writes a rea
 ╰─ · not run ──────────────────────────────────────────────────────────────╯
 ```
 
-(Both drawings are `bun scripts/render-graph.ts review --cols 76 --rows 30`, the second with `--run`; its figures are made up.)
-
 ## Why a man might want it
 
-- **You approve a design, not a script.** `agents ≥ 12` sits in the header before a single token is spent. It's a floor, and it says so.
+- **You approve a design, not a script.** 
 - **The project is a file in your repo.** `.claude/workflow-conductor/<name>.json`, with the script it was last run as beside it. It diffs. It reviews. The next run changes only what the project changed.
 - **It tells you what's wrong and stops nobody.** A loop with no stop condition, a verify with nothing to check, a branch arm with no condition: each gets a ` ! ` on its card. You can run it anyway. It's your money.
 - **It works on runs you never designed.** When Claude starts a workflow on its own, Conductor asks once whether to draw it. Say yes and the run shows up on a graph of the script that's already running.
-- **It gets out of the way.** `m` folds the designer into a strip above the prompt: the project, a progress bar, the tokens. `m` again brings it back.
 
 ## The parts
 
-Nine blocks, the same ones a workflow script is written in. Three do work: `agent`, `code`, `subworkflow`. Five hold other blocks: `pipeline`, `parallel`, `loop`, `branch`, `phase`. And `start`, which carries the goal.
+Nine blocks to rule them all. 
+Three do work: `agent`, `code`, `subworkflow`. 
+Five hold other blocks: `pipeline`, `parallel`, `loop`, `branch`, `phase`. 
+And `start`, which carries the goal.
 
 A pattern is a **kind** of a block, and picking one fills in what the pattern needs:
 
@@ -99,6 +99,7 @@ A pattern is a **kind** of a block, and picking one fills in what the pattern ne
 Four templates to start from (`Review`, `Research`, `Migrate`, `Judge panel`), or a blank board.
 
 ## Getting around
+
 
 | | |
 | --- | --- |
@@ -121,7 +122,6 @@ Four templates to start from (`Review`, `Research`, `Migrate`, `Judge panel`), o
 
 The mouse works too: click to select, drag the selected card to move it, wheel to scroll.
 
-Two things a man learns his first day. Escape always gives the keyboard back to the prompt, and no mod can stop it; whatever you had typed in a field is saved, and `u` undoes it. And `←` outside a text field belongs to Claude Code: it'll take you to the agents list. `/conductor` brings you home.
 
 ## What you need
 
@@ -129,18 +129,9 @@ Two things a man learns his first day. Escape always gives the keyboard back to 
 - A terminal 110 columns wide, in the fullscreen layout. Narrower than that, you get the compact strip and no designer; widen it and the designer opens by itself.
 - Fullscreen for the mouse. The keys work without it.
 
-## What it won't do
+## Hack it
 
-I'd be lying if I told you it knew everything.
-
-- **The project is a spec, not a program.** Claude writes the script from it. The structure holds; the details vary between runs.
-- **Nobody tells Conductor a run is over.** It calls one finished after 8 quiet seconds, and reopens it if another agent turns up. Progress is pieced together from hooks, not from the engine.
-- **One run at a time, one graph at a time.**
-- **Phases come from the run's `journal.jsonl`**, an internal format that may change.
-- **Undo lasts the session.** It isn't saved with the project.
-- **Wide and combined characters** in a title misalign its card.
-
-## Working on it
+MIT. Get busy designing.
 
 ```
 claude --plugin-dir /path/to/conductor
@@ -157,4 +148,4 @@ In the desktop app, where no flag can be given, `~/.claude/settings.json` takes 
 - `scripts/dev-session.sh` starts Claude Code with the mod in tmux; `scripts/send.sh` sends it keys, `scripts/capture.sh` prints the screen and the debug lines.
 - `src/` is pure logic; `hooks/` is what Claude Code loads.
 
-MIT. Get busy designing.
+
