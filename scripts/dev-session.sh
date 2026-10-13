@@ -7,15 +7,13 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION="${CONDUCTOR_SESSION:-conductor-dev}"
 COLS="${CONDUCTOR_COLS:-160}"
 ROWS="${CONDUCTOR_ROWS:-50}"
-# Without --debug-file the log goes to ~/.claude/debug/<session-id>.txt;
-# a fixed path lets capture.sh find it.
+# A fixed path lets capture.sh find the log: without --debug-file it goes to ~/.claude/debug/<session-id>.txt.
 DEBUG_LOG="$REPO/.capture/debug.log"
 
-# Extra mods to load beside this one, colon-separated paths (e.g. the probe:
-# CONDUCTOR_EXTRA_PLUGIN_DIRS=spikes/probe scripts/dev-session.sh).
+# CONDUCTOR_EXTRA_PLUGIN_DIRS: more mods to load beside this one, as colon-separated paths.
 EXTRA=""
 IFS=':' read -ra EXTRA_DIRS <<< "${CONDUCTOR_EXTRA_PLUGIN_DIRS:-}"
-# (An empty array is unbound under `set -u` before bash 4.4.) Paths are quoted for the shell tmux runs the command in.
+# An empty array is unbound under `set -u` before bash 4.4. Paths are quoted for the shell tmux runs the command in.
 for dir in ${EXTRA_DIRS[@]+"${EXTRA_DIRS[@]}"}; do
   [ -n "$dir" ] || continue
   case "$dir" in /*) ;; *) dir="$REPO/$dir" ;; esac

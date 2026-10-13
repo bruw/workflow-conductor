@@ -80,7 +80,6 @@ test('a container of a kind that starts with blocks is added with them, each wit
   const ids = flatten(added.project).map(row => row.node.id)
   expect(new Set(ids).size).toBe(ids.length)
   expect(parseProject(serializeProject(added.project)).ok).toBe(true)
-  // The next block is numbered past all of them.
   expect(ids).not.toContain(addNode(added.project, { type: 'agent' }, { index: 99 }).id)
 
   expect(findNode(addNode(before, { type: 'loop', kind: 'pass', bare: true }, { index: 99 }).project, added.id ?? '')?.children).toEqual([])
@@ -111,12 +110,10 @@ test('ids are never reused after a remove, even when the highest id was removed'
   const withoutLast = ok(removeNode(review(), 'n5'))
   expect(addNode(withoutLast, { type: 'agent' }, { index: 0 }).id).toBe('n7')
 
-  // The highest id sits inside a removed subtree.
   const nested = add(add(review(), 'pipeline', { index: 1 }), 'agent', { parentId: 'n7', index: 0 })
   expect(shape(nested)).toBe('n6 n7[n8] n1 n2[n3 n4] n5')
   expect(addNode(ok(removeNode(nested, 'n7')), { type: 'agent' }, { index: 0 }).id).toBe('n9')
 
-  // The counter survives a save and load.
   let project = emptyProject('demo')
   const handedOut: string[] = []
   for (let round = 0; round < 4; round++) {
@@ -133,7 +130,6 @@ test('ids are never reused after a remove, even when the highest id was removed'
 test('moveNode reorders among siblings; the start block stays first', async () => {
   const before = review()
 
-  // Sent before the start block, a block lands after it.
   expect(shape(ok(moveNode(before, 'n5', { index: 0 })))).toBe('n6 n5 n1 n2[n3 n4]')
   expect(shape(ok(moveNode(before, 'n1', { index: 3 })))).toBe('n6 n2[n3 n4] n5 n1')
   expect(shape(ok(moveNode(before, 'n1', { index: 99 })))).toBe('n6 n2[n3 n4] n5 n1')

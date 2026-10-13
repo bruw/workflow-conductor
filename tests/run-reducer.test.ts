@@ -261,7 +261,6 @@ test('a repeated agent-start fills in a missing phase without counting twice', a
   expect(after.byNode).toEqual(before.byNode)
   expect(after.unmapped).toEqual(before.unmapped)
 
-  // A phase once known is never replaced, and an empty one is no phase.
   expect(reduce(after, { kind: 'agent-start', runId: 'wf_1', agentId: 'a1', label: 'n1: plan', phase: 'Other' })).toBe(after)
   expect(reduce(before, { kind: 'agent-start', runId: 'wf_1', agentId: 'a1', label: 'n1: plan', phase: '' })).toBe(before)
 })

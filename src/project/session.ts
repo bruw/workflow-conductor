@@ -1,7 +1,5 @@
-// What the project pane does to its state, as pure steps: opening a project,
-// starting one from a template, and applying a message from the graph, a key,
-// or an edit made in the detail pane. The hooks module reads state, calls one
-// of these, writes state and saves. Pure TypeScript: no `$`, no engine imports.
+// What the project pane does to its state, as pure steps: opening a project, starting one from a template, applying a
+// message from the graph, a key or an edit. The hooks module reads state, calls one of these, writes state and saves.
 
 import type { AgentStatus, NodeRun, RunState } from '../run/events'
 import { UNMAPPED_ID, canOpen, graphColumns, moveTarget, navigate, parentView, viewFor } from '../ui/graph-layout'
@@ -30,42 +28,32 @@ export const PROJECT_DIR = '.claude/workflow-conductor'
 export const BLANK_TEMPLATE_ID = 'blank'
 export const DEFAULT_PROJECT_NAME = 'untitled'
 
-/**
- * `closed`: nothing opened yet. `pick`: the start screen, a saved project or a template to choose.
- * `ready`: a project is loaded. `error`: the saved file could not be read.
- */
+/** `pick`: the start screen. `error`: the saved file could not be read. */
 export type ProjectStatus = 'closed' | 'pick' | 'ready' | 'error'
 
 export type ProjectUi = {
-  /** The file's name (kebab-case, no extension). */
+  /** The file's name: kebab-case, no extension. */
   name: string
   status: ProjectStatus
-  /** Why the saved file was refused (`error`). */
   error: string | null
-  /** A node id, or UNMAPPED_ID while a run has agents no block claims. The graph draws it from props. */
+  /** A node id, or UNMAPPED_ID while a run has agents no block claims. */
   selectedId: string | null
-  /** The help page shown in the detail pane, from 1; 0 while it is closed. `?` turns the page, round again after the last; `x` closes it. */
+  /** The help page shown in the detail pane, from 1; 0 while it is closed. */
   help: number
   /** The last refused edit or failed save, shown in the pane until the next edit. */
   notice: string | null
   /**
-   * The add list: where the block will go, what was typed, and which match is marked (`pick`, from 0). Opened by a key it
-   * knows the block it was opened on (`anchorId`) and which side of it the place is (`where`): `n` again goes round them.
-   * With `retypeId` it picks that block's type instead.
-   */
-  /**
-   * The add list. `block`: the type whose kinds it lists while nothing is typed (a block was opened); `nav`: the keys
-   * typed since it opened, kept in case they turn out to start a name; `lead`: the ones that did, which open `query`
-   * and are not in the filter's field (`typePicker`).
+   * The add list. `anchorId` and `where`: the block it was opened on and which side of it the place is. `retypeId`: it picks that block's type instead.
+   * `block`: the type whose kinds it lists while nothing is typed; `nav`: the keys typed since it opened, in case they start a name; `lead`: the ones that did, which open `query`.
    */
   picker: { at: Place; query: string; retypeId?: string; anchorId?: string; where?: AddWhere; pick?: number; block?: NodeType; nav?: string; lead?: string } | null
   /** The container a first delete asked about; a second one on it removes it. */
   confirmId: string | null
-  /** The container opened as the view (`o`): the graph shows only it. Null at the root. */
+  /** The container opened as the view (`o`). Null at the root. */
   viewRootId: string | null
   /** By container id: the first arm its carousel shows. The layout moves it to hold the selected arm; what it settled on is kept here. */
   carousels: Record<string, number>
-  /** The detail pane is hidden (`i`) and the graph has its width. Kept across projects. */
+  /** The detail pane is hidden (`i`). Kept across projects. */
   detailHidden: boolean
   /** The project was started from a template and nothing has written it to its file yet. */
   unsaved: boolean
@@ -75,11 +63,7 @@ export type ProjectUi = {
   flash: { ids: string[]; seq: number } | null
   /** During a run the selection goes to the block that is running, until the person moves it themselves. */
   follow: boolean
-  /**
-   * Claude is drafting a project. `wait`: nothing has arrived yet and the project has no name, the splash is shown.
-   * `show`: the draft has landed and is laid out on the graph block by block; the detail pane is hidden and editing
-   * is locked until Claude's turn ends.
-   */
+  /** `wait`: nothing has arrived yet, and the splash is shown. `show`: the draft is laid out block by block, and editing is locked until Claude's turn ends. */
   drafting: 'wait' | 'show' | null
   /** While a draft is laid out: how many of its blocks the graph shows so far, in reading order. Null: all of them. */
   reveal: number | null
@@ -103,37 +87,29 @@ export type ProjectUi = {
   deleteAsk: string | null
 }
 
-/** A saved project as the start screen names it. */
 export type SavedProject = { name: string; blocks: number; goal: string }
 
 /** Names kept for replays: such a project lives in the session only, is never saved and never listed. */
 export const SCRATCH_PREFIX = 'replay-'
 
-/** Whether a project of this name is written to disk: a replay's is not. */
 export function isSaved(name: string): boolean {
   return !name.startsWith(SCRATCH_PREFIX)
 }
 
-/** A project file's content as a list entry; a file that does not read as a project is listed as such. */
 export function savedProject(name: string, text: string): SavedProject {
   return savedEntry(name, parseProject(text))
 }
 
-/** The same of a file already parsed. */
 export function savedEntry(name: string, parsed: ParseResult): SavedProject {
   return parsed.ok ? { name, blocks: blockCount(parsed.project), goal: goalOf(parsed.project) } : { name, blocks: -1, goal: 'not a valid project file' }
 }
 
-/** The name a new project gets when none was given: `untitled`, or the first `untitled-N` no saved project has. */
 export function freeName(taken: readonly string[]): string {
   if (!taken.includes(DEFAULT_PROJECT_NAME)) return DEFAULT_PROJECT_NAME
   for (let n = 2; ; n++) if (!taken.includes(`${DEFAULT_PROJECT_NAME}-${n}`)) return `${DEFAULT_PROJECT_NAME}-${n}`
 }
 
-/**
- * What the tracker is told of a project handed off: its name, its block ids in project order, their titles (the status
- * line names the running one), and the `match` of every block that has one (a run of a script that is not labelled by id is put on the blocks by them).
- */
+/** What the tracker is told of a project handed off. A run of a script that is not labelled by id is put on the blocks by `match`. */
 export function handoffOf(name: string, project: Project): { name: string; nodeIds: string[]; titles: Record<string, string>; match: Record<string, string[]> } {
   const rows = flatten(project)
   return {
@@ -144,33 +120,28 @@ export function handoffOf(name: string, project: Project): { name: string; nodeI
   }
 }
 
-/** The room the graph is drawn in: its region's columns and rows. The keys walk the layout made for it. */
+/** The room the graph is drawn in. The keys walk the layout made for it. */
 export type GraphBox = { columns: number; rows: number }
 
 /** The room assumed where none was told (nothing drawn yet). */
 export const GRAPH_BOX: GraphBox = { columns: 100, rows: 40 }
 
-/** What stands in the way of an edit, and what a key that walks the graph needs to know. */
 export type RunContext = {
   /** A run of this project is in progress, or Claude is drafting it: every edit is refused. */
   locked?: boolean
-  /** The lock is a draft's, not a run's: said so. */
+  /** The lock is a draft's, not a run's. */
   drafting?: boolean
-  /** The run laid over this project, when there is one. */
   run?: RunState
   /** The graph's region as last drawn. */
   graph?: GraphBox
 }
 
 export const LOCK_NOTICE = 'run in progress · editing locked'
-/** The same while Claude drafts the project. */
 export const DRAFT_LOCK_NOTICE = 'Claude is drafting · editing opens when it is done'
-/** What a refused edit says: whose lock it is. */
 export function lockNotice(context: Pick<RunContext, 'drafting'>): string {
   return context.drafting ? DRAFT_LOCK_NOTICE : LOCK_NOTICE
 }
 
-/** Which side of the block it was opened on the add list's place is. */
 export type AddWhere = 'after' | 'inside' | 'before'
 
 /** `what` says a change in words (`deleted n7 "verify"`): the undo history keeps it. */
@@ -189,12 +160,11 @@ export function withoutKeys(text: string): string | null {
   return /\[[^\]]+\]|(^|[\s(])[a-zA-Z?+]( again|: | adds )/.test(bare) || /\b(Enter|Esc|Tab|Shift)\b/i.test(bare) ? null : bare
 }
 
-/** Whether a project name is the one given when none was asked for: `untitled`, `untitled-2`. */
 export function isDefaultName(name: string): boolean {
   return name === DEFAULT_PROJECT_NAME || new RegExp(`^${DEFAULT_PROJECT_NAME}-\\d+$`).test(name)
 }
 
-/** Whether a notice only informs (a change that was made, a request filled): drawn plain; anything else is a refusal or a question. */
+/** A notice that only informs is drawn plain; anything else is a refusal or a question. */
 export function noticeInforms(text: string): boolean {
   return text.endsWith(UNDO_HINT) || text.endsWith(REDO_HINT) || /^(run|ask|undone|redone): /.test(text) || text.startsWith('named ')
 }
@@ -230,22 +200,17 @@ export function initialUi(): ProjectUi {
   }
 }
 
-/**
- * What outlives the project shown: `next` (the state for another project) with the detail
- * pane hidden or not as in `previous`, and the selection each project was left with.
- */
+/** What outlives the project shown: whether the detail pane is hidden, and the selection each project was left with. */
 export function carryUi(previous: ProjectUi, next: ProjectUi): ProjectUi {
   const picks = { ...(previous.picks ?? {}) }
   if (previous.status === 'ready' && previous.selectedId !== null && previous.selectedId !== UNMAPPED_ID) picks[previous.name] = previous.selectedId
   return { ...next, detailHidden: previous.detailHidden === true, picks }
 }
 
-/** Whether `run` is laid over the project the pane shows: it was started from that project and has begun. */
 export function overlaysProject(run: RunState, runProject: string | null, ui: ProjectUi): boolean {
   return runProject !== null && runProject === ui.name && ui.status === 'ready' && run.status !== 'idle' && ui.runCleared !== true
 }
 
-/** The run as the graph takes it: every node's counts, and the sum of the agents no block claims. */
 export function runOverlay(run: RunState, now = 0): RunOverlay {
   let unmapped: NodeRun | null = null
   if (run.unmapped.length > 0) {
@@ -268,13 +233,13 @@ export type AgentLine = { agentId: string; title: string; status: AgentStatus; t
 
 const ORDER: Record<AgentStatus, number> = { failed: 0, running: 1, done: 2 }
 
-/** The label without the node id it starts with: `n3: verify auth` → `verify auth`. */
+/** `n3: verify auth` → `verify auth`. */
 export function agentTitle(agent: { label: string; agentId: string; nodeId?: string }): string {
   const label = agent.nodeId === undefined ? agent.label : agent.label.replace(/^n\d+\b[:\s]*/, '')
   return label.trim() || agent.agentId
 }
 
-/** The agents of one block (or, for UNMAPPED_ID, the ones no block claims): failures first, cut at AGENT_ROWS_MAX. */
+/** For UNMAPPED_ID, the agents no block claims. Failures first. */
 export function agentsOf(run: RunState, id: string): { shown: AgentLine[]; rest: number } {
   const all = id === UNMAPPED_ID ? run.unmapped.map(one => run.agents[one]).filter(one => one !== undefined) : Object.values(run.agents).filter(agent => agent.nodeId === id)
   const sorted = [...all].sort((a, b) => ORDER[a.status] - ORDER[b.status])
@@ -282,26 +247,21 @@ export function agentsOf(run: RunState, id: string): { shown: AgentLine[]; rest:
   return { shown, rest: sorted.length - shown.length }
 }
 
-/** A project's name out of what was typed or said: kebab-case, the default for nothing. Null where words were given and none of them can be kept (no letter a to z, no digit): never another project's name in their place. */
+/** Null where words were given and none of them can be kept: never another project's name in their place. */
 export function projectName(args: string): string | null {
   return toKebab(args.trim() || DEFAULT_PROJECT_NAME) || null
 }
 
-/** The project's file under the repo root. */
 export function projectFile(root: string, name: string): string {
   return `${root.replace(/\/+$/, '')}/${PROJECT_DIR}/${name}.json`
 }
 
-/** The script a project was drawn of, or was last run as: beside its file. The project does not name it: that the file is there is the link. */
+/** The project does not name its script: that the file is there, beside its own, is the link. */
 export function scriptFile(root: string, name: string): string {
   return `${root.replace(/\/+$/, '')}/${PROJECT_DIR}/${name}.workflow.js`
 }
 
-/**
- * Opens `name`: `text` is the saved file's content, undefined when there is none.
- * `previous` is the pane's state so far: its detail pane stays hidden or shown, and a project
- * opened before in this session comes back with the block it was left on.
- */
+/** `text` is the saved file's content, undefined when there is none. A project opened before in this session comes back with the block it was left on. */
 export function openProject(name: string, text: string | undefined, previous?: ProjectUi): Step {
   const ui: ProjectUi = { ...(previous ? carryUi(previous, initialUi()) : initialUi()), name }
   if (text === undefined) return { project: null, ui: { ...ui, status: 'pick' }, changed: false }
@@ -315,12 +275,11 @@ export function openProject(name: string, text: string | undefined, previous?: P
   return { project, ui: { ...ui, status: 'ready', selectedId }, changed: false }
 }
 
-/** The block a project opens on: its first, the start block, whose goal is the first thing a new project is asked for. */
+/** The start block: its goal is the first thing a new project is asked for. */
 function firstPick(project: Project): string | null {
   return project.nodes[0]?.id ?? null
 }
 
-/** Starts the project from a template (or blank), named after the file. Only from the start screen. */
 export function startProject(ui: ProjectUi, templateId: string): Step {
   if (ui.status !== 'pick') return { project: null, ui, changed: false }
   const template = TEMPLATES.find(one => one.id === templateId)
@@ -333,10 +292,7 @@ export function startProject(ui: ProjectUi, templateId: string): Step {
   }
 }
 
-/**
- * The project's first `count` blocks in reading order (a container before what it holds): what the graph shows of a
- * draft while it is laid out block by block. The project itself where `count` holds all of it.
- */
+/** The first `count` blocks in reading order: what the graph shows of a draft while it is laid out block by block. */
 export function firstBlocks(project: Project, count: number): Project {
   if (count >= flatten(project).length) return project
   let left = Math.max(0, count)
@@ -355,19 +311,14 @@ export function firstBlocks(project: Project, count: number): Project {
 /** A draft is laid out a beat a step, more blocks to a step where it is large: all of it is on the graph within this many steps. */
 export const REVEAL_STEPS = 12
 
-/** One row of the start screen: a saved project, a template, or Blank (last). */
 export type StartEntry = { kind: 'saved' | 'template' | 'blank' | 'replay' | 'recording' | 'reset'; id: string; title: string; blocks: number; note: string }
 
 /** The recorded runs the start screen replays in the run view, by the name of their fixture. */
 export const RECORDINGS = ['review-41', 'partial-29'] as const
-/** The id of the start screen's last row: the stored answers to Conductor's questions are forgotten. */
+/** The start screen's last row: it forgets the stored answers to Conductor's questions. */
 export const RESET_ID = 'ask-again'
 
-/**
- * The start screen's rows, in the order `w` / `s` walk them: the saved projects, the templates, Blank; then, under
- * all of those, what is not a project to open: a made-up run replayed over each template, each recorded run
- * replayed in the run view, and the row that forgets every stored "Always" and "Never" answer.
- */
+/** In the order `w` / `s` walk them. Under the projects: what is not a project to open. */
 export function startEntries(saved: readonly SavedProject[], templates: readonly Template[] = TEMPLATES): StartEntry[] {
   // Each template is made once: its count is said on two rows.
   const blocks = templates.map(one => blockCount(one.make()))
@@ -381,12 +332,12 @@ export function startEntries(saved: readonly SavedProject[], templates: readonly
   ]
 }
 
-/** The start screen's rows that open or start a project: the ones a block count is said of. */
+/** The rows a block count is said of. */
 export function isProjectEntry(entry: Pick<StartEntry, 'kind'>): boolean {
   return entry.kind === 'saved' || entry.kind === 'template' || entry.kind === 'replay'
 }
 
-/** The start screen's mark moved by `by` rows; it stops at the ends. Returns `ui` itself where it stays. */
+/** Returns `ui` itself where the mark stays. */
 export function moveStartMark(ui: ProjectUi, by: number): ProjectUi {
   const last = startEntries(ui.saved ?? []).length - 1
   const startMark = Math.max(0, Math.min(last, (ui.startMark ?? 0) + by))
@@ -398,17 +349,15 @@ export function listWindow(total: number, count: number, marked: number): number
   return Math.max(0, Math.min(total - count, marked - Math.floor((count - 1) / 2)))
 }
 
-/** `9 blocks`, `1 block`; `unreadable` for a file that is no project. */
 export function blocksWord(blocks: number): string {
   return blocks < 0 ? 'unreadable' : `${blocks} ${blocks === 1 ? 'block' : 'blocks'}`
 }
 
-/** A project shown and not to be changed (the start screen's preview): the graph's props with nothing selected and every edit locked out. */
+/** The start screen's preview: nothing selected and every edit locked out. */
 export function previewProps(project: Project, box: GraphBox = GRAPH_BOX): GraphProps {
   return { project, mode: 'run', selectedId: null, viewRootId: null, problems: {}, openAt: null, scroll: {}, columns: graphColumns(box.columns), rows: Math.max(1, box.rows), unmapped: 0, wheel: { from: '', rows: 0 } }
 }
 
-/** Where a block stands, in words: `after n4 (in n2)`, `first in n2`, `at the start`. */
 export function whereIs(project: Project, id: string): string {
   const row = flatten(project).find(one => one.node.id === id)
   if (!row) return ''
@@ -425,26 +374,21 @@ function settle(project: Project, ui: ProjectUi, result: OpResult, selectedId: s
   const after = changed ? result.project : project
   const kept = selectedId !== null && findNode(after, selectedId) ? selectedId : null
   const said = !changed ? '' : typeof what === 'string' ? what : what(after)
-  // The first edit after a run puts its results away: nothing is edited under stale counts. (While it runs, no edit gets here.)
-  // Every change is announced, and the announcement ends with the way back.
+  // The first edit after a run puts its results away: nothing is edited under stale counts.
   const next: ProjectUi = { ...ui, selectedId: kept, notice: said === '' ? null : `${said} · ${UNDO_HINT}`, runCleared: changed ? true : ui.runCleared, unsaved: changed ? false : ui.unsaved }
   return { project: after, ui: shown(after, next, context), changed, ...(said === '' ? {} : { what: said }) }
 }
 
-// ---------------------------------------------------------------------------
 // The view: a container opened with `o`, and the graph laid out for it
 
-/** Whether block `id` is `rootId` or stands somewhere inside it. */
 export function insideOf(project: Project, rootId: string, id: string): boolean {
   const root = findNode(project, rootId)
   return root !== undefined && (root.id === id || flatten({ ...project, nodes: root.children ?? [] }).some(row => row.node.id === id))
 }
 
 /**
- * The container the view shows, as the state stands, in a region of `columns`: `viewRootId` while that block is
- * there, holds blocks and draws the selection. Where it does not draw it (a run followed, an edit from chat, undo:
- * the person's own keys never leave the view) the view follows: the whole project (null) when that draws the
- * selected block, else the outermost container that does.
+ * `viewRootId` while that block draws the selection. Where it does not (a run followed, an edit from chat, undo: the person's own keys
+ * never leave the view), the view follows: the whole project when that draws the selected block, else the outermost container that does.
  */
 export function viewRootOf(project: Project | null, ui: Pick<ProjectUi, 'viewRootId' | 'selectedId'>, columns: number = GRAPH_BOX.columns): string | null {
   if (project === null) return null
@@ -454,7 +398,7 @@ export function viewRootOf(project: Project | null, ui: Pick<ProjectUi, 'viewRoo
   return viewFor(project, held, ui.selectedId, graphColumns(columns))
 }
 
-/** What the graph gets as props, but for the wheel's rows (the hooks module counts them): the project, what is chosen on it, and the room. */
+/** All of the graph's props but the wheel's rows: the hooks module counts them. */
 export function graphProps(project: Project, ui: ProjectUi, box: GraphBox = GRAPH_BOX, run?: RunOverlay): GraphProps {
   const locked = run?.status === 'running' || ui.drafting === 'show'
   const problems: Record<string, number> = {}
@@ -484,17 +428,14 @@ export function graphOf(project: Project, ui: ProjectUi, context: RunContext = {
   return graphLayout(graphProps(project, ui, context.graph, context.run ? runOverlay(context.run) : undefined))
 }
 
-/**
- * The state as the graph will show it: the view that draws the selection, and every carousel's window where the
- * layout left it (so it stays there when the selection goes elsewhere). Returns `ui` itself when both stand.
- */
+/** Every carousel's window is kept where the layout left it, so it stays there when the selection goes elsewhere. Returns `ui` itself when nothing moves. */
 function shown(project: Project, ui: ProjectUi, context: RunContext = {}): ProjectUi {
   const layout = graphOf(project, ui, context)
   const carousels = { ...(ui.carousels ?? {}), ...layout.scroll }
   return layout.viewRootId === (ui.viewRootId ?? null) && JSON.stringify(carousels) === JSON.stringify(ui.carousels ?? {}) ? ui : { ...ui, viewRootId: layout.viewRootId, carousels }
 }
 
-/** The containers from the top level down to the view's root, outermost first: the breadcrumb after the project's name. */
+/** The breadcrumb after the project's name, outermost first. */
 export function crumbs(project: Project, rootId: string | null): { id: string; title: string }[] {
   if (rootId === null) return []
   const rows = flatten(project)
@@ -503,15 +444,11 @@ export function crumbs(project: Project, rootId: string | null): { id: string; t
   return out
 }
 
-/** A block as a message names it: `n4 Deep read`. */
 export function blockName(node: { id: string; name: string }): string {
   return `${node.id} ${clip(node.name, 24)}`
 }
 
-/**
- * The project as it was a step back or forward (`target`), shown: the selection stays where it can, else
- * goes to a block the step brought back, so the graph scrolls to what changed.
- */
+/** The selection goes to a block the step brought back, so the graph scrolls to what changed; else it stays where it can. */
 export function restoreProject(project: Project | null, ui: ProjectUi, target: Project, way: 'undo' | 'redo', what: string, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready') return { project, ui, changed: false }
   if (context.locked) return { project, ui: { ...ui, notice: lockNotice(context) }, changed: false }
@@ -523,12 +460,11 @@ export function restoreProject(project: Project | null, ui: ProjectUi, target: P
   return { project: target, ui: shown(target, next, context), changed: true }
 }
 
-/** What `u` or `y` says with nothing that way. */
 export function nothingToRestore(ui: ProjectUi, way: 'undo' | 'redo'): ProjectUi {
   return { ...ui, confirmId: null, notice: way === 'undo' ? 'nothing to undo' : 'nothing to redo' }
 }
 
-/** How a move is said: `moved n7 into n4`, `moved n7 out of n4`, or its new place among the blocks it stays with (`moved n7 after n3`). */
+/** `moved n7 into n4`, `moved n7 out of n4`, `moved n7 after n3`. */
 function movedWords(before: Project, after: Project, id: string): string {
   const from = flatten(before).find(row => row.node.id === id)?.parentId
   const to = flatten(after).find(row => row.node.id === id)?.parentId
@@ -538,15 +474,14 @@ function movedWords(before: Project, after: Project, id: string): string {
   return `moved ${id} into ${to ?? 'the top level'}`
 }
 
-/** Applies one message from the graph. A refused edit leaves the project as it was and sets `notice`. */
+/** A refused edit leaves the project as it was and sets `notice`. */
 export function applyMessage(project: Project | null, ui: ProjectUi, message: GraphMessage, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready') return { project, ui, changed: false }
   if (message.kind === 'key') {
     const op = KEY_OPS[message.key]
     return op ? applyOp(project, ui, op, context) : { project, ui, changed: false }
   }
-  // A press that asked for nothing: the hooks module only needed to hear of it (the click gave the graph the keyboard).
-  // It is still a click away from the add list: it closes.
+  // A press that asked for nothing still gave the graph the keyboard, and is a click away from the add list: it closes.
   if (message.kind === 'touch') return { project, ui: ui.picker !== null ? { ...ui, picker: null } : ui, changed: false }
   // What only changes what is shown works while a run locks the project too.
   const calm: ProjectUi = { ...ui, confirmId: null, picker: null, editing: false, freshId: null }
@@ -598,19 +533,14 @@ export function applyMessage(project: Project | null, ui: ProjectUi, message: Gr
   }
 }
 
-/** An edit of one node made in the detail pane. */
 export function patchNode(project: Project | null, ui: ProjectUi, id: string, patch: NodePatch, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready') return { project, ui, changed: false }
   if (context.locked) return { project, ui: { ...ui, notice: lockNotice(context), editing: false, freshId: null }, changed: false }
-  // A field was sent: the typing is over.
   const fields = [...(patch.name !== undefined ? ['name'] : []), ...('logic' in patch ? ['logic'] : []), ...Object.keys(patch.knobs ?? {})].map(fieldWord)
   return settle(project, { ...ui, editing: false, freshId: null }, updateNode(project, id, patch), ui.selectedId, `${id} changed${fields.length > 0 && fields.length <= 3 ? `: ${fields.join(', ')}` : ''}`, context)
 }
 
-/**
- * A type and kind picked for a block: the block becomes that, keeping its name, its logic, what it holds and every
- * knob that was typed (`retypeNode` says what a kind's own knobs do).
- */
+/** The block keeps its name, its logic, what it holds and every knob that was typed (`retypeNode`). */
 export function retypeBlock(project: Project | null, ui: ProjectUi, id: string, to: BlockRef, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready') return { project, ui, changed: false }
   if (context.locked) return { project, ui: { ...ui, notice: lockNotice(context), editing: false, freshId: null }, changed: false }
@@ -621,7 +551,6 @@ export function retypeBlock(project: Project | null, ui: ProjectUi, id: string, 
   return settle(project, { ...ui, editing: false, freshId: null, picker: null }, renamed, ui.selectedId, `${id} is now ${typeName(to)}`, context)
 }
 
-/** The types a block may become: all of them but `start`, or only containers while it holds blocks. The start block becomes nothing else. */
 export function retypeChoices(node: { type: NodeType; children?: readonly unknown[] }): NodeType[] {
   if (node.type === 'start') return []
   return NODE_TYPES.filter(type => type !== 'start' && ((node.children?.length ?? 0) === 0 || canHoldChildren(type)))
@@ -629,10 +558,7 @@ export function retypeChoices(node: { type: NodeType; children?: readonly unknow
 
 const FIRST_BLOCK = 'the first block'
 
-/**
- * Where the add list's block will go, in words: `after n4 (in n2)`, `first in n2`,
- * `at the end`. The place is a list and an index; the words name the neighbour.
- */
+/** `after n4 (in n2)`, `first in n2`, `at the end`: the place is a list and an index; the words name the neighbour. */
 export function placeLabel(project: Project, at: Place): string {
   const parent = at.parentId === undefined ? undefined : findNode(project, at.parentId)
   const list = parent ? (parent.children ?? []) : project.nodes
@@ -641,7 +567,6 @@ export function placeLabel(project: Project, at: Place): string {
   return parent ? `first in ${parent.id}` : list.length === 0 ? FIRST_BLOCK : 'at the start'
 }
 
-/** Where a new block goes beside or in block `id`: after it or before it, as its sibling, or inside it, as its last. At the end with no such block. */
 export function placeBy(project: Project, id: string | null, where: AddWhere): Place {
   const row = id === null ? undefined : flatten(project).find(one => one.node.id === id)
   if (!row) return { index: project.nodes.length }
@@ -650,16 +575,13 @@ export function placeBy(project: Project, id: string | null, where: AddWhere): P
   return row.parentId === undefined ? { index } : { parentId: row.parentId, index }
 }
 
-/** The sides `n` goes round for a block: after it, inside it (a container), before it. Nothing goes before the start block. */
+/** The sides `n` goes round. Nothing goes before the start block. */
 export function addSides(node: Pick<ProjectNode, 'type'>): AddWhere[] {
   if (node.type === 'start') return ['after']
   return canHoldChildren(node.type) ? ['after', 'inside', 'before'] : ['after', 'before']
 }
 
-/**
- * The add list as `n` opens it on a block: after it, or inside it when it is a container that holds nothing yet,
- * or the one the view shows (`frame`: beside it is out of sight).
- */
+/** As `n` opens it on a block (`addPlace`). `frame`: the block is the one the view shows. */
 export function openAdd(project: Project, node: ProjectNode | undefined, frame: boolean = false): NonNullable<ProjectUi['picker']> {
   if (!node) return { at: addPlace(project, null, null), query: '' }
   // The same place the graph lights its `[+]` at.
@@ -667,7 +589,7 @@ export function openAdd(project: Project, node: ProjectNode | undefined, frame: 
   return { at, query: '', anchorId: node.id, where: at.parentId === node.id ? 'inside' : 'after' }
 }
 
-/** `n` pressed in the add list: the place goes round the sides of the block it was opened on. Returns `ui` itself where there is no such block. */
+/** `n` pressed in the add list. Returns `ui` itself where there is no block to go round. */
 export function cyclePlace(project: Project, ui: ProjectUi): ProjectUi {
   const picker = ui.picker
   const node = picker?.anchorId === undefined ? undefined : findNode(project, picker.anchorId)
@@ -677,10 +599,9 @@ export function cyclePlace(project: Project, ui: ProjectUi): ProjectUi {
   return { ...ui, picker: { ...picker, where, at: placeBy(project, node.id, where) } }
 }
 
-/** The add list's heading: `New block after n4 Deep read` (the legend says the key that changes the place), `Block n4 Deep read (now agent verify)`; `· which loop?` while it lists a block's kinds. */
+/** `New block after n4 Deep read`, `Block n4 Deep read (now agent verify)`; `· which loop?` while it lists a block's kinds. */
 export function addHeading(project: Project, picker: NonNullable<ProjectUi['picker']>): string {
   const retyped = picker.retypeId === undefined ? undefined : findNode(project, picker.retypeId)
-  // A block was opened: the list is of its kinds.
   const kinds = picker.block !== undefined && picker.query === '' ? ` · which ${picker.block}?` : ''
   if (retyped) return `Block ${blockName(retyped)} (now ${typeName(retyped)})${kinds}`
   const node = picker.anchorId === undefined ? undefined : findNode(project, picker.anchorId)
@@ -694,7 +615,7 @@ function confirmText(project: Project, id: string): string {
   return `${id} holds ${inside} ${inside === 1 ? 'block' : 'blocks'}: x again deletes them all (u undoes it)`
 }
 
-/** The row the selection lands on once `id` and what it holds are gone: the next one, else the one before. */
+/** Where the selection lands once `id` and what it holds are gone: the next row, else the one before. */
 function afterRemoval(project: Project, id: string): string | null {
   const rows = flatten(project)
   const at = rows.findIndex(row => row.node.id === id)
@@ -707,16 +628,12 @@ function afterRemoval(project: Project, id: string): string | null {
 /** What each digit steps, as a refusal names it. */
 const QUICK_NAMES = ['model', 'effort'] as const
 
-/** The way each key that walks or moves goes. */
 const WAYS: Partial<Record<KeyOp, Direction>> = { left: 'left', right: 'right', up: 'up', down: 'down', moveLeft: 'left', moveRight: 'right', moveUp: 'up', moveDown: 'down' }
 
-/**
- * Applies one key (typed into the key catcher, or sent by the graph). `w a s d` move the selection over the
- * graph as it is drawn, never out of the view; `W A S D` move the block one place, as the layout reads them.
- */
+/** `w a s d` move the selection over the graph as it is drawn, never out of the view; `W A S D` move the block one place, as the layout reads them. */
 export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready') return { project, ui, changed: false }
-  // A request waits in the prompt box: a key typed now is meant for it. Nothing is done, and the way out is said.
+  // A request waits in the prompt box: a key typed now is meant for it.
   if (ui.handed) return { project, ui: ui.notice === HANDED_NOTICE ? ui : { ...ui, notice: HANDED_NOTICE }, changed: false }
   const calm: ProjectUi = { ...ui, confirmId: null, notice: null, editing: false, freshId: null, picker: null, viewRootId: viewRootOf(project, ui, context.graph?.columns) }
   const node = ui.selectedId === null ? undefined : findNode(project, ui.selectedId)
@@ -736,7 +653,6 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
     case 'moveRight': {
       if (!node) return { project, ui: { ...calm, notice: 'move: select a block first' }, changed: false }
       const target = moveTarget(project, graphOf(project, calm, context), node.id, WAYS[op] ?? 'down')
-      // Nowhere to go that way: the reason is said, nothing moves.
       if (target.to === null) return { project, ui: { ...calm, notice: target.reason }, changed: false }
       return settle(project, calm, moveNode(project, node.id, target.to), node.id, after => movedWords(project, after, node.id), context)
     }
@@ -744,7 +660,6 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
       return { project, ui: { ...calm, help: 0, detailHidden: false, picker: openAdd(project, node, node !== undefined && node.id === calm.viewRootId) }, changed: false }
     case 'retype': {
       if (!node) return { project, ui: { ...calm, notice: 'block: select a block first' }, changed: false }
-      // The start block becomes no other block.
       if (node.type === 'start') return { project, ui: { ...calm, notice: 'the start block stays the start block' }, changed: false }
       return openRetype(project, { ...calm, detailHidden: false }, node.id, context)
     }
@@ -789,7 +704,6 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
       // The hooks module moves the ring to the block's first field: its name's, the goal's on the start block.
       return { project, ui: node ? { ...calm, editing: true, help: 0, detailHidden: false } : { ...calm, notice: 'edit: select a block first' }, changed: false }
     case 'help':
-      // Page by page, round again from the first: `x` closes them.
       return { project, ui: { ...calm, detailHidden: false, help: ((ui.help ?? 0) % HELP_PAGES) + 1 }, changed: false }
     case 'run':
     case 'review':
@@ -797,7 +711,6 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
       // The hooks module puts the request in the prompt box, or lists the projects; nothing changes here.
       return { project, ui: calm, changed: false }
     case 'clearRun':
-      // The results of a run that is over are put away; while it runs they stay.
       return { project, ui: context.locked ? { ...calm, notice: lockNotice(context) } : { ...calm, runCleared: true }, changed: false }
     case 'minimize':
       // The hooks module closes the pane and draws the band above the prompt; nothing changes here.
@@ -807,21 +720,19 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
   }
 }
 
-/** Opens the add list on a block's type: the same list as adding, narrowed to what the block may become. */
+/** The same list as adding, narrowed to what the block may become. */
 export function openRetype(project: Project | null, ui: ProjectUi, id: string, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready' || !findNode(project, id)) return { project, ui, changed: false }
   if (context.locked) return { project, ui: { ...ui, notice: lockNotice(context) }, changed: false }
   return { project, ui: { ...ui, notice: null, confirmId: null, editing: false, freshId: null, help: 0, picker: { at: { index: 0 }, query: '', retypeId: id } }, changed: false }
 }
 
-/** A row of the add list: a block to add, or (`opens`) a block type whose kinds the list shows next. */
+/** `opens`: a block type whose kinds the list shows next. */
 export type PickRow = BlockRef & { opens?: boolean }
 
 /**
- * The rows the open add list shows. With something typed: every block whose name holds it, at the block's
- * level or the kind's, each named in full (`agent verify`). With nothing typed: the blocks, and one that has
- * kinds opens on them (`opens`); once a block was opened, its kinds. A block being retyped lists its own kinds
- * first, and only what it may become.
+ * With something typed: every block whose name holds it. With nothing typed: the blocks, and one that has kinds opens on them.
+ * A block being retyped lists its own kinds first, and only what it may become.
  */
 export function pickerMatches(project: Project | null, picker: NonNullable<ProjectUi['picker']>): PickRow[] {
   const retyped = picker.retypeId === undefined || project === null ? undefined : findNode(project, picker.retypeId)
@@ -834,7 +745,7 @@ export function pickerMatches(project: Project | null, picker: NonNullable<Proje
   return retyped ? [...kinds(retyped.type), ...blocks.filter(row => row.type !== retyped.type)] : blocks
 }
 
-/** The add list's mark moved by `by` rows (the arrows); it stops at the ends. Returns `ui` itself where it stays. */
+/** Returns `ui` itself where the mark stays. */
 export function movePick(project: Project | null, ui: ProjectUi, by: number): ProjectUi {
   if (!ui.picker) return ui
   const last = Math.max(0, pickerMatches(project, ui.picker).length - 1)
@@ -849,24 +760,14 @@ export const PICKER_BACK = 'b'
 /** The key that closes the add list, wherever it is typed: no block's or kind's name holds it. */
 export const PICKER_CLOSE = 'x'
 
-/** The add list with no key remembered. */
 function forgetNav(picker: NonNullable<ProjectUi['picker']>): NonNullable<ProjectUi['picker']> {
   const { nav: _nav, lead: _lead, ...rest } = picker
   return rest
 }
 
 /**
- * What the add list's filter says now (`whole`: all of its text, without the keys already taken from it).
- * While the filter is empty `n` changes the place (on a
- * list a key opened on a block) and `b` goes back from a block's kinds to the blocks; any other character
- * starts the filter, and from there every character narrows it. `x` closes the list, always. `taken` counts
- * the characters used as keys.
- *
- * Names start with those letters too (`budget`, `branch`), so the keys just taken are remembered: when
- * they and the next character are how a block's or a kind's name starts, they were the filter all along. They
- * then open the filter's text as its `lead`: the field they were typed in no longer holds them (it was drawn
- * anew when they were taken as keys), so the pane says them before the field, and whoever reads the field puts
- * them before its text (`filterText`).
+ * `whole` is all of the filter's text; `taken` counts the characters used as keys (`n`, `b`) while the filter is empty.
+ * Names start with those letters too (`budget`, `branch`): keys just taken that start a name with the next character become the filter's `lead`, which the field no longer holds (`filterText`).
  */
 export function typePicker(project: Project | null, ui: ProjectUi, whole: string): { ui: ProjectUi; taken: number } {
   if (!ui.picker) return { ui, taken: 0 }
@@ -904,18 +805,12 @@ export function typePicker(project: Project | null, ui: ProjectUi, whole: string
   return { ui: { ...next, picker: { ...forgetNav(picker), query: text, pick: 0, ...(kept === '' ? {} : { lead: kept }) } }, taken }
 }
 
-/**
- * All of the filter's text, from what its field holds (less the keys taken from it): the lead goes before it.
- * A field emptied takes the lead with it, so the filter can be cleared by deleting.
- */
+/** The lead goes before what the field holds. A field emptied takes the lead with it, so the filter can be cleared by deleting. */
 export function filterText(ui: ProjectUi, field: string): string {
   return field === '' ? '' : `${ui.picker?.lead ?? ''}${field}`
 }
 
-/**
- * Enter or a press in the open add list: `choice` when a row was pressed, else the marked row for what was typed.
- * A block that has kinds opens on them; any other row is added (or, on a block being retyped, becomes its type).
- */
+/** `choice` when a row was pressed, else the marked row. A block that has kinds opens on them. */
 export function pickBlock(project: Project | null, ui: ProjectUi, choice: Partial<PickRow> = {}, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready' || !ui.picker) return { project, ui, changed: false }
   if (context.locked) return { project, ui: { ...ui, picker: null, notice: lockNotice(context) }, changed: false }
@@ -926,35 +821,29 @@ export function pickBlock(project: Project | null, ui: ProjectUi, choice: Partia
   const block: BlockRef = row.kind === undefined ? { type: row.type } : { type: row.type, kind: row.kind }
   if (picker.retypeId !== undefined) return retypeBlock(project, ui, picker.retypeId, block, context)
   const result = addNode(project, block, picker.at)
-  // The place is said as the block got it: start goes first whatever was asked, and nothing goes before them.
+  // The place is said as the block got it (`placeFor`).
   const at = placeFor(project, block.type, picker.at)
   const step = settle(project, ui, result, result.id ?? ui.selectedId, after => `added ${result.id ?? ''} ${typeName(block)} ${placeLabel(after, at).replace(/ \(at the end\)$/, '')}`, context)
   // The new block is selected and its title is the next thing typed.
   return step.changed ? { ...step, ui: { ...step.ui, picker: null, editing: true, freshId: result.id ?? null, drafting: null } } : step
 }
 
-/** The knobs typed as text, each in a field of its own in the detail pane; model and effort are stepped on the card. */
+/** Each has a field of its own in the detail pane; model and effort are stepped on the card. */
 export const TEXT_KNOBS = ['goal', 'args', 'prompt', 'condition', 'oncePer', 'stopCondition', 'output'] as const
 export type TextKnob = (typeof TEXT_KNOBS)[number]
 
-/** What an empty graph says while Claude drafts the project. */
 export const DRAFTING_NOTE = 'Claude is drafting this project: blocks appear here as they are written'
 /** Under the splash while a draft is awaited. */
 export const DRAFT_WAIT_NOTE = 'Claude is drafting your workflow · answer its questions in the prompt'
 
-// ---------------------------------------------------------------------------
 // The screen's shape
 
-/**
- * The one screen there is: the graph and the detail pane side by side. A pane with fewer body columns or rows than
- * these draws nothing of it: the designer is minimized into the band above the prompt (`compact.ts`).
- */
+/** A pane with fewer body columns or rows than these draws no designer: it is minimized into the band above the prompt (`compact.ts`). */
 export const FULL_MIN_COLUMNS = 80
 export const FULL_MIN_ROWS = 20
 /** From this many terminal columns the fullscreen layout docks a pane beside the transcript; under it the pane sits inline above the prompt. */
 export const DOCK_MIN_TERMINAL = 110
 
-/** Whether a pane with this room draws the designer. */
 export function fitsFull(bodyColumns: number, bodyRows: number): boolean {
   return bodyColumns >= FULL_MIN_COLUMNS && bodyRows >= FULL_MIN_ROWS
 }
@@ -964,24 +853,22 @@ export const DETAIL_SHARE = 0.3
 export const DETAIL_MIN_W = 34
 export const DETAIL_MAX_W = 52
 
-/** The detail pane's width beside the graph, for a pane with `columns` to draw in. */
 export function detailWidth(columns: number): number {
   return Math.max(DETAIL_MIN_W, Math.min(DETAIL_MAX_W, Math.floor(columns * DETAIL_SHARE)))
 }
 
-/** The project's facts, on the footer's first row: the agents it starts, `agents = 18`, or `agents ≥ 12` where the count is open. */
+/** The footer's first row: `agents = 18`, or `agents ≥ 12` where the count is open. */
 export function factsLine(project: Project): string {
   const { agents, unknowns } = preflight(project)
   return agentsCount(agents, unknowns)
 }
 
-// ---------------------------------------------------------------------------
 // The help pages, the run's summary, following the run, the dock's width
 
 /** The help pages: the selected block's type, the graph's marks, the keys, the mouse and the file. */
 export const HELP_PAGES = 4
 
-/** What every key does, in the order of the brief's table: the third help page, a table of key and what it does. */
+/** The third help page. */
 export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['w a s d', 'move the selection'],
   ['Shift+W S', 'move the block one place up / down, into and out of the containers on its way'],
@@ -1003,31 +890,28 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['?  h', 'these pages, one after the other'],
 ]
 
-/** One row of a help page: its title, a row of a paragraph, a blank row between two, or a row of a table (`key` empty where its text goes on). */
+/** `key` is empty where a table row's text goes on. */
 export type HelpRow = { kind: 'title' | 'text' | 'blank'; text: string } | { kind: 'key'; key: string; text: string }
 
-/** Paragraphs as rows no wider than `columns`, a blank row between two. */
 function paragraphs(texts: readonly string[], columns: number): HelpRow[] {
   return texts.flatMap((text, index) => [...(index > 0 ? [{ kind: 'blank' as const, text: '' }] : []), ...wrapText(text, columns).map(line => ({ kind: 'text' as const, text: line }))])
 }
 
-/** A table of two columns: the first as wide as its longest entry, the second wrapped beside it. */
 function table(pairs: readonly (readonly [string, string])[], columns: number): HelpRow[] {
   const room = Math.max(8, columns - helpKeyWidth(pairs))
   return pairs.flatMap(([key, text]) => wrapText(text, room).map((line, index) => ({ kind: 'key' as const, key: index === 0 ? key : '', text: line })))
 }
 
-/** The cells a table's first column takes, the gap after it counted. */
+/** The gap after the column is counted. */
 export function helpKeyWidth(pairs: readonly (readonly [string, string])[] = KEY_HELP): number {
   return Math.max(...pairs.map(([key]) => key.length)) + 2
 }
 
-/** The cells the first column of help page `page` takes; 0 for a page that holds no table. */
 export function helpColumn(page: number): number {
   return page === 2 ? helpKeyWidth(LEGEND) : page === 3 ? helpKeyWidth(KEY_HELP) : 0
 }
 
-/** What the first help page says on the start screen, where no block is selected and no project is open. */
+/** The first help page on the start screen, where no block is selected. */
 export const START_HELP: readonly string[] = [
   'A project is a workflow drawn as a graph of blocks: agents, the code between them, and the containers that run them in a row, at once or in a loop.',
   'The Up and Down arrows choose a row (w and s too), Enter opens it. A saved project opens as it was left; a template starts a new project, and Blank an empty one.',
@@ -1036,7 +920,7 @@ export const START_HELP: readonly string[] = [
   'Under the templates: a replay shows a run without running one (made up over a template, or recorded), and Ask again forgets every "Always" and "Never" answer given to Conductor\'s questions.',
 ]
 
-/** One help page as rows no wider than `columns`: its title, then paragraphs or a table. `page` counts from 1; `start` is the start screen's first page. */
+/** `page` counts from 1; `start` is the start screen. */
 export function helpPage(page: number, block: BlockRef | undefined, file: string, columns: number, start: boolean = false): HelpRow[] {
   const width = Math.max(12, columns)
   const title = (text: string): HelpRow[] => [{ kind: 'title', text: clip(text, width) }, { kind: 'blank', text: '' }]
@@ -1049,22 +933,14 @@ export function helpPage(page: number, block: BlockRef | undefined, file: string
   return [...title('Mouse and file'), ...paragraphs([...MOUSE_HELP, `This project is saved in ${file}.`], width)]
 }
 
-/**
- * A help page cut to `rows` rows: the blank rows between its paragraphs go first (the one under the title last),
- * then what is left is cut.
- */
+/** The blank rows between paragraphs go first (the one under the title last), then what is left is cut. */
 export function fitHelp(page: readonly HelpRow[], rows: number): HelpRow[] {
   const out = [...page]
   for (let at = out.length - 1; at >= 0 && out.length > rows; at--) if (out[at]?.kind === 'blank') out.splice(at, 1)
   return out.slice(0, Math.max(0, rows))
 }
 
-/**
- * The run in one line for the pane's header, in the longest wording `room` cells
- * hold. What goes first when it is tight: the long words, then the time, the
- * tokens, the failures, the count; the status always stays.
- * `run running · 5/9 agents done · 1 failed · 57.4k tokens · 4.5s` … `running · 5/9` … `running`.
- */
+/** The longest wording `room` cells hold. Tight, the long words go first, then the time, the tokens, the failures, the count; the status always stays. */
 export function runSummary(run: RunState, elapsedMs: number | null, room: number = Infinity): { text: string; color: 'claude' | 'success' | 'error' } {
   const agents = Object.values(run.agents)
   const done = agents.filter(agent => agent.status === 'done').length
@@ -1088,10 +964,7 @@ export function runSummary(run: RunState, elapsedMs: number | null, room: number
   return { text, color: run.status === 'running' ? 'claude' : failed > 0 || run.status === 'failed' ? 'error' : 'success' }
 }
 
-/**
- * When the tracked run began and ended, and when it was last seen running, in the
- * clock's ms: the run state itself carries no times, and a drawing reads no clock.
- */
+/** In the clock's ms: the run state itself carries no times, and a drawing reads no clock. */
 export type RunTimes = { runId: string | null; startedAt: number | null; endedAt: number | null; seenAt: number | null }
 
 /** The elapsed time shown moves on about this often while the run is live. */
@@ -1101,7 +974,7 @@ export function initialTimes(): RunTimes {
   return { runId: null, startedAt: null, endedAt: null, seenAt: null }
 }
 
-/** The times as of the run's state at `now`. Returns `times` itself when nothing changes. */
+/** Returns `times` itself when nothing changes. */
 export function stampTimes(times: RunTimes, run: RunState, now: number): RunTimes {
   if (run.status === 'idle') return times.runId === null ? times : initialTimes()
   const runId = run.runId ?? ''
@@ -1112,26 +985,19 @@ export function stampTimes(times: RunTimes, run: RunState, now: number): RunTime
   return now - (times.seenAt ?? 0) >= ELAPSED_STEP_MS ? { ...times, seenAt: now } : times
 }
 
-/** How long the run has taken as last stamped; null when it is not the one timed. */
+/** Null when the run is not the one timed. */
 export function elapsedOf(times: RunTimes, run: RunState): number | null {
   if (times.startedAt === null || times.runId !== (run.runId ?? '')) return null
   return Math.max(0, (times.endedAt ?? times.seenAt ?? times.startedAt) - times.startedAt)
 }
 
-/**
- * The block the selection goes to while it follows the run: the last one in the
- * project's order with an agent running (the front of the work). Null with none.
- */
+/** The last block in the project's order with an agent running: the front of the work. */
 export function runningBlock(project: Project, run: RunState): string | null {
   const busy = flatten(project).filter(row => (run.byNode[row.node.id]?.running ?? 0) > 0)
   return busy.at(-1)?.node.id ?? null
 }
 
-/**
- * The pane's state after the run moved on: while `follow` holds, the selection
- * (and with it the graph's scroll) is on the block that is running. Returns `ui`
- * itself when nothing changes, and always once the person has moved the selection.
- */
+/** While `follow` holds, the selection is on the block that is running. Returns `ui` itself when nothing changes. */
 export function followRun(ui: ProjectUi, project: Project | null, run: RunState, runProject: string | null): ProjectUi {
   if (!ui.follow || !project || ui.status !== 'ready' || runProject === null || ui.name !== runProject || run.status !== 'running') return ui
   const id = runningBlock(project, run)
@@ -1139,16 +1005,11 @@ export function followRun(ui: ProjectUi, project: Project | null, run: RunState,
   return { ...ui, selectedId: id, confirmId: null, editing: false, freshId: null }
 }
 
-/** The first block, in the project's order, that has a failed agent of its own; null with none. */
 export function failedBlock(project: Project, run: RunState): string | null {
   return flatten(project).find(row => (run.byNode[row.node.id]?.failed ?? 0) > 0)?.node.id ?? null
 }
 
-/**
- * The pane's state once the run it followed is over: the selection goes to the
- * first block with a failure (where the person has to look), and following ends.
- * Returns `ui` itself when there is nothing to do, and always after the first time.
- */
+/** The selection goes to the first block with a failure, where the person has to look, and following ends. */
 export function endRun(ui: ProjectUi, project: Project | null, run: RunState, runProject: string | null): ProjectUi {
   if (!ui.follow || !project || ui.status !== 'ready' || runProject === null || ui.name !== runProject || (run.status !== 'done' && run.status !== 'failed')) return ui
   const id = failedBlock(project, run)
@@ -1162,26 +1023,20 @@ export const DOCK_MARGIN = 30
 export const DOCK_MARGIN_TIGHT = 24
 export const DOCK_ROOMY = 130
 
-/**
- * The columns to ask the dock for: the terminal's less the transcript's sliver. Undefined with the
- * width unknown: nothing is asked, and the dock keeps the width it has.
- */
+/** Undefined with the width unknown: nothing is asked, and the dock keeps the width it has. */
 export function dockColumns(terminal: number | undefined): number | undefined {
   if (terminal === undefined || !Number.isFinite(terminal) || terminal <= 0) return undefined
   return Math.max(40, Math.floor(terminal) - (terminal < DOCK_ROOMY ? DOCK_MARGIN_TIGHT : DOCK_MARGIN))
 }
 
 /**
- * What bare `/conductor` shows. A run in progress: its project, or the phase view
- * when it came from none. Otherwise the project this session last had open (the
- * picker for the default name when there is none); a finished run that came from
- * no project, with no project opened since, is still read in the phase view. Never
- * an empty run view. Both hooks modules ask this, so either may be asked first.
+ * What bare `/conductor` shows: a run in progress, as its project or the phase view; else the project this session last had open.
+ * Never an empty run view. Both hooks modules ask this, so either may be asked first.
  */
 export function bareTarget(status: RunState['status'], runProject: string | null, ui: Pick<ProjectUi, 'name' | 'status'>): { view: 'run' } | { view: 'project'; name: string; live: boolean } {
   if (status === 'running') return runProject === null ? { view: 'run' } : { view: 'project', name: runProject, live: true }
   if (ui.status !== 'closed') return { view: 'project', name: ui.name, live: false }
   if (status !== 'idle' && runProject === null) return { view: 'run' }
-  // A replay's project is the session's only: once it is gone it is never offered as a project to create.
+  // A replay's project lives in the session only: it is never offered as a project to create.
   return { view: 'project', name: runProject !== null && isSaved(runProject) ? runProject : DEFAULT_PROJECT_NAME, live: false }
 }

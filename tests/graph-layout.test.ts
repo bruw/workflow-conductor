@@ -23,7 +23,6 @@ const shape = (one: Project): string => {
   const draw = (nodes: ProjectNode[]): string => nodes.map(node => (node.children ? `${node.id}[${draw(node.children)}]` : node.id)).join(' ')
   return draw(one.nodes)
 }
-// A parallel of `count` agents between the start block and one more agent.
 const arms = (count: number): Project => ({
   version: 1,
   name: 'arms',
@@ -77,7 +76,6 @@ test('the arms of a parallel stand side by side; more than fit are a carousel th
   const window = many.carousels.n1
   expect(window).toMatchObject({ first: 0, count: 6 })
   expect(many.cards.filter(one => one.parentId === 'n1').map(one => one.id)).toEqual(['n2', 'n3', 'n4', 'n5', 'n6', 'n7'].slice(0, window?.shown))
-  // Only the side that has arms out of sight has a gutter, and it says how many.
   expect(many.gutters.map(one => [one.side, one.count])).toEqual([['right', 6 - (window?.shown ?? 0)]])
   expect(slideBy(many, { id: 'n1', side: 'right' })).toEqual({ n1: 1 })
   expect(slideBy(many, { id: 'n1', side: 'left' })).toEqual({ n1: 0 })
@@ -105,7 +103,6 @@ test('slots: one per place a block can go, none before the start block', () => {
   expect(L.slots.filter(slot => slot.target).map(slot => slot.place)).toEqual([{ index: 2 }])
   expect(layoutGraph(project, { ...BOX, openAt: { parentId: 'n2', index: 1 } }).slots.filter(slot => slot.open).map(slot => slot.place)).toEqual([{ parentId: 'n2', index: 1 }])
 
-  // An empty container has a place inside it.
   const hollow: Project = { version: 1, name: 'h', nodes: [{ id: 'n1', type: 'pipeline', name: 'p', children: [] }] }
   expect(layoutGraph(hollow, BOX).slots.map(slot => slot.place)).toContainEqual({ parentId: 'n1', index: 0 })
 })
@@ -113,7 +110,6 @@ test('slots: one per place a block can go, none before the start block', () => {
 test('what is under a cell: the innermost card, and a slot where its mark is written', () => {
   const n3 = card(L, 'n3')
   expect(cardAt(L, n3.x + 1, n3.y + 1)?.id).toBe('n3')
-  // The pipeline's own border is the pipeline's.
   expect(cardAt(L, card(L, 'n2').x, card(L, 'n2').y)?.id).toBe('n2')
   expect(cardAt(L, L.width + 5, 0)).toBeUndefined()
 
@@ -124,7 +120,6 @@ test('what is under a cell: the innermost card, and a slot where its mark is wri
   }
   // The window panned by three rows: the same cell is three rows further down the graph.
   expect(graphAt(L, n3.x + 1, n3.y + 1 - 3, 3)).toMatchObject({ kind: 'card', card: { id: 'n3' } })
-  // The selected card's chips are hit before the card.
   for (const chip of L.chips) expect(graphAt(L, chip.x, chip.y, 0)).toMatchObject({ kind: 'chip', chip: { id: 'n1' } })
 })
 
@@ -157,7 +152,6 @@ test('a container opened as the view is the frame: only what it holds is drawn, 
   expect(parentView(project, 'n2')).toBe(null)
   expect(viewShows(project, 'n2', 'n3', 100)).toBe(true)
   expect(viewShows(project, 'n2', 'n5', 100)).toBe(false)
-  // The view that shows a block: the one there is when it does, else the nearest that does.
   expect(viewFor(project, 'n2', 'n3', 100)).toBe('n2')
   expect(viewFor(project, 'n2', 'n5', 100)).toBe(null)
 })
@@ -176,13 +170,10 @@ test('dropTarget: the nearest slot, its place as moveNode takes it, and none far
   const down = dropTarget(L, 'n1', 50, at(4).y)
   expect(down?.slot.place).toEqual({ index: 4 })
   expect(shape(moveNode(project, 'n1', down?.to ?? { index: 0 }).project)).toBe('n6 n2[n3 n4] n5 n1')
-  // Into a container.
   const into = dropTarget(L, 'n5', 50, at(1, 'n2').y)
   expect(shape(moveNode(project, 'n5', into?.to ?? { index: 0 }).project)).toBe('n6 n1 n2[n3 n5 n4]')
 
-  // Beside itself: a slot, and nowhere to go.
   expect(dropTarget(L, 'n5', 50, at(3).y)).toMatchObject({ slot: { place: { index: 3 } }, to: null })
-  // A container is not dropped into itself.
   expect(dropTarget(L, 'n2', 50, at(1, 'n2').y)).toBe(null)
   expect(dropTarget(L, 'n5', 50, L.height + 30)).toBe(null)
   expect(dropTarget(L, 'n99', 50, at(2).y)).toBe(null)
@@ -196,14 +187,11 @@ test('navigate: down and up follow the reading order, into a container and out o
   }
   expect(walk('n6', 'down', 6)).toEqual(['n6', 'n1', 'n2', 'n3', 'n4', 'n5', 'n5'])
   expect(walk('n5', 'up', 6)).toEqual(['n5', 'n4', 'n3', 'n2', 'n1', 'n6', 'n6'])
-  // Sideways outside a stack: right goes into a container, left out to the one around.
   expect(navigate(project, L, 'n2', 'right')).toBe('n3')
   expect(navigate(project, L, 'n4', 'left')).toBe('n2')
   expect(navigate(project, L, 'n1', 'right')).toBe('n1')
-  // Nothing selected: the first card.
   expect(navigate(project, L, null, 'down')).toBe('n6')
 
-  // Inside a stack the sideways keys go from arm to arm; down leaves it for what follows.
   const two = arms(2)
   const stack = layoutGraph(two, BOX)
   expect(navigate(two, stack, 'n2', 'right')).toBe('n3')
@@ -212,7 +200,6 @@ test('navigate: down and up follow the reading order, into a container and out o
   expect(navigate(two, stack, 'n1', 'down')).toBe('n2')
   expect(navigate(two, stack, 'n2', 'down')).toBe('n80')
 
-  // The selection never leaves the view.
   const view = layoutGraph(project, { ...BOX, viewRootId: 'n2', selectedId: 'n4' })
   expect(navigate(project, view, 'n4', 'down')).toBe('n4')
   expect(navigate(project, view, 'n2', 'up')).toBe('n2')
@@ -237,19 +224,16 @@ test('moveTarget walks a block down through a container and out the other side, 
   for (let at = 0; at < 5; at++) up.push(step(up.at(-1) ?? project, 'up'))
   expect(up.map(shape)).toEqual([...down.map(shape)].reverse())
 
-  // Refused with a reason: the start block, the ends, sideways outside a stack, nothing selected.
   for (const [id, direction] of [['n6', 'down'], ['n1', 'up'], ['n5', 'down'], ['n1', 'right'], [null, 'down'], ['n99', 'down']] as const) {
     const refused = moveTarget(project, L, id, direction)
     expect(refused.to).toBe(null)
     expect((refused.reason ?? '').length).toBeGreaterThan(0)
   }
 
-  // Arms swap sideways.
   const two = arms(2)
   const stack = layoutGraph(two, BOX)
   expect(moveTarget(two, stack, 'n2', 'right').to).toEqual({ parentId: 'n1', index: 1 })
   expect(moveTarget(two, stack, 'n2', 'left').to).toBe(null)
-  // A block does not leave the view it is shown in.
   const view = layoutGraph(project, { ...BOX, viewRootId: 'n2', selectedId: 'n4' })
   expect(moveTarget(project, view, 'n4', 'down').to).toBe(null)
   expect(moveTarget(project, view, 'n2', 'down').to).toBe(null)
@@ -263,15 +247,12 @@ test('panTo shows the selected card in the window, moving as little as it must, 
       const pan = panTo(L, rows, from, id)
       expect(pan).toBeGreaterThanOrEqual(0)
       expect(pan).toBeLessThanOrEqual(most)
-      // Its top row is in the window; all of it when it fits.
       expect(y).toBeGreaterThanOrEqual(pan)
       expect(y).toBeLessThan(pan + rows)
       if (h <= rows) expect(y + h).toBeLessThanOrEqual(pan + rows)
     }
   }
-  // Already in view: the pan stays.
   expect(panTo(L, rows, 0, 'n6')).toBe(0)
-  // A window as tall as the graph has nowhere to pan to.
   expect(panTo(L, L.height + 10, 7, 'n5')).toBe(0)
   expect(panTo(L, rows, 500, null)).toBe(most)
 })

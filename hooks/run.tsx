@@ -20,8 +20,8 @@ import { offerSettled } from './offer'
 const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
 const MAX_ROWS = 400
-// The run's state. Both hooks modules declare these (an atom must be spelled in the
-// file that reads it): run.tsx writes them through the tracker, project.tsx reads them.
+// Both hooks modules declare the run's atoms (an atom must be spelled in the file that reads it):
+// run.tsx writes them through the tracker, project.tsx reads them.
 const runAtom = atom({ plugin: 'conductor', key: 'run' } as const, emptyRunState())
 const clockAtom = atom({ plugin: 'conductor', key: 'runClock' } as const, 0)
 /** The project the tracked run belongs to (handed off, or named as it); null for any other run. */
@@ -60,8 +60,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       argumentHint: '[what the workflow should do | min | max]',
     })
 
-    // A run a previous load of the module was following: when it came from a project, its
-    // node ids are read from the project file again (they are not stored).
+    // A run a previous load of the module was following: its project's node ids are not stored, so the project file is read again.
     const stored = await read($, runAtom)
     const attached = stored.status === 'idle' ? null : await read($, runProjectAtom)
     let claim: Handoff | undefined
@@ -119,8 +118,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
   on('command.run', { command: 'conductor' }, async ($, e, next) => {
     // With words it is a draft, and project.tsx's, whichever of the hooks the engine asks first.
     if (e.args.trim() !== '') return next(e)
-    // One place to look: a run that came from a project is shown on that project, by project.tsx.
-    // With no run at all there is nothing to show here: project.tsx opens the project last worked on, or the start screen.
+    // A run that came from a project is shown on that project, and with no run there is nothing to show here: both are project.tsx's.
     if (bareTarget((await read($, runAtom)).status, await read($, runProjectAtom), await read($, projectUiAtom)).view === 'project') return next(e)
     const opened = await $.ui.open({ id: PANE_ID, title: PANE_TITLE })
     if (opened.isPlaced) tracker.paneOpened()
@@ -128,9 +126,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     return { text: 'Conductor pane opened.' }
   })
 
-  // The run starts here. One named as a saved project is that project's, handed off or not, and is shown on it; one a
-  // handoff waited for is that project's under any name. A run no project claimed is asked about, the turn held meanwhile
-  // (API-NOTES S10): whether to draw a project of it. Whatever happens after the start, the tool's result goes back: never a throw.
+  // A run named as a saved project is that project's, handed off or not; one a handoff waited for is that project's under any name.
+  // A run no project claimed is asked about, the turn held meanwhile. Whatever follows the start, the tool's result goes back: never a throw.
   on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
     const answer = await next(e)
     const result = (answer as { result?: unknown }).result
@@ -145,20 +142,19 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     tracker.runStarted({ runId: id, name: workflow, transcriptDir: text(transcriptDir), project: own === null ? undefined : handoffOf(own.name, own.project) })
 
     try {
-      // The script is the file the result names, in every form of the call (S11). A run started again keeps its drawing.
+      // The script is the file the result names, in every form of the call. A run started again keeps its drawing.
       const script = text(scriptPath)
       await update($, runScriptAtom, held => (script === undefined ? null : { runId: id, path: script, drawn: held !== null && held.runId === id ? held.drawn : null }))
       const claimed = tracker.project()
       if (claimed !== undefined) {
         offerSettled(claimed)
-        // The script the project was implemented as is kept beside it, for the next handoff to update. Out of a handoff it
-        // is the project's script as of now. A run that only has the project's name (the person ran a workflow they had
-        // before) gives a project its first script, and never writes over the one it has: that one may be newer.
+        // Out of a handoff the script is the project's as of now, kept beside it for the next handoff to update.
+        // A run that has only the project's name never writes over the script the project has: that one may be newer.
         if (script !== undefined && isSaved(claimed)) {
           const beside = scriptFile(await $.session.root(), claimed)
           if (tracker.handedOff() || !(await $.fs.exists(beside).catch(() => true))) await board?.keepScript(script, beside)
         }
-        // The board comes up with the run. Where nobody handed the project off, it is said where the run went.
+        // Where nobody handed the project off, a toast says where the run went.
         if (own !== null) {
           const pane = await $.ui.open(paneArgs(false)).catch(() => undefined)
           // Not placed (nobody asked, a narrow terminal): the run is shown in the band above the prompt.

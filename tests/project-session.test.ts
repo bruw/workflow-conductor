@@ -46,7 +46,6 @@ test('the keys move the selection as the graph is read; with Shift they move the
   expect(applyOp(project, ui({ selectedId: 'n2' }), 'down').ui.selectedId).toBe('n3')
   expect(applyOp(project, ui({ selectedId: 'n3' }), 'up').ui.selectedId).toBe('n2')
   expect(applyOp(project, ui({ selectedId: null }), 'down').ui.selectedId).toBe('n6')
-  // A move of the selection changes no block, and forgets a pending delete question and any notice.
   expect(applyOp(project, ui({ selectedId: 'n2', confirmId: 'n2', notice: 'x' }), 'up')).toMatchObject({ project, changed: false, ui: { selectedId: 'n1', confirmId: null, notice: null } })
 
   const stepped = applyOp(project, ui(), 'moveDown')
@@ -54,7 +53,6 @@ test('the keys move the selection as the graph is read; with Shift they move the
   expect(stepped).toMatchObject({ changed: true, ui: { selectedId: 'n1' } })
   const back = applyOp(stepped.project, stepped.ui, 'moveUp')
   expect(ids(back.project)).toEqual(REVIEW)
-  // Nowhere to go: nothing changes, and a reason is said.
   const stuck = applyOp(project, ui(), 'moveUp')
   expect(stuck).toMatchObject({ project, changed: false })
   expect(stuck.ui.notice).not.toBe(null)
@@ -74,7 +72,6 @@ test('messages from the graph: select, drop, and a [+] that opens the add list f
   expect(refused).toMatchObject({ changed: false, project })
   expect(refused.ui.notice).not.toBe(null)
 
-  // A [+] opens the add list for its place; the block picked lands there and is selected.
   const asked = applyMessage(project, ui(), { kind: 'addAt', at: { parentId: 'n2', index: 1 } })
   expect(asked).toMatchObject({ changed: false, project, ui: { picker: { at: { parentId: 'n2', index: 1 }, query: '' } } })
   const added = pickBlock(project, asked.ui, { type: 'agent', kind: 'critic' })
@@ -83,19 +80,14 @@ test('messages from the graph: select, drop, and a [+] that opens the add list f
   expect(REVIEW.map(id => id.trim())).not.toContain(newId)
   expect(findNode(added.project ?? project, newId)).toMatchObject({ type: 'agent', kind: 'critic' })
   expect(added).toMatchObject({ changed: true, ui: { picker: null } })
-  // A block that has kinds opens on them first: nothing is added yet.
   expect(pickBlock(project, asked.ui, { type: 'loop', opens: true })).toMatchObject({ changed: false, project, ui: { picker: { block: 'loop' } } })
-  // Nothing matches what was typed: nothing is added, the list stays.
   expect(pickBlock(project, { ...asked.ui, picker: { at: { index: 1 }, query: 'zzzz' } })).toMatchObject({ changed: false, project })
   // A leaf holds no blocks.
   expect(applyMessage(project, ui(), { kind: 'addAt', at: { parentId: 'n1', index: 0 } })).toMatchObject({ changed: false, ui: { picker: null } })
 
-  // A key message is the key typed.
   expect(applyMessage(project, ui(), { kind: 'key', key: 's' }).ui.selectedId).toBe('n2')
   expect(ids(applyMessage(project, ui(), { kind: 'key', key: 'S' }).project)).toEqual(['n6', 'n2', '  n1', '  n3', '  n4', 'n5'])
-  // A click that asked for nothing closes the add list.
   expect(applyMessage(project, asked.ui, { kind: 'touch' }).ui.picker).toBe(null)
-  // Nothing loaded: nothing happens.
   expect(applyMessage(null, ui(), { kind: 'select', id: 'n1' })).toMatchObject({ project: null, changed: false })
   expect(applyMessage(project, initialUi(), { kind: 'select', id: 'n1' })).toMatchObject({ changed: false, ui: { selectedId: null } })
 })
@@ -103,7 +95,6 @@ test('messages from the graph: select, drop, and a [+] that opens the add list f
 test('a block is deleted at once; a container that holds blocks only on the second ask; the start block never', () => {
   const gone = applyOp(project, ui(), 'remove')
   expect(ids(gone.project)).toEqual(['n6', 'n2', '  n3', '  n4', 'n5'])
-  // The selection lands on what takes its place.
   expect(gone.ui.selectedId).toBe('n2')
 
   const first = applyOp(project, ui({ selectedId: 'n2' }), 'remove')
@@ -112,7 +103,6 @@ test('a block is deleted at once; a container that holds blocks only on the seco
   const second = applyOp(project, first.ui, 'remove')
   expect(ids(second.project)).toEqual(['n6', 'n1', 'n5'])
   expect(second.ui).toMatchObject({ selectedId: 'n5', confirmId: null })
-  // Selecting anything, or any other key, forgets the question.
   expect(applyMessage(project, first.ui, { kind: 'select', id: 'n2' }).ui.confirmId).toBe(null)
   expect(applyOp(project, first.ui, 'down').ui.confirmId).toBe(null)
 
@@ -123,12 +113,10 @@ test('a block is deleted at once; a container that holds blocks only on the seco
 test('a container is opened as the view and left again; the selection stays in what is shown', () => {
   const opened = applyOp(project, ui({ selectedId: 'n2' }), 'open')
   expect(opened.ui).toMatchObject({ viewRootId: 'n2', selectedId: 'n2' })
-  // Inside the view the keys do not walk out of it.
   const inside = applyOp(project, { ...opened.ui, selectedId: 'n4' }, 'down')
   expect(inside.ui).toMatchObject({ viewRootId: 'n2', selectedId: 'n4' })
   expect(applyOp(project, opened.ui, 'back').ui).toMatchObject({ viewRootId: null, selectedId: 'n2' })
   expect(applyMessage(project, opened.ui, { kind: 'view', id: null }).ui.viewRootId).toBe(null)
-  // A leaf holds nothing to open.
   expect(applyOp(project, ui(), 'open').ui.viewRootId).toBe(null)
   expect(applyMessage(project, ui(), { kind: 'view', id: 'n1' }).ui.viewRootId).toBe(null)
 })
@@ -145,7 +133,6 @@ test('the overlay hands the graph every count and the sum of what no block claim
   expect(overlaysProject(state, project.name, ui())).toBe(true)
   expect(overlaysProject(state, 'other', ui())).toBe(false)
   expect(overlaysProject(state, null, ui())).toBe(false)
-  // Put away once it is over, or with no run at all: nothing is laid over.
   expect(overlaysProject(state, project.name, ui({ runCleared: true }))).toBe(false)
   expect(overlaysProject(reduceAll([]), project.name, ui())).toBe(false)
 })
@@ -163,7 +150,6 @@ test('a block’s agents are listed failures first, without the id prefix; the r
   const long = agentsOf(reduceAll(many, KNOWN), 'n1')
   expect(long.shown).toHaveLength(AGENT_ROWS_MAX)
   expect(long.rest).toBe(30 - AGENT_ROWS_MAX)
-  // The agents no block claims can be selected while there are some.
   expect(applyMessage(project, ui(), { kind: 'select', id: UNMAPPED_ID }, { run: state }).ui.selectedId).toBe(UNMAPPED_ID)
 })
 
@@ -187,11 +173,9 @@ test('while a run is in progress every edit is refused with a notice; selection 
   expect(patchNode(project, ui(), 'n1', { name: 'x' }, context)).toMatchObject({ project, changed: false })
   expect(retypeBlock(project, ui(), 'n1', { type: 'code' }, context)).toMatchObject({ project, changed: false })
   expect(pickBlock(project, ui({ picker: { at: { index: 1 }, query: '' } }), { type: 'agent' }, context)).toMatchObject({ project, changed: false, ui: { picker: null } })
-  // Selection, by pointer and by key, and the view.
   expect(applyMessage(project, ui(), { kind: 'select', id: 'n3' }, context).ui).toMatchObject({ selectedId: 'n3', notice: null })
   expect(applyOp(project, ui(), 'down', context)).toMatchObject({ changed: false, ui: { selectedId: 'n2', notice: null } })
   expect(applyOp(project, ui({ selectedId: 'n2' }), 'open', context).ui.viewRootId).toBe('n2')
-  // Over: the same edits go through.
   expect(applyMessage(project, ui(), { kind: 'move', id: 'n1', to: { index: 3 } }, { run: { ...state, status: 'done' } }).changed).toBe(true)
   expect(patchNode(project, ui(), 'n1', { name: 'x' }).changed).toBe(true)
 })

@@ -22,11 +22,9 @@ test('a project replay labels its agents with the review template\'s leaf ids', 
     expect(one.running).toBe(0)
     expect(one.done + one.failed).toBe(one.total)
   }
-  // One failure, in the second leaf.
   expect(Object.entries(state.byNode).filter(([, one]) => one.failed > 0).map(([id]) => id)).toEqual(['n3'])
   expect(state.byNode.n3?.failed).toBe(1)
 
-  // Two agents no node claims: one with no id, one with an id the project does not hold.
   expect(state.unmapped).toHaveLength(2)
   const strays = state.unmapped.map(id => state.agents[id]?.label ?? '')
   expect(strays[0]).toBe(REPLAY_STRAYS[0])
@@ -34,7 +32,6 @@ test('a project replay labels its agents with the review template\'s leaf ids', 
   expect(known.ids.has(parseNodeId(strays[1] ?? '') ?? '')).toBe(false)
   expect(state.unmapped.every(id => state.agents[id]?.nodeId === undefined)).toBe(true)
 
-  // The totals add up: every agent is in one node bucket or unmapped, and so are its tokens.
   const agents = Object.values(state.agents)
   const mapped = Object.values(state.byNode).reduce((sum, one) => sum + one.total, 0)
   expect(mapped + state.unmapped.length).toBe(agents.length)
@@ -42,7 +39,6 @@ test('a project replay labels its agents with the review template\'s leaf ids', 
   const strayTokens = state.unmapped.reduce((sum, id) => sum + (state.agents[id]?.tokens ?? 0), 0)
   expect(Object.values(state.byNode).reduce((sum, one) => sum + one.tokens, 0) + strayTokens).toBe(tokens)
   expect(agents.every(agent => agent.tokens > 0 && agent.status !== 'running')).toBe(true)
-  // Mapped labels follow the handoff convention and carry the node's phase.
   for (const agent of agents.filter(one => one.nodeId !== undefined)) {
     expect(agent.label.startsWith(`${agent.nodeId}: `)).toBe(true)
     expect(agent.phase).toMatch(/^n\d+ /)

@@ -1,16 +1,5 @@
-// The graph's layout: a Project as cards, arrows and slots in character cells,
-// top to bottom only, never wider than the columns it is given. Pure
-// TypeScript: no `$`, no engine imports.
-//
-// A `chain` (pipeline, loops, a phase, the top level) lists its blocks one under the
-// other, each as wide as the list, one arrow row between two. A `stack`
-// (parallel, sweep, branch) stands its arms side by side at equal widths; arms
-// that do not all fit are a carousel: a window of them between two gutters.
-// A container too deep or too narrow to be drawn open is a collapsed card, and
-// any container can be opened as the view: the frame, at full width.
-//
-// The layout says the words too (what is on a border, in a row, how it is cut
-// to fit) as segments with a role; the paint only gives each role its look.
+// The graph's layout: a Project as cards, arrows and slots in character cells, top to bottom, never wider than its columns.
+// It says the words too, as segments with a role; the paint only gives each role its look. No `$`, no engine imports.
 
 import { needsBrief, needsStop } from '../project/lints'
 import { canHoldChildren, flatten, isBlank, plainKind } from '../project/model'
@@ -40,66 +29,52 @@ export const OPEN_DEPTH = 3
 export const OPEN_MIN_W = 34
 /** The columns at each side of a carousel: `◀` or `▶` and the count hidden on that side. */
 export const GUTTER_W = 3
-/** The most rows of notes the selected card shows, whatever the room. */
 export const NOTE_ROWS_MAX = 8
 /** The narrowest graph that is laid out: fewer columns are treated as this many (and the paint clips). */
 export const GRAPH_MIN_W = 12
 /** The widest the graph's content is drawn: in a wider region it is centred. */
 export const GRAPH_MAX_W = 132
 
-/** The columns the graph's content takes in a region of `region` columns. */
 export function graphColumns(region: number): number {
   return Math.max(GRAPH_MIN_W, Math.min(GRAPH_MAX_W, Math.trunc(region) || 0))
 }
 
-/** Where a block can be added: the same mark at every such place. */
 export const SLOT = '[+]'
-/** What it says while its add list is open. */
 export const SLOT_OPEN = '[+] Add block here'
-/** What a container that holds nothing says where its blocks would stand. */
 export const EMPTY = 'empty'
-/** Under an empty project's `[+]`, dim: the keys that start it (left out while the pane does not hold the keyboard), then what Claude can do. */
+/** Under an empty project's `[+]`: the keys that start it, then what Claude can do. */
 export const EMPTY_KEYS: readonly (readonly [string, string])[] = [
   ['n', 'add a block'],
   ['e', 'say what this workflow is for'],
 ]
 export const EMPTY_NOTE: readonly string[] = ['A plain message to Claude in the prompt', 'can draft the project, or change it later.']
-/** The cells and rows the empty state takes: its `[+]`, a blank row, the lines under it. */
 export const EMPTY_W = Math.max(SLOT.length, ...EMPTY_KEYS.map(([key, text]) => key.length + 2 + text.length), ...EMPTY_NOTE.map(line => line.length))
 export const EMPTY_ROWS = 2 + EMPTY_KEYS.length + 1 + EMPTY_NOTE.length
 export const NOT_SET = '[not set]'
 export const OPEN_HINT = 'o: open'
 
-/** What a run of cells in a card says, which the paint turns into a look. */
 export type SegRole =
-  /** The type in capitals, in its accent colour. */
   | 'type'
-  /** ` / `, ` · `: dim. */
   | 'sep'
   | 'title'
-  /** `×4`: bold. */
-  /** `· each: …`, `· stop: …`, `· 2–4 of 9`, `N blocks`, `o: open`: dim. */
+  /** `· stop: …`, `· 2–4 of 9`, `N blocks`, `o: open`. */
   | 'fact'
   /** `haiku low` at the right of a leaf's first row. */
   | 'meta'
-  /** The one line of notes a card at rest shows: dim. */
+  /** The one line of notes a card at rest shows. */
   | 'note'
-  /** The selected card's notes: plain. */
+  /** The selected card's notes. */
   | 'text'
-  /** `… 3 more lines`. */
   | 'more'
   /** `[not set]`. */
   | 'error'
-  /** ` ! `, the block has a problem: inverse, in `error`. */
+  /** ` ! `: the block has a problem. */
   | 'badge'
   | 'id'
   /** `IF`, `ELSE` on an arm of a branch. */
   | 'arm'
-  /** A chip's digit. */
   | 'key'
-  /** A chip's value when set. */
   | 'value'
-  /** A chip's name, where its knob is not set: dim. */
   | 'unset'
   /** Cells of a border left as they are, between two things written on it. */
   | 'rule'
@@ -124,9 +99,7 @@ export type GraphCard = Rect & {
   parentId: string | undefined
   index: number
   selected: boolean
-  /** How its blocks are arranged; null for a leaf. */
   flow: Flow | null
-  /** How many blocks it holds, at any depth. */
   inside: number
   /** What its top border says: left the arm's condition and a container's header, right the problem mark and the id. */
   top: CardRow
@@ -138,13 +111,11 @@ export type GraphEdge = { kind: EdgeKind; from: string; to: string; x: number; y
 
 export type GraphSlot = Rect & {
   place: Place
-  /** The slot after the last block of its list. */
   end: boolean
   /** How a drop here is marked: a bar along a row, or down a column (between two arms). */
   bar: 'row' | 'column'
   /** Where its `[+]` is written, from the first character; null for a slot that only takes a drop. */
   mark: { x: number; y: number; label: string } | null
-  /** The add list is open for this place. */
   open: boolean
   /** The place the keyboard adds at: where `n` would open the add list (`addPlace` in ops.ts), or where it is open. */
   target: boolean
@@ -158,17 +129,13 @@ export type GraphGutter = Rect & { id: string; side: 'left' | 'right'; count: nu
 
 export type GraphChip = Rect & { id: string; knob: QuickKnob; key: string }
 
-/**
- * One part of the breadcrumb row. `id` is the view a press opens: null for the root, undefined for the `…` that stands
- * for crumbs left out. `x` and `w` are the crumb's cells, its words and `CRUMB_PAD` at each side of them.
- */
+/** `id` is the view a press opens: null for the root, undefined for the `…` that stands for crumbs left out. `x` and `w` take in `CRUMB_PAD` at each side of the words. */
 export type GraphCrumb = { id: string | null | undefined; text: string; x: number; w: number; last: boolean }
 
 /** A carousel as it stands: arms `first` … `first + shown - 1` of `count` are in view. */
 export type GraphCarousel = { first: number; shown: number; count: number }
 
 export type GraphLayout = {
-  /** The columns it was laid out for: nothing reaches past them. */
   width: number
   /** Rows of the graph itself, the breadcrumb's rows not counted. */
   height: number
@@ -183,18 +150,16 @@ export type GraphLayout = {
   slots: GraphSlot[]
   rules: GraphRule[]
   gutters: GraphGutter[]
-  /** The selected card's quick knobs, where they are written. */
   chips: GraphChip[]
   crumbs: GraphCrumb[]
   /** How deep the view is, said before the crumbs: `LEVEL 2`. '' at the root, and where the row has no room for it. */
   level: string
-  /** Every carousel by container id. */
   carousels: Record<string, GraphCarousel>
   /** The offsets to keep: what was asked, moved so that each carousel holds the selected arm, and clamped. */
   scroll: Record<string, number>
   /** Every block of the project, drawn or not, parents first: what a run is summed over. */
   blocks: { id: string; type: NodeType; parentId: string | undefined }[]
-  /** The whole project is shown and has no block of its own (the start block at the most): its `[+]` stands over the lines that say how to start. */
+  /** The whole project is shown and has no block of its own (the start block at the most). */
   blank: boolean
 }
 
@@ -203,13 +168,10 @@ export type GraphOptions = {
   /** The rows the graph has: they cap the selected card's notes. */
   rows: number
   selectedId?: string | null
-  /** The container to show as the view; null or absent for the whole project. */
   viewRootId?: string | null
-  /** By container id: the first arm its carousel shows. */
   scroll?: Readonly<Record<string, number>>
   /** A block's own problems, by id. A collapsed container is marked for those of all it holds as well. */
   problems?: Readonly<Record<string, number>>
-  /** The place whose add list is open: its slot reads `[+] Add block here`, on a row of its own where it has none. */
   openAt?: Place | null
   /** Agents no block claims: more than 0 adds their card after the project (at the root only). */
   unmapped?: number
@@ -217,10 +179,9 @@ export type GraphOptions = {
   locked?: boolean
 }
 
-/** A text of the project on one line, as it can be shown: a project file is not trusted text. */
+/** A project file is not trusted text. */
 const clean = oneLine
 
-/** The cells a run of segments takes. */
 export function segsWidth(segs: readonly Seg[]): number {
   return segs.reduce((sum, seg) => sum + cellWidth(seg.text), 0)
 }
@@ -229,7 +190,6 @@ export function samePlace(a: Place | null | undefined, b: Place | null | undefin
   return a !== null && a !== undefined && b !== null && b !== undefined && a.parentId === b.parentId && a.index === b.index
 }
 
-/** How a container arranges what it holds: stages chained down the flow, or arms stacked across it. */
 export function childFlow(type: NodeType | undefined): Flow {
   return type === 'parallel' || type === 'branch' ? 'stack' : 'chain'
 }
@@ -241,17 +201,14 @@ function cardText(node: ProjectNode): string {
   return notes !== '' ? notes : (node.knobs?.prompt ?? '').trim()
 }
 
-/** The word between two arms of a stack. */
 export function armWord(type: NodeType | undefined): string {
   return type === 'branch' ? 'OR' : '∥'
 }
 
-/** The most rows of notes the selected card shows in a graph of `rows` rows: a third of them, at most NOTE_ROWS_MAX. */
 export function noteRows(rows: number): number {
   return Math.max(1, Math.min(NOTE_ROWS_MAX, Math.floor(rows / 3)))
 }
 
-/** How the arms of a stack share `inner` columns: each arm's width, how many are shown at once, and whether that is fewer than all. */
 export function stackShare(inner: number, count: number, type: NodeType | undefined): { share: number; shown: number; gap: number; carousel: boolean } {
   const gap = armWord(type).length + 2
   if (count <= 0) return { share: inner, shown: 0, gap, carousel: false }
@@ -262,7 +219,7 @@ export function stackShare(inner: number, count: number, type: NodeType | undefi
   return { share: Math.max(1, Math.floor((room - (shown - 1) * gap) / shown)), shown, gap, carousel: true }
 }
 
-/** Whether a container `depth` containers below the view's root (itself counted) and `width` columns wide is drawn open. */
+/** `depth` counts the container itself. */
 export function drawnOpen(depth: number, width: number): boolean {
   return depth <= OPEN_DEPTH && width - 4 >= OPEN_MIN_W
 }
@@ -270,7 +227,7 @@ export function drawnOpen(depth: number, width: number): boolean {
 /** The most cells a model's name takes on a card: a model named in full is cut. */
 const KNOB_MAX = 14
 
-/** The quick knobs a block has by its type and kind, each with the digit that steps it (`stepKnob` in ops.ts): `1` model, `2` effort. */
+/** Each with the digit that steps it (`stepKnob` in ops.ts): `1` model, `2` effort. */
 export function quickKnobs(node: Pick<ProjectNode, 'type' | 'kind'>): { key: string; knob: QuickKnob }[] {
   const out: { key: string; knob: QuickKnob }[] = []
   for (const slot of [1, 2]) {
@@ -280,7 +237,6 @@ export function quickKnobs(node: Pick<ProjectNode, 'type' | 'kind'>): { key: str
   return out
 }
 
-/** One chip: its digit in brackets, as a key of the legend is, then the knob's value when it is set (lit), else the knob's name (dim): `[1] sonnet`, `[2] effort`. */
 function chipSegs(node: ProjectNode, knob: QuickKnob, key: string): Seg[] {
   const value = node.knobs?.[knob]
   const set = value !== undefined && value !== ''
@@ -291,7 +247,6 @@ function chipSegs(node: ProjectNode, knob: QuickKnob, key: string): Seg[] {
   ]
 }
 
-/** Every quick knob of a block as chips, two cells between two. */
 function chipsOf(node: ProjectNode): Seg[] {
   return quickKnobs(node).flatMap((quick, i) => [...(i > 0 ? [{ text: '  ', role: 'rule' as const }] : []), ...chipSegs(node, quick.knob, quick.key)])
 }
@@ -304,19 +259,14 @@ function lastOf(node: ProjectNode): ProjectNode {
   return last ? lastOf(last) : node
 }
 
-/**
- * The arrow leaving `from` inside `parent` (undefined at the top level; for a phase, the container the phase stands
- * in). Stages of a pipeline hand each item on with no barrier. Anywhere else the next block starts when `from` is
- * done: a barrier when `from` yields many results (a pipeline, a parallel: by its type, never by what its
- * fields say), a plain hand-off when it yields one.
- */
+/** A pipeline's stages hand each item on. Elsewhere the next block waits for `from`: a barrier when `from` yields many results, by its type, never by what its fields say. For a phase, `parent` is the container the phase stands in. */
 function edgeKind(parent: NodeType | undefined, from: ProjectNode): EdgeKind {
   if (parent === 'pipeline') return 'stream'
   const source = lastOf(from)
   return MANY.includes(source.type) ? 'barrier' : 'stream'
 }
 
-/** What a block needs and lacks, said in its place before `[not set]`: an agent's brief, a loop's stop, the start block's goal. */
+/** What a block needs and lacks, said in its place before `[not set]`. */
 function missingOf(node: ProjectNode): string {
   if (needsBrief(node) && cardText(node) === '') return 'Instruction'
   if (needsStop(node) && clean(node.knobs?.stopCondition ?? '') === '') return 'Stop'
@@ -324,12 +274,11 @@ function missingOf(node: ProjectNode): string {
   return ''
 }
 
-/** How many levels deeper the blocks of a container `depth` deep are: a phase only frames, so it adds none (the frame of a view always adds one). */
+/** A phase only frames, so its blocks are no deeper; the frame of a view always adds one. */
 function depthStep(type: NodeType, depth: number): number {
   return type === 'phase' && depth > 0 ? 0 : 1
 }
 
-/** A block's place among the arms of a branch, as its top border says it. */
 type Arm = { word: 'IF' | 'ELSE'; when: string }
 
 function armOf(node: ProjectNode, parent: ProjectNode | undefined, index: number): Arm | null {
@@ -353,20 +302,18 @@ function armWidth(arm: Arm): number {
   return arm.word === 'ELSE' ? 4 : 3 + (arm.when === '' ? NOT_SET.length : cellWidth(arm.when))
 }
 
-/** The problem mark: on a card's top border, left of its id. The detail pane says what the problem is. */
 const BADGE = ' ! '
 
-/** A block's type as a card says it, with its kind where it is not the plain one: `AGENT`, `AGENT verify`, `LOOP dry`. */
+/** `AGENT`, `AGENT verify`, `LOOP dry`: the kind is said where it is not the plain one. */
 export function typeLabel(block: Pick<ProjectNode, 'type' | 'kind'>): string {
   return `${block.type.toUpperCase()}${block.kind === undefined || block.kind === plainKind(block.type) ? '' : ` ${block.kind}`}`
 }
 
-/** Whether a block still has the name it was added with (its kind's, or its type's): a card then says the type alone. */
+/** A block that still has the name it was added with: a card then says the type alone. */
 function unnamed(block: Pick<ProjectNode, 'type' | 'kind'>, title: string): boolean {
   return title === '' || title.toLowerCase() === defaultName(block)
 }
 
-/** `TYPE kind / Title` in at most `room` cells: the type and kind whole, then the title cut. */
 function nameSegs(block: Pick<ProjectNode, 'type' | 'kind'>, title: string, room: number, prefix: string = ''): Seg[] {
   const segs: Seg[] = []
   let left = room
@@ -394,7 +341,6 @@ type Ctx = {
   openAt: Place | null
   asked: Readonly<Record<string, number>>
   carousels: Record<string, GraphCarousel>
-  /** No chips. */
   locked: boolean
   /** By phase id: the type of the container the phase stands in (through any phase around it); undefined at the top level. */
   lanes: Map<string, NodeType | undefined>
@@ -413,7 +359,6 @@ type Box = {
   inside: number
   /** The blocks drawn inside it: all of a chain, the window of a carousel. */
   kids: Box[]
-  /** The index of the first of `kids` among its blocks. */
   first: number
   /** A row above the blocks for an open slot that has no row of its own. */
   lead: number
@@ -428,7 +373,6 @@ function problemsIn(node: ProjectNode, problems: Readonly<Record<string, number>
   return (problems[node.id] ?? 0) + (node.children ?? []).reduce((sum, child) => sum + problemsIn(child, problems), 0)
 }
 
-/** What a card's top border says, cut to `w`: the arm's condition and `head` at the left, the problem mark (with `problems` above 0) and the id at the right. */
 function topRow(node: ProjectNode, w: number, arm: Arm | null, problems: number, head: (room: number) => Seg[], headMin: number, chips: Seg[] = [], headKeep: number = headMin): CardRow {
   const right: Seg[] = []
   // Corners, one cell of border at each end, one between the two sides.
@@ -471,7 +415,6 @@ function clipSegs(segs: readonly Seg[], room: number): Seg[] {
   return out
 }
 
-/** The first line of a block's notes (its prompt with none), on one line. */
 function firstLine(node: ProjectNode): string {
   return clean(cardText(node).split(/\r?\n/).find(line => line.trim() !== '') ?? '')
 }
@@ -483,13 +426,11 @@ function leafBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
   const title = clean(node.name)
   const rows: CardRow[] = []
 
-  // Row 1: `TYPE / Title`, and at the right what is set of the model and effort, or (selected) the chips.
   const chips = selected && !ctx.locked ? chipsOf(node) : []
   const meta = [knobs.model, knobs.effort].filter(one => one !== undefined && one !== '').map(one => clip(clean(one ?? ''), KNOB_MAX)).join(' ')
   const nameMin = cellWidth(typeLabel(node)) + (unnamed(node, title) ? 0 : 3 + Math.min(cellWidth(title), 8))
   let right: Seg[] = chips.length > 0 ? chips : meta === '' ? [] : [{ text: meta, role: 'meta' }]
-  // Chips that do not fit beside the whole name get the next row (the selected card says its title in full);
-  // a model and effort that do not fit beside a name cut short are left to the detail pane.
+  // Chips that do not fit beside the whole name get the next row; a model and effort that do not fit are left to the detail pane.
   const nameAll = cellWidth(typeLabel(node)) + (unnamed(node, title) ? 0 : 3 + cellWidth(title))
   const beside = right.length === 0 || (chips.length > 0 ? nameAll : nameMin) + 2 + segsWidth(right) <= inner
   if (!beside) right = []
@@ -507,16 +448,13 @@ function leafBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
     if (kept.length > 0) rows.push({ left: kept, right: [] })
   }
 
-  // Row 2: what it does (the start block: the goal; its args are the detail pane's). What it hands on is the detail pane's.
   const lacks = missingOf(node)
   const said: Seg[] = lacks !== '' ? [{ text: `${lacks} `, role: 'note' }, { text: NOT_SET, role: 'error' }] : firstLine(node) === '' ? [] : [{ text: firstLine(node), role: 'note' }]
   const capped = selected && lacks === '' ? cappedLines(sanitize(cardText(node)), inner, ctx.noteRows) : { lines: [], more: 0 }
   if (!selected || lacks !== '' || capped.lines.length === 0 || (capped.lines.length === 1 && capped.more === 0)) {
-    // A card at rest, and a selected one whose notes are one line: one row.
     const text: Seg[] = selected ? said.map(seg => (seg.role === 'note' && lacks === '' ? { ...seg, role: 'text' as const } : seg)) : said
     if (text.length > 0) rows.push({ left: clipSegs(text, inner), right: [] })
   } else {
-    // The selected card: all its notes, wrapped.
     for (const line of capped.lines) rows.push({ left: [{ text: line, role: 'text' }], right: [] })
     if (capped.more > 0) rows.push({ left: [{ text: clip(moreLines(capped.more), inner), role: 'more' }], right: [] })
   }
@@ -525,7 +463,7 @@ function leafBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
   return { node, kind: 'leaf', w, h: rows.length + 2, depth, index, parentId: parent?.id, top, rows, inside: 0, kids: [], first: 0, lead: 0, gap: 0 }
 }
 
-/** A container as one card: `▸ TYPE / Title` and how many blocks, then their titles and how to open it. */
+/** `▸ TYPE / Title` and how many blocks, then their titles and how to open it. */
 function collapsedBox(node: ProjectNode, w: number, depth: number, parent: ProjectNode | undefined, index: number, ctx: Ctx): Box {
   const inner = Math.max(1, w - 4)
   const kin = node.children ?? []
@@ -540,7 +478,7 @@ function collapsedBox(node: ProjectNode, w: number, depth: number, parent: Proje
   return { node, kind: 'collapsed', w, h: 4, depth, index, parentId: parent?.id, top, rows, inside, kids: [], first: 0, lead: 0, gap: 0 }
 }
 
-/** A container's header on its top border: `TYPE kind / Title · once per: … · stop: … · 2–4 of 9`, with what fits `room`. */
+/** `TYPE kind / Title · once per: … · stop: … · 2–4 of 9`, with what fits `room`. */
 function headSegs(node: ProjectNode, room: number, range: string): Seg[] {
   const title = clean(node.name)
   // The carousel's window is said before any knob: it is the one fact found nowhere else.
@@ -619,16 +557,13 @@ function measure(node: ProjectNode, w: number, share: number, depth: number, par
 export const CRUMB_SEP = '  ›  '
 /** Cells at each side of a crumb's words that are the crumb's too: under the pointer, and where the view's own is lit. */
 export const CRUMB_PAD = 1
-/** The breadcrumb's rows in a window of at least `CRUMB_RULE_ROWS` rows: the crumbs, and a rule between them and the graph. */
+/** In a window of at least `CRUMB_RULE_ROWS` rows: the crumbs, and a rule between them and the graph. */
 export const CRUMB_ROWS = 2
 export const CRUMB_RULE_ROWS = 8
 /** The level is said only where the row keeps this many columns for the crumbs. */
 const CRUMB_LEAST_W = 36
 
-/**
- * The breadcrumb row: `LEVEL 2   project  ›  n4 Deep read  ›  n9 Close gaps` in `columns` cells, the middle left out
- * as `…` when it is too long. The level is how many containers down the view is.
- */
+/** `LEVEL 2   project  ›  n4 Deep read  ›  n9 Close gaps`: the middle is left out as `…` when it is too long. The level is how many containers down the view is. */
 function crumbsFor(project: Project, trail: readonly ProjectNode[], columns: number): { crumbs: GraphCrumb[]; level: string } {
   const word = `LEVEL ${trail.length}`
   const level = columns - word.length - 3 >= CRUMB_LEAST_W ? word : ''
@@ -672,7 +607,6 @@ function ancestors(index: Index, id: string): ProjectNode[] {
   return out
 }
 
-/** The graph for a project: every card, arrow, slot, gutter and chip, in cells from the graph's top left. */
 export function layoutGraph(project: Project, options: GraphOptions): GraphLayout {
   const columns = Math.max(GRAPH_MIN_W, Math.trunc(options.columns) || 0)
   const index = indexOf(project)
@@ -707,7 +641,6 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
 
   const isOpen = (place: Place): boolean => samePlace(openAt, place)
   const blank = !root && isBlank(project)
-  /** A slot's mark, kept inside the cells `from` … `from + room`. */
   const markAt = (x: number, y: number, label: string, from: number, room: number): { x: number; y: number; label: string } => {
     const text = clip(label, Math.max(1, room))
     return { x: Math.max(from, Math.min(x, from + room - text.length)), y, label: text }
@@ -734,7 +667,7 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
     if (box.kind === 'open') putList(box.kids, { box, card }, x + 2, y + 1 + box.rows.length, box.w - 4)
   }
 
-  /** Places one list from its top left and says the row after its last. `host` is the container it is in; none for the top level. */
+  /** Says the row after the list's last. `host` is the container the list is in; none for the top level. */
   const putList = (kids: Box[], host: { box: Box; card: GraphCard } | undefined, ox: number, oy: number, lw: number): number => {
     const parentId = host?.card.id
     const place = (at: number): Place => (parentId === undefined ? { index: at } : { parentId, index: at })
@@ -749,8 +682,7 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
     const endMark = (card: GraphCard, open: boolean): NonNullable<GraphSlot['mark']> => markAt(arrowX - 1, card.y + card.h - 1, open ? SLOT_OPEN : SLOT, card.x + 2, card.w - 4)
 
     if (!host && blank) {
-      // A project with no block of its own: the start block every project has, then its `[+]` in the middle of the rows
-      // left, over the lines that say how to start (the paint's).
+      // A project with no block of its own: its `[+]` stands in the middle of the rows left, over the paint's lines that say how to start.
       let y = oy
       for (const kid of kids) {
         put(kid, ox, y)
@@ -764,7 +696,7 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
       return Math.max(oy + rows, at + EMPTY_ROWS)
     }
     if (count === 0 && host) {
-      // An empty container: its `[+]` is on its bottom border as any container's; a drop goes on the row above, the one that says `empty`.
+      // An empty container: a drop goes on the row above its bottom border, the one that says `empty`.
       const open = isOpen(place(0))
       slots.push({ ...base, x: ox, y: oy - 1, w: lw, h: 1, place: place(0), end: true, bar: 'row', open, mark: endMark(host.card, open) })
       return oy
@@ -797,12 +729,10 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
         slots.push({ ...base, x: host.card.x, y: host.card.y + host.card.h - 1, w: host.card.w, h: 1, place: place(count), end: true, bar: 'row', open, mark: endMark(host.card, open) })
         return y
       }
-      // The end of the top level: a row of its own under the last block, the `+` under the arrows.
       slots.push({ ...base, x: ox, y, w: lw, h: 1, place: place(count), end: true, bar: 'row', open, mark: markAt(arrowX - 1, y, open ? SLOT_OPEN : SLOT, ox, lw) })
       return y + 1
     }
 
-    // A stack: the arms in view side by side, a gutter at each side that has more.
     if (!host) return y
     const { box, card } = host
     const carousel = ctx.carousels[card.id]
@@ -815,7 +745,6 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
     }
     const armsEnd = x - box.gap
     const armsY = y + lead
-    // The gaps and the gutters are as tall as the tallest arm.
     const rowH = Math.max(1, ...kids.map(kid => kid.h))
     for (const [j, kid] of kids.entries()) {
       const at = box.first + j
@@ -913,7 +842,6 @@ export function cardOf(layout: GraphLayout, id: string | null | undefined): Grap
   return id === null || id === undefined ? undefined : layout.cards.find(card => card.id === id)
 }
 
-/** The innermost card under a cell of the graph. */
 export function cardAt(layout: GraphLayout, x: number, y: number): GraphCard | undefined {
   for (let i = layout.cards.length - 1; i >= 0; i--) {
     const card = layout.cards[i]
@@ -927,22 +855,19 @@ export function slotAt(layout: GraphLayout, x: number, y: number): GraphSlot | u
   return layout.slots.find(slot => slot.mark !== null && slot.mark.y === y && x >= slot.mark.x - 1 && x <= slot.mark.x + slot.mark.label.length)
 }
 
-/** The carousel gutter under a cell: any cell of its three columns, as tall as the arms. */
 export function gutterAt(layout: GraphLayout, x: number, y: number): GraphGutter | undefined {
   return layout.gutters.find(gutter => within(gutter, x, y))
 }
 
-/** The chip under a cell: its digit or its value. */
 export function chipAt(layout: GraphLayout, x: number, y: number): GraphChip | undefined {
   return layout.chips.find(chip => within(chip, x, y))
 }
 
-/** The crumb under a column of the breadcrumb row, its padding counted; the last one (the view shown) and the `…` open nothing. */
+/** The last crumb (the view shown) and the `…` open nothing. */
 export function crumbAt(layout: GraphLayout, x: number): GraphCrumb | undefined {
   return layout.crumbs.find(crumb => !crumb.last && crumb.id !== undefined && x >= crumb.x && x < crumb.x + crumb.w)
 }
 
-/** The offset a press on a gutter asks for: the window one arm further to that side. */
 export function slideBy(layout: GraphLayout, gutter: Pick<GraphGutter, 'id' | 'side'>): Record<string, number> {
   const carousel = layout.carousels[gutter.id]
   if (!carousel) return layout.scroll
@@ -957,10 +882,7 @@ export type GraphHit =
   | { kind: 'gutter'; gutter: GraphGutter }
   | { kind: 'card'; card: GraphCard }
 
-/**
- * What is under a cell of the window (`row` 0 is its first row, the breadcrumb's in a nested view; the rule under it is nothing),
- * the most particular thing first: a crumb, a chip, a `[+]`, a gutter, then the innermost card.
- */
+/** `row` 0 is the window's first row. The most particular thing first: a crumb, a chip, a `[+]`, a gutter, then the innermost card. */
 export function graphAt(layout: GraphLayout, column: number, row: number, panY: number): GraphHit | null {
   if (row < layout.top) {
     const crumb = row === 0 ? crumbAt(layout, column) : undefined
@@ -977,15 +899,11 @@ export function graphAt(layout: GraphLayout, column: number, row: number, panY: 
   return card ? { kind: 'card', card } : null
 }
 
-/** The rows the graph itself has in a window of `rows`: the breadcrumb's rows taken off. */
 export function graphRows(layout: Pick<GraphLayout, 'top'>, rows: number): number {
   return Math.max(0, Math.trunc(rows) - layout.top)
 }
 
-/**
- * The pan that shows a card in a window of `rows` rows (the breadcrumb's rows counted in them), moved
- * as little as can be from `panY`: the whole card with a row of what is around it, or its top when it is taller.
- */
+/** Moves as little as can be from `panY`: the whole card with a row of what is around it, or its top when it is taller. `rows` counts the breadcrumb's. */
 export function panTo(layout: GraphLayout, rows: number, panY: number, id: string | null): number {
   const room = graphRows(layout, rows)
   const most = Math.max(0, layout.height - room)
@@ -1000,7 +918,7 @@ export function panTo(layout: GraphLayout, rows: number, panY: number, id: strin
   return Math.max(0, Math.min(most, pan))
 }
 
-/** What the window's first and last row say of the graph past them: `▲ 3 more above`, `▼ 2 more below`; '' with none. */
+/** `▲ 3 more above`, `▼ 2 more below`; '' with none. */
 export function edgeMarks(layout: GraphLayout, rows: number, panY: number): { above: string; below: string } {
   const bottom = panY + rows
   // Always a count: the blocks wholly out of view, or with none (part of one is cut) the rows.
@@ -1014,16 +932,12 @@ export function edgeMarks(layout: GraphLayout, rows: number, panY: number): { ab
   }
 }
 
-/**
- * The open containers whose header belongs on the window's first row: scrolled off it while their
- * inside shows, or standing on it. The innermost of each nest.
- */
+/** The open containers whose header belongs on the window's first row, the innermost of each nest. */
 export function stickyCards(layout: GraphLayout, panY: number): GraphCard[] {
   const open = layout.cards.filter(card => card.kind === 'open' && card.y <= panY && card.y + card.h - 1 > panY)
   return open.filter(card => !open.some(other => other.parentId === card.id))
 }
 
-/** A card and everything drawn inside it. */
 function subtree(layout: GraphLayout, id: string): GraphCard[] {
   const ids = new Set([id])
   const out: GraphCard[] = []
@@ -1044,10 +958,7 @@ export type GraphDrop = {
   to: Place | null
 }
 
-/**
- * Where a card dragged to a cell of the graph would land: the nearest slot within reach that is
- * not inside the card itself. Null when no slot is near (a drop there cancels), and for the frame of a view.
- */
+/** The nearest slot within reach that is not inside the card itself. Null when no slot is near (a drop there cancels), and for the frame of a view. */
 export function dropTarget(layout: GraphLayout, id: string, x: number, y: number): GraphDrop | null {
   const card = cardOf(layout, id)
   if (!card || card.type === 'unmapped' || card.id === layout.viewRootId) return null
@@ -1071,29 +982,18 @@ export function dropTarget(layout: GraphLayout, id: string, x: number, y: number
   return { slot: best, to: parentId === undefined ? { index: at } : { parentId, index: at } }
 }
 
-/** A project read for walking: each block's row, its container's, its siblings, and how the list it is in runs. */
 function walker(project: Project, layout: GraphLayout) {
   const index = indexOf(project)
   const parentOf = (row: Row): Row | undefined => (row.parentId === undefined ? undefined : index.byId.get(row.parentId))
   const siblingsOf = (row: Row): readonly ProjectNode[] => parentOf(row)?.node.children ?? project.nodes
   const flowOf = (row: Row): Flow => childFlow(parentOf(row)?.node.type)
-  /** Drawn open, with something in it: a block can be stepped into. */
   const enterable = (node: ProjectNode): boolean => cardOf(layout, node.id)?.kind === 'open' && (node.children?.length ?? 0) > 0
   /** The block a step into a container lands on: its first, or the first arm its carousel shows. */
   const firstIn = (node: ProjectNode): ProjectNode | undefined => node.children?.[childFlow(node.type) === 'stack' ? (layout.carousels[node.id]?.first ?? 0) : 0]
   return { index, parentOf, siblingsOf, flowOf, enterable, firstIn }
 }
 
-/**
- * The block a key moves the selection to; `id` itself when there is none that way (nothing wraps,
- * and the selection stays inside the view).
- *
- * `down` / `up` follow the reading order of the chain: into a container's first block, from its
- * last block on to what follows the container, from its first block up to the container. An arm
- * is read to its end, then what follows the stack. `right` / `left` inside a stack go to the next
- * arm (the block of it nearest in height); elsewhere `right` goes into a container and `left` out
- * to the one around the selection.
- */
+/** `id` itself when there is no block that way: nothing wraps, and the selection stays inside the view. Sideways goes to the next arm inside a stack, elsewhere into a container or out of it. */
 export function navigate(project: Project, layout: GraphLayout, id: string | null, direction: Direction): string | null {
   const { index, parentOf, siblingsOf, flowOf, enterable, firstIn } = walker(project, layout)
   const rootId = layout.viewRootId
@@ -1148,17 +1048,9 @@ export function navigate(project: Project, layout: GraphLayout, id: string | nul
 
 export const ONLY_ARMS = 'only arms move sideways'
 
-/** Where a key moves a block: the place to hand to `moveNode`, or null and why not. */
 export type MoveTarget = { to: Place; reason?: undefined } | { to: null; reason: string }
 
-/**
- * Where `Shift` and a direction move a block. `down` / `up` is one place in reading order: past a
- * sibling, into an open container that comes next (as its first block; going up, as its last), out
- * of the end of its own container (to just after it; going up, to just before). A collapsed
- * container is one place: the block steps past it. Arms are read left to right, so the place after
- * an arm is the next arm. `right` / `left` swap an arm with the one beside it, and move nothing
- * else. A block never leaves the view.
- */
+/** `down` / `up` is one place in reading order: into an open container that comes next, past a collapsed one, out of the end of its own. `right` / `left` swap two arms. A block never leaves the view. */
 export function moveTarget(project: Project, layout: GraphLayout, id: string | null, direction: Direction): MoveTarget {
   const { index, parentOf, siblingsOf, flowOf } = walker(project, layout)
   const here = id === null ? undefined : index.byId.get(id)
@@ -1190,7 +1082,7 @@ export function moveTarget(project: Project, layout: GraphLayout, id: string | n
   return { to: parent.parentId === undefined ? { index: at } : { parentId: parent.parentId, index: at } }
 }
 
-/** Whether the view rooted at `viewRootId` (null: the whole project) draws a block in `columns` columns: every container around it is open there. */
+/** Whether a view draws a block: every container around it is open there. `viewRootId` null is the whole project. */
 export function viewShows(project: Project, viewRootId: string | null, id: string, columns: number): boolean {
   const index = indexOf(project)
   if (!index.byId.has(id)) return false
@@ -1214,11 +1106,7 @@ export function viewShows(project: Project, viewRootId: string | null, id: strin
   return true
 }
 
-/**
- * The view that can show a block: `viewRootId` when it draws the block already, else the whole
- * project (null) when that does, else the outermost container that does (the one the block stands
- * in, at the latest). Null too for an id the project does not have.
- */
+/** `viewRootId` when it draws the block already, else the whole project (null), else the outermost container that does. Null too for an id the project does not have. */
 export function viewFor(project: Project, viewRootId: string | null, id: string, columns: number): string | null {
   if (viewShows(project, viewRootId, id, columns)) return viewRootId
   if (viewShows(project, null, id, columns)) return null
@@ -1226,13 +1114,11 @@ export function viewFor(project: Project, viewRootId: string | null, id: string,
   return ancestors(index, id).find(node => viewShows(project, node.id, id, columns))?.id ?? index.byId.get(id)?.parentId ?? null
 }
 
-/** The view one level up from a view's root, for `b`: the container around it, or null for the whole project. */
 export function parentView(project: Project, viewRootId: string | null): string | null {
   if (viewRootId === null) return null
   return indexOf(project).byId.get(viewRootId)?.parentId ?? null
 }
 
-/** Whether `o` can open a block as the view: a container, and not the one the view already shows. */
 export function canOpen(project: Project, viewRootId: string | null, id: string | null): boolean {
   if (id === null || id === viewRootId) return false
   const row = indexOf(project).byId.get(id)

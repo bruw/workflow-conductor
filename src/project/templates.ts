@@ -5,12 +5,10 @@ import type { Project, ProjectNode, Kind, Knobs, NodeType } from './model'
 
 export type Template = { id: string; title: string; blurb: string; make: () => Project }
 
-// Every project opens with its start block: what the template is for, and what it is run on.
 function start(id: string, goal: string, args: string): ProjectNode {
   return { id, type: 'start', name: 'start', knobs: { goal, args } }
 }
 
-/** A block's type, or its type and kind: `agent`, `agent verify`. */
 type Block = NodeType | `${NodeType} ${Kind}`
 
 function node(id: string, block: Block, name: string, logic: string, knobs: Knobs, children?: ProjectNode[]): ProjectNode {

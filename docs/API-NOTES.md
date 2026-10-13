@@ -1,627 +1,79 @@
-# API notes (P1 spikes)
-
-Observed on Claude Code 2.1.296, terminal surface, inside tmux 3.2a (160x50), on 2026-10-10.
-Method: the probe mod `spikes/probe/` loaded beside Conductor, logging one JSON line per event to
-`.capture/probe.jsonl` (gitignored). One real workflow run: 3 haiku agents, 2 phases, run `wf_612793e3-454`.
-Log lines below are trimmed. `t` is ms since the probe loaded.
-
-Rerun: `CONDUCTOR_EXTRA_PLUGIN_DIRS=spikes/probe scripts/dev-session.sh`, then `/probe-handoff`,
-`/probe-pane`, `/probe-fs`, `/probe-keys` in the nested session.
-
-S7 and the findings marked "redesign v1" were added on 2026-10-11, same version and surface.
-S8 and the last two findings under S7 came with the UI pass that followed, same version and surface.
-S9 to S15 were added on 2026-10-12: same version, the probe alone in its own tmux session (Opus 5.5, high
-effort, auto mode). They are off unless `.capture/spike.json` exists; it picks the tools and switches
-(`{"tools":["choose"|"deferred"|"nudge"|"nudge2"],"hint":true,"askWorkflow":true,"blockWorkflow":true}`), and the
-log is `.capture/spike.jsonl`. Tools are registered at `session.start`, so each setup is a new session.
-
-## S1. Is `agent.spawn`'s `description` the script's `label`? Yes. Phase on the event? No.
-
-```
-agent.spawn keys: tool_use_id prompt description subagentType provider model parentModel
-                  permissionMode background fork workflow name cwd
-{"description":"n1: two","workflow":{"runId":"wf_612793e3-454","agentIndex":2},"subagentType":"workflow-subagent","model":"haiku","prompt":"Reply with the single word ok"}
-{"description":"n1: one","workflow":{"runId":"wf_612793e3-454","agentIndex":1}, …}
-{"description":"n2: three","workflow":{"runId":"wf_612793e3-454","agentIndex":3}, …}
-agent.spawn.after {"result":{"model":"claude-haiku-5-5","agentId":"a7d5df6f5c088efc8"}}
-```
-
-- `description` equals the label exactly. The id convention in SPEC (`/^(n\d+)\b/` on the label) stands.
-- `agentId` is **not on the event**. It is on what `await next(e)` resolves to (`{ model, agentId }`).
-  The run hook must call `next` and read the id from the result. SPEC's "agent.spawn: agentId" is wrong in that detail.
-- No phase field. `workflow` holds only `runId` and `agentIndex`. Phase comes from the journal (S3) or from
-  the node id in the label, which is enough for `byNode`. `byPhase` (no project loaded) needs the journal.
-- Spawn events of one `parallel` batch arrive out of order (`agentIndex` 2 before 1). Never assume order.
-- `name` and `cwd` keys exist with undefined values; `model` is the alias as written (`haiku`).
-
-## S2. Do workflow agents raise `turn.complete` with matching `agentId` and `usage`? Yes. `turn.step`? Yes.
-
-```
-turn.complete keys: answer durationMs isAborted turnId agentId reason usage
-{"agentId":"a7d5df6f5c088efc8","durationMs":1136,"reason":"answer","answer":"ok",
- "usage":{"input_tokens":2,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":32638,"model":"claude-haiku-5-5"}}
-turn.step keys: turnId index model effort messageCount agentId      (input: no token counts)
-turn.step.stop {"agentId":"a7d5df6f5c088efc8","index":0,"keys":["kind","stopReason","usage","ref"],
- "usage":{"input_tokens":2,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":32638,…}}
-```
-
-- All three agents raised one `turn.complete` each, `agentId` equal to S1's spawn result.
-- Usage fields: `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `model`.
-- The engine's own figure ("3 agents · 97.9k tokens") is the sum of **all four** counts (3 × 32,644 = 97.9k).
-  Define `tokens` as that sum so the pane matches `/workflows`.
-- `turn.step` fires per model request for workflow agents. Its input has no tokens, but its stream's last
-  chunk (`kind: 'stop'`) carries the request's `usage`. Summing stop chunks per `agentId` is a live running
-  total; `turn.complete.usage` is the same sum at the end. So `agent-usage` events come from `turn.step`
-  stop chunks, `agent-end` from `turn.complete`. No transcript polling needed.
-- `turn.step` is a streaming hook (`async function*`, `for await (const c of next(e)) yield c`). It runs on
-  the main loop too: pass every chunk through untouched and only read `stop`.
-- The main loop's `turn.complete` has no `agentId`; ignore those for agent accounting.
-- Not observed: a failing agent. `reason` (`answer | aborted | refusal | error`) and `isAborted` are there to map to `ok`.
-
-## S3. Is `transcriptDir` on the Workflow result, and can `$.fs` read the run files? Yes to both.
-
-```
-workflow.call keys: script tool tool_use_id            (tool input is flat on the event, no `e.input`)
-workflow.result keys: ref result text
-  result keys: status taskId taskType workflowName runId summary transcriptDir scriptPath
-  transcriptDir: ~/.claude/projects/<project>/<session>/subagents/workflows/wf_612793e3-454
-t=120426 workflow.result  list:["journal.jsonl"]  journalTypes:["launched"]
-t=120430 agent.spawn.before (n1: two)   journal: ["launched"]
-t=120463 agent.spawn.after              journal: ["launched","started"]  {"label":"n1: two","phase":"Alpha"}
-probe-fs meta: {"agentType":"workflow-subagent","description":"n2: three","workflowPhase":"Beta","model":"haiku",…}
-```
-
-- The fields are under `result.result`, not on the top level of what `next(e)` resolves to.
-- `$.fs.list(dir)`, `$.fs.read(journal.jsonl)`, `$.fs.read(agent-*.meta.json)` and reading an
-  `agent-*.jsonl` transcript all work on `~/.claude/projects/...`; no permission prompt, absolute paths.
-- Timing: the run starts in the background, so the tool result arrives **before** the first `agent.spawn`
-  (4 ms here). `run-start` comes from the tool result; `transcriptDir` is known before any agent starts.
-- The journal's `started` line is absent when the `agent.spawn` hook is entered and present once `next(e)`
-  has resolved, in all three spawns. So: `await next(e)`, then read the journal for that `agentId`'s phase.
-  Read defensively (retry on the next event if the line is missing).
-- `transcriptDir` can also be built without the result: `<projects>/<$.session.id()>/subagents/workflows/<runId>`.
-- `agent-*.meta.json` appears after the spawn and duplicates label and phase (`description`, `workflowPhase`).
-- No run-end signal was found: the journal has no end line and no hook event names the run's end. The main
-  loop takes a turn after the completion notification. P2 must pick one: "all started agents ended and no
-  spawn for N seconds", or the `session.append` notification row (untested). `result.status`/`taskId` exist.
-- `$.fs` has no append. `$` may not be passed to a helper (`validate` refuses `log($.fs, …)`); every `$` call is spelled at the call site.
-
-## S4. Does `command.run`'s `context` make the model take a turn? No. It is used on the next prompt: yes.
-
-```
-❯ /probe-handoff
-  ⎿  conductor-probe: probe handoff          (20 s: no turn, no turn.step, no turn.complete)
-❯ hi
-● PONG
-```
-
-- The `context` entry is recorded as a hidden message and read on the next turn, where it won over the typed `hi`.
-- Consequence: `/conductor run <name>` alone does not start the implementation. Options, in order:
-  1. The command's hook calls `$.prompt.submit(...)` (declared in the types, **untested**) with a visible
-     one-line prompt such as "Implement and run the workflow project <name>", conventions staying in `context`.
-  2. Fallback: the command answers `text` telling the person to press Enter on a prompt it filled with
-     `$.prompt.fill`. The Run button already uses `$.prompt.fill`.
-  Test option 1 first in P2; it is one small turn.
-- The output row is prefixed with the mod's name (`conductor-probe: …`).
-
-## S5. Can tmux-injected mouse events reach a `Client`? Yes.
-
-```
-tmux send-keys -t conductor-dev -l $'\e[<0;95;5M'     → {"type":"down","x":5,"y":2,"keys":["type","x","y","button"]}
-tmux send-keys -t conductor-dev -l $'\e[<32;100;6M'   → {"type":"move","x":10,"y":3}
-tmux send-keys -t conductor-dev -l $'\e[<32;105;7M'   → {"type":"move","x":15,"y":4}
-tmux send-keys -t conductor-dev -l $'\e[<0;105;7m'    → {"type":"up","x":15,"y":4}
-tmux send-keys -t conductor-dev -l $'\e[<35;96;5M'    → enter, then {"type":"move","x":6,"y":2}   (hover, no button)
-```
-
-- SGR sequences work as given, 1-based screen cells. The Client's region began at screen column 90, row 3,
-  so `x = COL - 90`, `y = ROW - 3`. Find the origin from a capture; it moves with the pane's width.
-- Space the sequences (0.3 s used); one event is delivered per frame.
-- No setting was needed: the nested session was already fullscreen (`viewport.isFullscreen: true`) with mouse
-  reporting on (tmux `mouse_any_flag=1`, `mouse_sgr_flag=1`). tmux's own `mouse off` does not matter for
-  `send-keys -l`. Not tested: a non-fullscreen session (the types say presses need the fullscreen terminal).
-- `button` is on `down`/`move`-while-held/`up` only. `fine` is absent under tmux, as documented.
-- **A click gives the Client the keyboard.** After the click, text sent to the session went to `onKey` as one
-  key event holding the whole string, not to the prompt. `Escape` returns focus to the prompt and leaves
-  the pane open. The harness must send `Escape` after pointer tests before typing; the canvas should
-  treat a multi-character key as paste or ignore it.
-- A pane opened by the person's command docked at 88/72 columns in a 160-column terminal.
-- Consequence: drag and click can be tested end to end from the harness. Mouse parity in SPEC stands.
-
-## S6. What tick rate does `surface.every` sustain? About 60 Hz at 16 ms; intervals round up to 16 ms frames.
-
-```
-{"askedMs":16, "calls":123,"elapsedMs":2004,"meanMs":16.3, "hz":61.4,"maxGapMs":26, "renders":122}
-{"askedMs":33, "calls":42, "elapsedMs":2013,"meanMs":47.9, "hz":20.9,"maxGapMs":50, "renders":42}
-{"askedMs":100,"calls":18, "elapsedMs":2018,"meanMs":112.1,"hz":8.9, "maxGapMs":115,"renders":18}
-```
-
-- Each tick called `setState`, and every tick produced a render, so these are redraw rates of a small tree.
-  A second run after a reload gave the same means (16.6 / 48.6 / 113.8 ms) with one 96 ms gap.
-- The clock is quantized to ~16 ms frames and rounds **up**: 33 → 48 ms (3 frames), 100 → 112 ms (7 frames).
-  Ask for multiples of 16: 16 (60 Hz), 32 (30 Hz), 96 (10 Hz).
-- Consequence: 120–180 ms tweens get 7–11 frames at `every(16)`, which is enough; SPEC's motion plan stands.
-  Use `every(16)` only while a tween runs, `every(96)` for spinners, and stop the timer when idle.
-- Measured on an idle session with a 40x8 region. Not measured: a full-size canvas or a session busy streaming.
-
-## S7. Can a focused `Input` serve as a key catcher: every key with its case, and kept empty? Yes, by re-keying it.
-
-The question came from a Button `hotkey`: `Shift+j` pressed `j`'s Button, and `ui.press` carries no key, so a
-hotkey cannot tell `w` from `W`, and `+` and `?` cannot be hotkeys at all.
-
-Probe: `/probe-keys` in `spikes/probe/hooks/register.tsx` opens a pane with `focus: true` holding an `Input`
-with `autoFocus` (`value=""`), a second `Input` and a Button with hotkey `z`. A `ui.input` hook logs each event.
-
-First run: the hook answers `{ element, value: '' }` and the Input keeps one key (`catch`).
-
-```
-{"kind":"ui.focus","element":"catch","origin":{"kind":"plugin","name":"conductor-probe"}}
-{"kind":"change","element":"catch","value":"w"}
-{"kind":"change","element":"catch","value":"wW"}
-{"kind":"change","element":"catch","value":"wWs"}
-{"kind":"change","element":"catch","value":"wWsD"}
-{"kind":"change","element":"catch","value":"wWsD+"}
-{"kind":"change","element":"catch","value":"wWsD+?"}
-{"kind":"change","element":"catch","value":"wWsD+?1"}
-{"kind":"change","element":"catch","value":"wWsD+?1z"}
-{"kind":"change","element":"catch","value":"wWsD+?1zwwssdd"}
-{"kind":"ui.focus","origin":{"kind":"person"}}
-{"kind":"ui.focus","element":"catch","origin":{"kind":"person"}}
-```
-
-Second run: the Input is drawn under a new key after every event (`catch:<n+1>`, `value=""`).
-
-```
-{"kind":"ui.input","element":"catch:0","inputKind":"change","value":"w"}
-{"kind":"ui.input","element":"catch:1","inputKind":"change","value":"W"}
-{"kind":"ui.input","element":"catch:2","inputKind":"change","value":"s"}
-{"kind":"ui.input","element":"catch:3","inputKind":"change","value":"D"}
-{"kind":"ui.input","element":"catch:4","inputKind":"change","value":"+"}
-{"kind":"ui.input","element":"catch:5","inputKind":"change","value":"?"}
-{"kind":"ui.input","element":"catch:6","inputKind":"change","value":"1"}
-{"kind":"ui.input","element":"catch:7","inputKind":"change","value":"z"}
-{"kind":"ui.input","element":"catch:8","inputKind":"submit","value":""}
-{"kind":"ui.input","element":"catch:9","inputKind":"change","value":"wasdWASD"}
-```
-
-- A focused `Input` receives every printable key with its case, one `ui.input` `change` each; Enter is a
-  `submit`. `z`, the Button's hotkey, arrived as text: a hotkey does not fire while the ring is on an Input.
-- A burst sent at once is one `change` holding all the characters (`wwssdd` in the first run, `wasdWASD` in
-  the second).
-- **Answering `{ element, value: '' }` does not empty the field** (first run: the value keeps growing).
-  **Drawing the Input under a new key does**, and the ring stays on it: the ring is kept by its place among
-  the stops, not by key.
-- Up / Down on the Input walk the ring (a `ui.focus`, origin `person`, no key told; the first of the two
-  above names no element). Left / Right / Backspace stay in the field. Tab goes to the next stop.
-- Found while building on it (seen in the designer, not in this probe):
-  - A key typed in the frame an Input is drawn under a new key is dropped. So the catcher is not re-keyed
-    per key: its whole text is read each time (the new characters are those after the ones already taken)
-    and it is re-keyed only once the typing has paused.
-  - A reused key brings back its old text, also from before a reload of the module (whose counters start
-    from 0 again). Keys carry a per-load stamp: `keys:<load>.<n>`.
-  - Changing `value` under a focused Input replaces its text and leaves the cursor where it was, so the next
-    letter lands in the middle. A field being typed in is drawn with the text it opened with until the
-    typing pauses.
-  - An `Input` under a `Box` with `display="none"` stays a focus stop and takes keys, while the terminal's
-    cursor is hidden (tmux `#{cursor_flag}` = 0).
-  - A focused Input pushed off-screen or clipped still has its cursor shown, clamped to the screen edge.
-    So drawing an Input out of sight does not hide its cursor.
-- Consequence: the designer's ring rests on one small `Input`, the first child of the pane's tree and so the
-  mod's first stop, under a `Box` with `display="none"`: it is not drawn, takes no cell, and no cursor
-  blinks while the ring rests on it. Every character typed there is looked up in one key table
-  (`src/ui/keys.ts`). `Shift+WASD`, `+` and `?` work without a click. It replaces the hotkey Buttons, the
-  rewrite of the ring onto a home key, and the `prompt.edit` swallow of unbound letters (an unbound
-  character is now typed into the catcher, which says so). The Client still handles the pointer only.
-
-## S8. Can a mod remove the docked pane's background colour? No.
-
-The docked pane has a background colour of its own. It is the engine's: Claude Code 2.1.296 wraps the dock
-in a `Box` with `backgroundColor: composerSidebarBackground`, and every descendant inherits it.
-
-- `composerSidebarBackground` is a theme token: `rgb(38,38,38)` in the dark theme, `rgb(245,245,245)` in the
-  light one; the ANSI themes use `blackBright` and `white`.
-- Nothing the mod draws takes it away: `backgroundColor="default"` or `"transparent"` on a `Box` or a
-  `Text`, a `Raster`'s default cell and a `Client` region all keep it.
-- `$.ui.open` has no option for it.
-- The inline placement has no such background.
-- The only control is the person's: a custom theme that overrides `composerSidebarBackground` with a
-  concrete colour (`"default"` is dropped).
-- Consequence: the mod draws on what the dock gives it. The one background it sets is a phase's ground on the
-  graph: `backgroundColor="userMessageBackground"` on the `Text` of its cells. A theme key is accepted there and follows
-  the theme, one outside `ThemeKey` too (seen in tmux at 256 colours: the dock `48;5;235`, the phase `48;5;237`;
-  `inverseText` gave `48;5;16`, too hard against the dock). A cell has no alpha: a softer ground is another key.
-
-## S9. Does `$.ui.ask` work inside the `tool.call` hook of a mod's own tool, mid-turn? Yes. A 174 s wait survives; Esc rejects.
-
-```
-❯ spike choose, n=2
-● conductor-probe - spike_choose (MCP)(n: 2)
- ☐ Workflow
-Conductor or standard?
-❯ 1. Conductor
-  2. Standard
-  3. Type something.
-  4. Chat about this
-{"kind":"choose.call","keys":["n","tool","tool_use_id"],"n":2}
-{"kind":"choose.answer","answer":"Standard","heldMs":174468}
-[DEBUG] conductor-probe (user) answered tool.call without next() in 174483.0ms
-  ⎿  The user chose: Standard. Reply with exactly: CHOSE Standard
-● CHOSE Standard
-{"kind":"choose.answer","answer":"Fourth","heldMs":11819}                     (n=4: four rows, then the same two extra rows)
-{"kind":"choose.rejected","isError":true,"name":"HooksError","keys":["message","name","stack","line","column"],
- "message":"conductor-probe: $.ui.ask: no answer (The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_strin)"}
-```
-
-- The dialog is the engine's AskUserQuestion, with the `header` as its chip. It resolves to the label as written.
-- The engine adds two rows the mod did not ask for: `Type something.` (free text comes back as the answer) and
-  `Chat about this`. So compare the answer with the labels exactly and treat anything else as "no choice".
-- Esc rejects with a `HooksError` whose message starts `<plugin>: $.ui.ask: no answer (`. `Chat about this`
-  rejects with the same message: the two cannot be told apart. No field beyond `name` and `message` says why.
-- A rejected ask does not end the turn: the hook caught it, returned a result, and the model read it.
-- The hook was held 174 s by the open dialog and was not skipped: time inside a `$` call is not on the budget.
-- No permission prompt came up for the mod's tool (auto mode). Not tested in the default permission mode.
-- The ask is a nested `tool.call` of `AskUserQuestion`: the module's other `tool.call` hooks see it (the
-  catch-all one logged it); only the calling hook is left out. A catch-all hook must pass it through.
-- Not tested: `multiSelect`, and typing under `Type something.`.
-
-```ts
-on('tool.call', { tool: 'mcp__conductor__mode' }, async $ => {
-  try {
-    const answer = await $.ui.ask('Conductor or standard?', { options: ['Conductor', 'Standard'], header: 'Workflow' })
-    return { result: `The user chose: ${answer}` }       // a label, or free text
-  } catch {
-    return { result: 'The user dismissed the question.' } // Esc, or "Chat about this"
-  }
-})
-```
-
-## S10. Does `$.ui.ask` work in the `Workflow` `tool.call` hook after `await next(e)`, and does `context` reach the model? Yes to both.
-
-```
-14:57:25.112 workflow.input                       (the hook is entered)
-14:57:25.518 workflow.result  status async_launched, runId wf_cf2940ca-61b
-14:57:25.529 tool AskUserQuestion                 (dialog up; the row reads "Workflow(One haiku agent replies ok)")
-   …         agent.spawn, turn.complete of the run's one agent (probe.jsonl): the run ended under the dialog
-14:58:09.622 workflow.ask {"answer":"Yes","heldMs":44102,"signalAborted":false}
-14:58:09.686 prompt {"origin":{"kind":"task-notification"}}
-● Dynamic workflow "One haiku agent replies ok" completed · 3s
-● VISUALIZE-ACK
-  Workflow tiny done: 1 haiku agent, result ok (3.6s, 33k tokens).
-```
-
-- The run starts and goes on while the dialog is up; here it finished under it.
-- `return { ...r, context: [...] }` delivers: the model wrote the word the context asked for, first.
-- **The turn is held as long as the dialog is.** The model does not get the tool result, and the run's
-  completion notice is not delivered, until the person answers; both arrive together in one turn. A person
-  who walks away from the dialog freezes the chat while the workflow burns in the background.
-- With a pane docked, the dialog is drawn in the transcript's column (24 columns wide here), still usable.
-- Answering `No` returns `r` untouched; the turn goes on as without the mod.
-
-```ts
-on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
-  const r = await next(e)
-  if (r.deny !== undefined || r.isError === true) return r
-  const answer = await $.ui.ask('Visualize this run in Conductor?', { options: ['Yes', 'No'], header: 'Conductor' }).catch(() => 'No')
-  return answer === 'Yes' ? { ...r, context: ['…what the model should do…'] } : r
-})
-```
-
-## S11. What does a `Workflow` `tool.call` carry? The script text only in the inline form; `result.scriptPath` holds the full text in all three.
-
-```
-inline      keys: script tool tool_use_id        scriptChars 240
-            result.scriptPath …/<session>/workflows/scripts/tiny-wf_cf2940ca-61b.js   $.fs.read == e.script (240 chars)
-scriptPath  keys: scriptPath tool tool_use_id    (no script)
-            result.scriptPath = the path passed in (same file, no new copy), runId wf_cb1066c2-2af, 240 chars read
-name        keys: name tool tool_use_id          name "tinysaved" (a .claude/workflows/tinysaved.js of a scratch project)
-            result.scriptPath …/<session>/workflows/scripts/tinysaved-wf_fa89c342-ccc.js   245 chars read
-result keys (all three): status taskId taskType workflowName runId summary transcriptDir scriptPath
-```
-
-- Types (`claude-code-tools`): input `script? name? description? title? args? scriptPath? resumeFromRunId?`
-  (`scriptPath` wins over `script` and `name`); result adds `sessionUrl? warning? error?` to the keys above.
-- The input is flat on the event (`e.script`, `e.name`, `e.scriptPath`), as in S3. Fields the model did not
-  pass are absent, not empty.
-- One rule gives the script in every form: after `next(e)`, `await $.fs.read(r.result.scriptPath)`. The file
-  exists when `next` resolves. It is named `<meta.name>-<runId>.js` under
-  `~/.claude/projects/<project>/<session>/workflows/scripts/`.
-- For the `scriptPath` form the file can also be read before `next` (`e.scriptPath`), to decide ahead of the run.
-  For the `name` form nothing on the event holds the text before the run.
-- `workflowName` is `meta.name`. `r.text` (what the model reads) repeats the paths and the run id.
-- Not observed: `resumeFromRunId`, a remote run (`status: 'remote_launched'`, no `runId`), a syntax error (`error`).
-
-## S12. Is a pane opened right after a yes in `$.ui.ask` placed? At 160 columns yes; at 100 no: the open counts as unasked.
-
-```
-[DEBUG] ui.open conductor-probe spike-pane (unasked, 160 columns): placed
-{"opened":{"isPlaced":true},"panes":[{"id":"spike-pane","isShown":true,"isFocused":false,"isPlaced":true}]}
-pane.render {"viewport":{"columns":24,…},"placement":"dock","bodyColumns":135}
-
-[DEBUG] ui.open conductor-probe spike-pane (unasked, 100 columns): waits unplaced (unasked below 144 columns (100 now): placed when the person opens it, or when the terminal is widened to 144 columns)
-{"opened":{"isPlaced":false,"reason":"unasked below 144 columns (100 now): …"},"panes":[{…,"isPlaced":false}]}
-[DEBUG] ui.open conductor-probe spike-pane (waiting, 150 columns): placed          (tmux resize-window -x 150)
-pane.render {"viewport":{"columns":100,…},"placement":"inline","bodyColumns":96}   (back at 100: stays, inline)
-```
-
-- **An answer in `$.ui.ask` is not "the person's input" for `$.ui.open`.** The open is unasked: placed from
-  144 columns, waiting below.
-- At 100 columns the person sees nothing at all: no pane, no tab, no notice, and no `ui.render` is raised.
-  The mod must say so itself (`$.ui.toast` or a line in the `context`) and name the command that opens it.
-- It seats by itself when the terminal reaches 144 columns, and once seated it stays when narrowed again
-  (inline above the prompt under 110).
-- An open from the person's own command is placed at any width (S5, and the types). So below 144 the way in
-  is a slash command the person types; 110 is the floor once they have opened that id before.
-- At 160 the dock took 135 body columns and left the transcript 24: this machine has `dockColumns: 141` kept
-  in `~/.claude.json` from an earlier drag. The mod cannot count on its own width.
-
-```ts
-const opened = await $.ui.open({ id: PANE, title: 'Conductor' })
-if (!opened.isPlaced) $.ui.toast('Conductor: type /conductor to see the run (the terminal is narrow)')
-```
-
-## S13. Does Claude find a deferred mod tool by itself? From a plain workflow request, no (0 of 2). Named in hidden context, yes, when it goes for Workflow (2 of 3).
-
-Tool: `workflow_mode`, `isDeferred: true`, listed as `mcp__conductor-probe__workflow_mode`. Each try after `/clear`.
-
-```
-(a) name in the deferred list only
-1 "use a workflow to review README.md with 2 haiku agents"            Skill(workflow-authoring) → Workflow        not called
-2 "orchestrate 2 haiku subagents in a workflow to review README.md"   Skill(workflow-authoring) → Workflow        not called
-3 "… Before you write the script, let me pick the workflow mode."     ToolSearch select:… → workflow_mode         called
-4 "… built visually or as a plain script? Check with me using whatever tool exists for that."  ToolSearch → called
-(b) prompt.submit context: "Before authoring or running any Workflow script, call the tool <full name> (load it with ToolSearch "select:<full name>") …"
-1 "use a workflow to review README.md with 2 haiku agents"            ToolSearch select:… → workflow_mode         called
-2 "orchestrate 2 haiku subagents to review README.md"                 Agent, Agent (two real subagents)           not called
-3 "ultracode: review README.md with 2 haiku agents"                   ToolSearch select:… → workflow_mode         called
-```
-
-- (a) The name alone does not pull the tool into a workflow request. Claude loads it only when the person's
-  words ask for that very thing (tries 3 and 4), which no real user will type.
-- (b) With the full name in hidden context Claude loaded it with one `ToolSearch select:` and called it, before
-  the skill and before any script, both times it was heading for Workflow. In try 2 it never headed there:
-  "orchestrate subagents" went to the `Agent` tool, and the context spoke of Workflow scripts only.
-- The context was attached to every prompt (`next({ ...e, context: [...(e.context ?? []), hint] })`).
-- A deferred tool costs one extra model step (the ToolSearch) and about a second.
-
-## S14. Does a non-deferred tool whose description says "call this before any Workflow script" get called first? Yes, 3 of 3 with the plain wording.
-
-Tool: `before_workflow`, `isDeferred: false`, no input, description:
-"Call this before authoring or running any Workflow script (multi-agent workflow); it asks the user how they want to proceed."
-
-```
-1 "use a workflow to review README.md with 2 haiku agents"   before_workflow first (1.3 s after the prompt)   no Skill, no Workflow before it
-2 "orchestrate 2 haiku subagents to review README.md"        before_workflow first (3.2 s)
-3 "ultracode: review README.md with 2 haiku agents"          before_workflow first (1.8 s)
-4 "use one haiku subagent to count the lines of LICENSE"     Agent directly, before_workflow not called
-```
-
-- In all three phrasings the tool was the turn's first call, ahead of `Skill(workflow-authoring)` and `Workflow`.
-  The stronger wording (`NUDGE_2` in the probe) was not needed and was not run.
-- It beat S13: the same "orchestrate subagents" phrasing that skipped the deferred tool called this one.
-- Try 4: a single subagent did not trigger it, so the wording does not fire on every delegation.
-- The spike's tool answered "stop here" and Claude stopped. Not observed: Claude going on to write the script
-  after a real answer, and whether it calls the tool again later in the same conversation.
-- One try per phrasing, each after `/clear`. Not tested: a long conversation, another model, plan mode.
-
-## S15. `$.store` and a compaction event (types; the event also seen once)
-
-(a) `$.store`: this plugin's own key-value store, a JSON file under the user's Claude Code configuration
-directory, kept between sessions and reloads.
-
-```ts
-$.store.get(key: string): Promise<unknown>           // undefined when unset
-$.store.set(key: string, value: unknown): Promise<void>
-$.store.delete(key: string): Promise<void>
-$.store.keys(): Promise<string[]>                    // insertion order
-```
-
-- **Nothing is declared in the contract.** `types/index.d.ts` and `PluginState` are for `$.state` only; the
-  store is untyped (`unknown` out), so the mod narrows what it reads.
-- Values are JSON: `get` returns `JSON.parse(JSON.stringify(value))`. `set` rejects a function, a cycle, or a
-  store over 4 MiB of JSON text in all.
-- Read from the types only; no `$.store` call was run.
-
-(b) Compaction: the event is `session.compact`. It fires before the compaction, and `await next(e)` resolves
-once it is done, so one hook sees both sides.
-
-```ts
-type SessionCompactInput = {
-  trigger: 'manual' | 'auto' | 'plugin' | 'precompute'  // matcher key; 'precompute' installs nothing
-  agentId?: string                                      // absent for the main conversation
-  instructions?: string                                 // the text after /compact
-  messages: readonly SessionMessage[]                   // the transcript being compacted
-}
-type SessionCompactResult =
-  | { messages: readonly SessionMessage[]; tokensBefore?: number; tokensAfter?: number; usage?: ModelUsage }
-  | { skip: string }
-
-on('session.compact', async ($, e, next) => {
-  const r = await next(e)
-  if (e.trigger !== 'precompute' && e.agentId === undefined && r.skip === undefined) { /* the conversation was compacted */ }
-  return r
-})
-```
-
-Seen once, on `/compact`: `{"kind":"session.compact","trigger":"manual","messagesIn":6,"messagesOut":3,"tokensBefore":45229,"tokensAfter":3744}`.
-
-- Subagents and forks compact too (`agentId` set): filter on it.
-- Also in the types: a `session.append` row with `door: 'compaction'` (the boundary and the summary), and
-  `classic.PreCompact` / `classic.PostCompact` (`compact_summary`). Not run.
-- Not observed: `auto` and `precompute`.
-
-## S16. Where does an `Input` wrap? Only focused, and only when its own box is as wide as the pane. A label of spaces makes that a column.
-
-Probe: `/probe-wrap` in `spikes/probe/hooks/register.tsx`, a 135-cell docked pane, a value of about 200 characters, Claude Code 2.1.296.
-
-- An `Input` without the ring is always one line cut with `…`.
-- With the ring it wraps when its box spans the pane's full width: at the root, or nested in columns without a width, or in a
-  column whose `width` is the pane's or more. It then wraps at the pane's width, also when an ancestor clips it.
-- It stays one line in anything narrower: a `width` of 130, a sibling beside it in a row (`flexGrow` or not), `padding` or
-  `margin` on its parent, a border (2 cells), an `absolute` box.
-- `label` is drawn as `Label: ` before the text, and the wrapped rows hang under the text's first cell.
-- So an Input at full width whose `label` starts with N spaces wraps natively inside the cells right of N. A sibling drawn
-  after it with `position="absolute"` paints over the label's spaces. The cursor, Home / End (of the row), the arrows and
-  Backspace work across the rows.
-- Under such a label an Input without the ring is drawn broken (the label takes a second row). It is drawn in the column
-  instead (a parent with `paddingLeft`), one line; moving it between the two parents under the same `key`, on `ui.focus`,
-  keeps its text, its cursor and the ring.
-- In a row a `Text` before an Input is squeezed to nothing by a long value: it needs a box with a `width` and `flexShrink={0}`.
-- A `Client` (the graph) in the `absolute` box is drawn and takes its presses, also on the rows where it covers the
-  focused Input's label; a press on an Input in the column moves the ring to it.
-- The wrap width is the cells from the text's first to the pane's edge less 4 (the Enter mark's). Seen at 40 and at 98 cells.
-- A placeholder never wraps. Longer than the room it squeezes the label, and the field's first cell (and the cursor)
-  moves left, under whatever covers the label. It is cut to the room by the mod.
-- A column with `marginTop` below zero inside a box with `overflow="hidden"` is drawn moved up, its first rows cut:
-  how a field taller than the pane keeps its last row, and the cursor, in view.
-- With no label the text starts at the box's first cell: a full-width Input cannot be indented by one cell (the least
-  a label takes is its `: `).
-
-## S17. Does a prompt the mod submits come by the mod's own `prompt.submit` hook, and can it carry `context`? No to both.
-
-```
-$.prompt.submit (conductor): "Implement and run the \"readme-typo-check\" workflow project."
-hooks module conductor@inline prompt.submit skipped: re-entry (the plugin's own code raised it; origin conductor)
-hooks module cc-plugin-agents-md@builtin (native): prompt.submit nested in conductor
-```
-
-- `$.prompt.submit` goes through every other plugin's hooks; the whole calling module is skipped, not only the calling hook.
-- `PromptSubmitArgs` omits `context` (and `origin`, `turnId`, `wait`): hidden text cannot go with it. `asUser: true` drops the "plugin sent a message" frame.
-- Consequence: `r` cannot attach the hand-off as the prompt hook does for a typed prompt. The request names the `before_workflow` tool ("call it first") and that tool's answer is the hand-off (`handedResult`). Seen live: Claude called it, then confirmed the design and asked its questions.
-- A `command.run` answer's `context` still works for a draft (`/conductor <description>`): the brief is read on the turn the submitted prompt starts (S4).
-- `$.prompt.submit` from a `$.clock.after` callback out of a key's handler is accepted (S4's option 1, now tested).
-
-## S18. Does a mod's tree in the band (`AbovePrompt`) draw at any width, unasked? Yes. What room does it get?
-
-S18 to S22 were added on 2026-10-13: same version and surface, tmux at 80x24, 100x40, 112x40, 120x40 and 135x40,
-fullscreen layout. Method: `spikes/band/` beside Conductor (`CONDUCTOR_EXTRA_PLUGIN_DIRS=spikes/band
-scripts/dev-session.sh`, then `/band on`); its log is `.capture/band.jsonl`. No model turn was run.
-
-```
-band.render {"viewport":{"columns":80,"rows":24,"isFullscreen":true},"props":{"maxRows":6,"bodyColumns":75,"scroll":{"offset":0,"bodyRows":5}}}
-band.render {"viewport":{"columns":120,"rows":40,…},"props":{"maxRows":15,"bodyColumns":115,"scroll":{…,"bodyRows":14}}}
-band.render {"viewport":{"columns":24,"rows":40,…},"props":{"maxRows":15,"bodyColumns":19,…},"pane":{…"isPlaced":true}}   (a pane docked)
-band.render {"viewport":{"columns":80,"rows":24,…},"props":{"maxRows":2,"bodyColumns":75,…},"pane":{…}}                   (a pane inline)
-```
-
-- A hook on `ui.render` for `{ component: 'AbovePrompt' }` that returns a tree is drawn at once, at 80 columns
-  too; nothing is asked and nothing waits, unlike a pane (S12).
-- Room: `bodyColumns` is the terminal's columns less 5. `maxRows` was 6 or 7 of 24 rows and 15 of 40. A taller
-  tree is cut to `scroll.bodyRows` with `↓ n more` under it (30 filler rows at 40: 12 shown, `↓ 18 more`).
-- **Beside a docked pane the band has the transcript's column: 19 cells** (and `e.viewport.columns` is then 24,
-  the column's, not the terminal's). Nothing useful fits: pass while the pane is docked.
-- **An inline pane and the band share the bottom slot:** with the pane inline the band's `maxRows` fell from 6
-  to 2 or 3 (80x24) and from 15 to 11 (100x40). One of the two, not both.
-- Collapsed by the person (ctrl+x ctrl+a, `[-]`) the engine draws `▸ plugin panel hidden · ctrl+x ctrl+a or click
-  to show` and the mod draws nothing.
-
-## S19. What tick rate does the band keep? 30 drawings a second from the hooks module, about 21 Hz in a `Client`.
-
-```
-hook.tick {"askedMs":33,"calls":88,"elapsedMs":3002,"draws":90,"drawsHz":30}
-client    {"ev":"tick","askedMs":33,"calls":63,"elapsedMs":3013,"hz":20.9,"maxGapMs":60,"renders":63}
-```
-
-- `$.clock.every(33)` with `$.ui.invalidate('ui.render')`: every call was a drawing of the band, 30 a second.
-- A `Client` in the band asking `surface.every(33)` got 21 Hz, each tick a render, focused or not. (S6 measured
-  60 Hz in a pane at 16 ms; 16 ms was not asked here.)
-- Collapsed, the Client's ticks stop (no window was posted while hidden).
-- Both are far above what the persona needs (a beat is 300 ms).
-
-## S20. Do a band Button's hotkeys work from the prompt? A digit yes (empty prompt), a letter only once the band is focused.
-
-```
-(prompt empty, `1`)          band.press {"name":"one"}
-(prompt empty, `e`)          nothing: `e` is typed into the prompt
-(ctrl+x tab, then `e`)       band.press {"name":"expand","result":{"isPlaced":true}}
-```
-
-- A Button with `hotkey="1"` is pressed by a bare `1` in an empty prompt: no focus needed. So is every other
-  digit a Button names, which costs the person that digit as the first character of a prompt.
-- A letter hotkey needs the band to hold the keys (ctrl+x tab or a click).
-- `$.ui.open({ focus: true })` from a band Button's `onPress` placed the pane but did not give it the keys
-  (`isFocused: false`; an `m` after it was typed into the prompt). The pane's own hotkey was not reached by
-  ctrl+x tab from tmux either; not chased, Conductor's pane takes the keys its own way (the catcher).
-
-## S21. Can the mod move between pane and band? Yes: an open from a band press is placed at any width; a close gives the band its room back.
-
-```
-(80 columns)   band.press expand {"isPlaced":true}   pane.render {"placement":"inline","bodyColumns":76}
-(120 columns)  band.press expand {"isPlaced":true}   pane.render {"placement":"dock","bodyColumns":95}
-(/band min)    band.render {"viewport":{"columns":120,…},"props":{"maxRows":15,"bodyColumns":115}}
-```
-
-- The press counts as the person's: placed at 80 columns (inline) and at 120 (docked).
-- With no `columns` asked the dock left the transcript 24 cells at every width tried: body 87 at 112, 95 at
-  120, 107 at 132, 110 at 135.
-- After `$.ui.close` the band is redrawn with the terminal's width again; no call was needed for it.
-
-## S22. Does a resize redraw the band, and is an open from that drawing placed? Yes to both, from 112 columns, never asked.
-
-```
-band.render {"viewport":{"columns":112,…}}                                    (tmux resize-window -x 112, from 100)
-[DEBUG] ui.open conductor-band band-pane (unasked, 112 columns): placed
-auto.open {"columns":112,"opened":{"isPlaced":true}}    pane.render {"placement":"dock","bodyColumns":87}
-pane.render {"viewport":{"columns":100,…},"placement":"inline","bodyColumns":96}   (narrowed back to 100)
-```
-
-- Widening redraws the band with the new `viewport.columns`; narrowing redraws a placed pane with `placement:
-  'inline'`. So both directions can be acted on from a drawing: open when it would dock, close when it went inline.
-- The open was logged `unasked` and placed at 112, 132 and 135 columns, in a session that had never opened that
-  id, 12 s and 25 s after the last command. **This is not what S12 saw** (unasked waits under 144) and not what
-  the types say; S12's open came from a `tool.call` hook mid-turn. Not explained: keep the `isPlaced` check.
-- Not tried: a survey holding the band (`hasSurvey`), the main screen (not fullscreen), a kept dock width
-  narrower than the default, the desktop surface, a model turn running under the band.
-
-## Other findings
-
-- Hot reload of a `--plugin-dir` mod is not immediate when the session is idle (the watch drops to a 30 s
-  poll). `/reload-plugins` forces it. A reload restarts the module (variables reset) and remounts the Client.
-- `spikes/` is outside the root `tsconfig.json` `include`, so root `tsc` does not see it. The probe has its
-  own `tsconfig.json`: `bunx tsc -p spikes/probe`.
-- `scripts/dev-session.sh` takes `CONDUCTOR_EXTRA_PLUGIN_DIRS` (colon-separated, relative to the repo or absolute).
-- Redesign v1, Input:
-  - A focused `Input` wraps only when it has the pane's full body width; inside any narrower column it is one
-    line cut with `…` (S16). The mod first kept a field being edited to one line and drew the whole text wrapped
-    under it; it now draws the ring's field at the full width (S16).
-  - An Input opened again under the key it last submitted from, with the same `value`, was drawn empty
-    (Enter then saved an empty text). It is drawn under a new key each time it opens.
-- Redesign v1, the ring:
-  - Stop order is tree order, and an engine stop (the pane's ✕) sits before the mod's first. A `column-reverse`
-    Box puts the tree's first stop on the pane's last row: how the catcher was first placed. It is not used
-    any more: the catcher is the tree's first child, under `display="none"` (S7).
-  - Up / Down walk the ring like Shift+Tab / Tab, and a hook cannot tell them apart. It can tell where the move
-    landed: with the ring kept on one Input, the stop after it means Down and any other Up (the add list's arrows).
-  - The Left arrow on a `Button` is the engine's (`← for agents`): the conversation goes to the background, the
-    pane goes, and the debug log is no longer written. On an `Input` (empty too, cursor at the start too) it stays
-    in the field. So the ring is kept on Inputs.
-  - A `ui.focus` raised by the person for a stop that names no element cannot be given one with
-    `next({ ...e, element })`: the engine refuses it. The mod lets the move land and then moves the ring itself.
-  - A `ui.focus` hook may answer `{ deny }` without `next`: the ring stays where it was, nothing is said to the
-    person, and no stop is lit. A move that lands and is then moved back lights the stop it landed on for a frame
-    (a list's first row drawn inverse, 50 to 70 ms). The lists' arrows are refused this way; a click on a row is a
-    `ui.press`, not a `ui.focus`, and still reaches its `onPress`.
-  - A `Select` the ring opens lists its options under itself, so its row must not have a fixed height.
-- Redesign v1, the wheel: `ui.scroll` is raised for the wheel even when the tree is exactly as tall as the
-  body, with the pointer's cell (`e.pointer.row`, `.column`). Answering `{}` without `next` keeps the pane
-  still. One tmux wheel tick is `by: ±3`. A Client still gets no wheel: the hooks module sums the rows and
-  hands the sum to the Client in its props.
-- Redesign v1, the Client:
-  - On `/reload-plugins` the Client module can get one frame of props in the old shape: read props defensively.
-  - A clicked Client gets `{ key: 'W', shift: true }`, arrows, `tab`, `return`. Nothing can focus a Client
-    without a click or tell when it loses the keys, so the Client still never keeps the keyboard: after a
-    click the hooks take it back for the pane.
-- Redesign v1, tools: a tool description is cut at 4096 characters (Conductor's is 4,050: what each knob means moved to the schema's `knobs` field when `args` and `phase` took the room).
-- The dock's width is the person's once they dragged it (kept in `~/.claude.json`); the mod's `columns` is
-  only a request.
-- Spikes S9 to S15:
-  - A save of the hooks module re-raised `session.start` in a running session (the reload's `register` ran and
-    the start hook logged again), so tools registered there are registered again after a reload.
-  - A `{ deny }` from a `tool.call` hook reaches the model as the tool's error, and Claude treats instructions
-    in it as untrusted ("that text came from the tool result, not from you"). Keep a deny to a reason.
-  - A `tool.call` matcher naming the mod's own tool type-checks only once `.claude-plugin/types/claude-code-mcp/`
-    lists the tool: it is written when a hot-reloading session reloads the mod with the tool registered. Until
-    then `tsc` refuses the literal.
-  - tmux `send-keys 'long text' Enter` in one call can leave the text in the prompt box unsubmitted: send the
-    text, wait a second, then send `Enter`.
-  - "orchestrate 2 haiku subagents to …" with no word "workflow" starts real `Agent` subagents (36k to 100k
-    tokens each here before they were stopped). The probe's `blockWorkflow` switch denies `Workflow` and `Agent` for such tries.
+All seen on Claude Code 2.1.296, terminal surface, fullscreen, inside tmux; nothing here was tried elsewhere.
+agent.spawn's description is the workflow script's label, exactly.
+agentId is not on agent.spawn: it is on what await next(e) resolves to ({ model, agentId }).
+agent.spawn has no phase: e.workflow holds only runId and agentIndex.
+The spawns of one parallel batch arrive out of order.
+A workflow agent raises one turn.complete with its agentId and usage; the main loop's turn.complete has no agentId.
+The engine's token figure is the sum of all four usage counts: input, output, cache read, cache creation.
+turn.step is a streaming hook raised per model request, main loop too; its last chunk (kind stop) carries that request's usage, so the stops summed per agentId are a live total.
+A tool's input is flat on the tool.call event (e.script, no e.input); the Workflow result's fields are under r.result.
+The Workflow tool result arrives before the first agent.spawn: the run is in the background.
+transcriptDir is <projects>/<session id>/subagents/workflows/<runId>; $.fs reads it by absolute path with no permission prompt.
+journal.jsonl gets an agent's started line (label, phase) only once next(e) of its agent.spawn has resolved; agent-*.meta.json repeats it (description, workflowPhase).
+Nothing signals a run's end: no journal line, no hook event.
+$.fs has no append, and validate refuses $ passed to a helper.
+A command.run answer's context starts no turn; it is read on the next prompt, where it outweighs what was typed.
+SGR mouse sequences sent with tmux send-keys -l reach a Client (down, move, up, hover) in 1-based screen cells, one event per frame: space them 0.3 s.
+A click gives the Client the keyboard: text sent after it arrives as one key event holding the whole string, and Escape gives the keys back to the prompt with the pane left open.
+surface.every is quantized to 16 ms frames and rounds up (33 gives 48, 100 gives 112): ask for multiples of 16.
+A Button hotkey is one lowercase letter or digit, cannot see Shift, and ui.press carries no key.
+A focused Input gets every printable key with its case as a ui.input change, Enter as a submit, a burst as one change; a Button's hotkey does not fire while the ring is on an Input.
+Answering { element, value: '' } to ui.input does not empty the field; drawing the Input under a new key does, and the ring stays, kept by its place among the stops.
+A key typed in the frame an Input is drawn under a new key is dropped.
+A reused Input key brings back its old text, also from before a reload of the module.
+Changing value under a focused Input replaces its text and leaves the cursor where it was.
+An Input under a Box with display none stays a focus stop and takes keys with the terminal's cursor hidden; one pushed off-screen or clipped still shows its cursor, clamped to the edge.
+Up and Down on an Input walk the ring; Left, Right and Backspace stay in the field.
+The docked pane's background is the engine's (theme token composerSidebarBackground) and no mod can remove it; only a custom theme overrides it, with a concrete colour. The inline placement has none.
+backgroundColor takes a theme key, one outside ThemeKey too; a cell has no alpha.
+$.ui.ask works inside a tool.call hook mid-turn, and time inside a $ call is not on the hook's budget (174 s held).
+The ask dialog adds two rows of its own, Type something (the free text comes back as the answer) and Chat about this: compare the answer with the labels exactly.
+Esc and Chat about this reject with the same HooksError (<plugin>: $.ui.ask: no answer); a caught rejection does not end the turn.
+The ask is a nested tool.call of AskUserQuestion that the module's other tool.call hooks see: a catch-all must pass it through.
+An ask after await next(e) in the Workflow tool.call hook holds the turn while the run goes on: the model gets neither the tool result nor the run's completion notice until the person answers.
+return { ...r, context: [...] } from a tool.call hook reaches the model.
+Beside a docked pane the ask dialog is drawn in the transcript's 24 columns.
+A Workflow call carries script, name or scriptPath (scriptPath wins), absent when not passed; after next(e), r.result.scriptPath holds the full script in all three forms, and workflowName is meta.name.
+An open from a tool.call hook is unasked even right after a yes in $.ui.ask: placed from 144 columns, below that it waits (isPlaced false) and the person sees nothing, no ui.render raised.
+A waiting pane seats itself when the terminal reaches 144 columns and stays when narrowed, inline under 110; an open from the person's own command is placed at any width.
+The dock's width is the person's once they dragged it (dockColumns in ~/.claude.json): the mod's columns is only a request.
+Claude does not find a deferred mod tool from a plain workflow request (0 of 2); named in hidden context it loads and calls it, but only when it is heading for Workflow (2 of 3).
+A non-deferred tool whose description says to call it before authoring or running any Workflow script is the turn's first call (3 of 3), ahead of the workflow-authoring skill; a request for one subagent does not trigger it.
+$.store (get, set, delete, keys) is the plugin's own JSON store kept between sessions, untyped, 4 MiB in all; read from the types, never run.
+session.compact fires before the compaction and next(e) resolves after it; trigger is manual, auto, plugin or precompute (which installs nothing), and subagents compact too (agentId set).
+An Input without the ring is always one line cut with …; with the ring it wraps only when its box spans the pane's full width (a narrower width, a sibling in the row, padding, a border or an absolute box keep it to one line).
+An Input's label is drawn as Label: and the wrapped rows hang under the text's first cell, so a label of N spaces makes a wrapping column; the wrap width is the cells from the text's first to the pane's edge less 4.
+Under a label of spaces an Input without the ring is drawn broken; moved between two parents under the same key it keeps its text, its cursor and the ring.
+A placeholder never wraps: longer than the room it squeezes the label and moves the field's first cell left.
+In a row a Text before an Input is squeezed to nothing by a long value unless it is in a box with a width and flexShrink 0.
+A column with marginTop below zero inside overflow hidden is drawn moved up, its first rows cut.
+A sibling drawn later with position absolute paints over what is under it, and a Client there takes its presses.
+A prompt sent with $.prompt.submit skips the whole calling module (re-entry) and goes through every other plugin's hooks; it cannot carry context, and asUser true drops the plugin sent a message frame.
+$.prompt.submit from a $.clock.after callback is accepted.
+A ui.render hook for component AbovePrompt is drawn at any width, unasked: bodyColumns is the terminal's columns less 5, maxRows 6 of 24 rows and 15 of 40, a taller tree cut with ↓ n more.
+Beside a docked pane the band has 19 cells and e.viewport.columns is the transcript column's 24, not the terminal's.
+An inline pane and the band share the bottom slot: the band's maxRows falls from 6 to 2 or 3.
+Collapsed by the person (ctrl+x ctrl+a) the band draws nothing of the mod's, and a Client's ticks stop.
+In the band $.clock.every(33) with $.ui.invalidate('ui.render') gives 30 drawings a second; a Client's surface.every(33) gives 21 Hz.
+A band Button's digit hotkey fires from an empty prompt with no focus; a letter hotkey needs the band to hold the keys (ctrl+x tab or a click).
+$.ui.open({ focus: true }) from a band Button's onPress places the pane but does not give it the keys.
+An open from a band press counts as the person's and is placed at any width; with no columns asked the dock leaves the transcript 24 cells.
+A resize redraws the band, and narrowing redraws a placed pane with placement inline.
+An unasked open from a band drawing was placed from 112 columns, against the 144 seen from a tool.call hook and the types; not explained, so keep the isPlaced check.
+An idle session polls a --plugin-dir mod every 30 s; /reload-plugins forces the reload.
+A reload restarts the module, remounts the Client, raises session.start again (tools registered there are registered again) and can give the Client one frame of props in the old shape.
+An Input opened again under the key it last submitted from, with the same value, is drawn empty.
+Stop order is tree order, and the pane's own ✕ stop sits before the mod's first.
+A ui.focus hook cannot tell Up / Down from Shift+Tab / Tab, only where the move landed.
+The Left arrow on a Button is the engine's (← for agents): the conversation goes to the background, the pane goes and the debug log stops; on an Input it stays in the field.
+A ui.focus raised by the person for a stop that names no element cannot be given one with next({ ...e, element }).
+A ui.focus hook may answer { deny } without next: the ring stays and no stop is lit, where a move that lands and is moved back lights the stop for a frame.
+A click on a row is a ui.press, not a ui.focus.
+A Select lists its options under itself, so its row must not have a fixed height.
+ui.scroll is raised for the wheel even when the tree fits, with e.pointer.row and .column; answering {} without next keeps the pane still; one tmux wheel tick is by ±3; a Client gets no wheel.
+A clicked Client gets keys ({ key: 'W', shift: true }, arrows, tab, return), but nothing focuses it without a click or tells it when it loses them.
+A tool description is cut at 4096 characters.
+A { deny } from a tool.call hook reaches the model as the tool's error, and Claude treats instructions in it as untrusted.
+A tool.call matcher naming the mod's own tool type-checks only once .claude-plugin/types/claude-code-mcp/ lists it, written when a session reloads the mod with the tool registered.
+tmux send-keys with text and Enter in one call can leave the text unsubmitted: send the text, wait a second, send Enter.
+A request to orchestrate subagents with no word workflow starts real Agent subagents, not a Workflow.

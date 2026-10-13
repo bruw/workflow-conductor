@@ -1,7 +1,5 @@
-// The handoff: what `r` on the board tells Claude. It is short on purpose: the project
-// file says what the workflow does, and Claude is told to ask about what is unclear in it.
-// The one thing said here and not in the project is how a run is tied back to it (label,
-// phase, meta.name). Pure TypeScript.
+// The handoff: what `r` on the board tells Claude. Short on purpose: the project file says what the workflow
+// does, and only how a run is tied back to it (label, phase, meta.name) is said here.
 
 import { typeName, canHoldChildren, flatten, goalOf } from './model'
 import type { Project } from './model'
@@ -11,16 +9,15 @@ export type Handoff = { text: string; context: string[] }
 
 /** Outline rows the tool for Claude shows before the rest is left to the file. */
 export const OUTLINE_MAX = 34
-/** The knobs an outline row names in brackets. `condition` is not among them: an arm's condition is said before its row. */
+/** `condition` is not among them: an arm's condition is said before its row. */
 const KNOB_KEYS = ['model', 'effort', 'isolation', 'agentType', 'output', 'oncePer', 'stopCondition'] as const
 /** The most of a condition an outline row says; the file has the rest. */
 const WHEN_MAX = 72
 
 const clip = (value: string, max: number = 24): string => (value.length > max ? `${value.slice(0, max - 1)}…` : value).replace(/\s+/g, ' ')
-/** A block's name as these instructions spell it: on one line and in JSON quotes, so that no name ends its string or starts a line of its own. */
+/** On one line and in JSON quotes, so that no name ends its string or starts a line of its own. */
 const quoted = (value: string): string => JSON.stringify(value.replace(/\s+/g, ' ').trim())
 
-/** How an arm of a branch is picked, as its outline row opens: `IF no findings: `, `ELSE: `, `IF (no condition set): `; '' for any other block. */
 function armWords(project: Project, row: { node: { knobs?: { condition?: string } }; parentId: string | undefined; index: number }): string {
   const parent = row.parentId === undefined ? undefined : flatten(project).find(one => one.node.id === row.parentId)?.node
   if (parent?.type !== 'branch') return ''
@@ -30,7 +27,7 @@ function armWords(project: Project, row: { node: { knobs?: { condition?: string 
   return arms > 1 && row.index === arms - 1 ? 'ELSE: ' : 'IF (no condition set): '
 }
 
-/** One row per block, indented by nesting: `n3 agent verify "name" [output=…] (has logic)`; an arm of a branch opens with its condition, `IF no findings: n8 agent "…"`. */
+/** One row per block: `n3 agent verify "name" [output=…] (has logic)`; an arm of a branch opens with its condition. */
 export function outline(project: Project): string[] {
   const rows = flatten(project)
   const lines = rows.slice(0, OUTLINE_MAX).map(row => {
@@ -42,29 +39,21 @@ export function outline(project: Project): string[] {
   return lines.length > 0 ? lines : ['  (no blocks)']
 }
 
-/**
- * What `r` sends as the person's prompt. The sentence also tells the mod which project a prompt hands off, and it
- * names the tool whose answer is the hand-off: a prompt the mod sends carries no hidden context.
- */
+/** The sentence tells the mod which project a prompt hands off, and names the tool whose answer is the hand-off: a prompt the mod sends carries no hidden context. */
 export function handoffPrompt(name: string): string {
   return `Implement and run the "${name}" workflow project (Conductor hands it off: call ${OFFER_TOOL_FULL_NAME} first).`
 }
 
-/** The project a prompt hands off, when it opens with the hand-off sentence; null for any other prompt. */
 export function handoffTarget(text: string): string | null {
   return /^\s*Implement and run the "([a-z0-9-]+)" workflow project\b/.exec(text)?.[1] ?? null
 }
 
-/** What the review key puts in the prompt box: the chat tool hands Claude the project, the selection and the lints. */
+/** The chat tool hands Claude the project, the selection and the lints. */
 export function reviewPrompt(name: string): string {
   return `Review the "${name}" workflow project as it is on the board now (it may have changed by hand: read it, unless a Conductor note with this prompt says what changed): is the structure right for its goal, what is missing, what is wasteful? `
 }
 
-/**
- * The visible line and the hidden instructions for one project saved at `projectPath`. `scriptPath` is the project's
- * script when that file exists (`scriptFile`), null when it has none yet: with one, Claude updates it and runs it
- * in place of writing a new one, and the blocks with `match` keep the script's own labels and phase titles.
- */
+/** `scriptPath` is the project's script when that file exists: Claude updates and runs it in place of writing a new one. */
 export function buildHandoff(project: Project, projectPath: string, scriptPath: string | null): Handoff {
   const count = flatten(project).length
   // The start block is the goal and the input, not a stage: it gets no phase and no agent is labelled with it.

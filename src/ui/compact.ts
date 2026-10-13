@@ -1,7 +1,5 @@
-// The compact view: what Conductor draws in the band above the prompt while the designer is minimized, by
-// the person (`m`) or because its pane has no room for the graph and the detail pane side by side. It is
-// no small designer: the conductor, the project and the run in a few rows, the saved projects to pick from, and
-// the way back to the full screen. Pure TypeScript: no `$`, no engine imports.
+// The compact view: what the band above the prompt shows while the designer is minimized, by the person or for want of room.
+// No `$`, no engine imports.
 
 import { DOCK_MIN_TERMINAL, FULL_MIN_COLUMNS, FULL_MIN_ROWS } from '../project/session'
 
@@ -9,30 +7,25 @@ import { MINIMIZE_KEYS } from './keys'
 import { SMALL_ROWS, SMALL_W } from './persona'
 import { clip } from './text'
 
-/** Why the designer is in the band: the person put it there, or its pane could not hold it. */
 export type Minimized = 'no' | 'person' | 'auto'
 
-/** What the pane was short of when it was minimized by itself. */
 export type CompactWhy = 'narrow' | 'screen' | 'dock' | 'short'
 
-/** Where the designer is: in its pane, or in the band. Kept for the session. */
+/** Kept for the session. */
 export type Shell = { minimized: Minimized; why: CompactWhy | null }
 
 export function initialShell(): Shell {
   return { minimized: 'no', why: null }
 }
 
-/** The room a pane was drawn with, and the terminal around it. */
 export type PaneRoom = { dock: boolean; bodyColumns: number; bodyRows: number; fullscreen: boolean }
 
-/** What a pane too small for the designer is short of. */
 export function whyCompact(room: PaneRoom): CompactWhy {
   // Inline in the fullscreen layout is a terminal under DOCK_MIN_TERMINAL columns: wider, the pane is docked.
   if (!room.dock) return room.fullscreen ? 'narrow' : 'screen'
   return room.bodyColumns < FULL_MIN_COLUMNS ? 'dock' : 'short'
 }
 
-/** What the designer needs, said to someone who has the compact view in its place. */
 export const WHY_TEXT: Record<CompactWhy, string> = {
   narrow: `The full designer needs a terminal ${DOCK_MIN_TERMINAL}+ columns wide`,
   screen: `The full designer needs the fullscreen layout, or ${FULL_MIN_ROWS}+ rows above the prompt`,
@@ -40,67 +33,50 @@ export const WHY_TEXT: Record<CompactWhy, string> = {
   short: 'The full designer needs a taller terminal',
 }
 
-/** The rows a terminal must have for a docked pane to hold the designer: its own, and the prompt's under it. */
+/** The designer's rows, and the prompt's under them. */
 export const DOCK_MIN_ROWS = FULL_MIN_ROWS + 6
 
-/** Whether a pane opened in this terminal would be docked with room for the designer. */
 export function wouldDock(viewport: { columns: number; rows: number; isFullscreen?: boolean } | undefined): boolean {
   return viewport !== undefined && viewport.isFullscreen === true && viewport.columns >= DOCK_MIN_TERMINAL && viewport.rows >= DOCK_MIN_ROWS
 }
 
-/** The bar of a run's progress is this wide. */
 export const COMPACT_BAR_W = 12
-/** Cells between two names of the designs' row, and the row's label. */
 export const LIST_GAP = 2
 export const LIST_LABEL = 'Projects'
-/** The rows the band must give for the view to have its border, and the cells the border and its padding take of a row. */
+/** The rows the band must give for a border, and the cells the border and its padding take of a row. */
 export const BORDER_ROWS = SMALL_ROWS + 2
 export const BORDER_CELLS = 4
-/** The button that expands, in the pane's style: `[m] Expand`. */
 export const EXPAND_WORD = 'Expand'
 export const EXPAND_W = `[${MINIMIZE_KEYS}] ${EXPAND_WORD}`.length
 
-/** What the compact view shows. */
 export type CompactInput = {
   /** The cells and the rows the band gives (`bodyColumns`, `maxRows`). */
   columns: number
   rows: number
   shell: Shell
-  /** The project that is open, or null with none. */
   name: string | null
   /** `agents ≥ 8`, where the project has blocks to count. */
   facts: string | null
   goal: string
-  /** The run: its progress as a bar and in words, or null with none tracked. */
   run: { bar: string; text: string; color: 'claude' | 'success' | 'error' } | null
-  /** The saved projects, by name. */
   saved: readonly string[]
 }
 
-/** One row of the projects: the names shown, the one that is open, how many are left out. */
 export type CompactList = { names: string[]; current: string | null; more: number }
 
-/** The compact view as its parts: which are drawn follows the rows the band gives. */
 export type CompactView = {
-  /** One row only: the name and the run on the same line, no conductor. */
   oneLine: boolean
   name: string
   facts: string | null
   state: string
-  /** The last row: the run, else the goal, else what to do with no project open. The button that expands is at its right. */
+  /** The last row: the run, else the goal, else what to do with no project open. */
   status: { bar: string | null; text: string; color: 'claude' | 'success' | 'error' | null }
-  /** The second row, where there are rows for it: the saved projects. */
   list: CompactList | null
-  /** Whether the view has its border: from `BORDER_ROWS` rows. */
   bordered: boolean
-  /** The rows the view takes. */
   taken: number
 }
 
-/**
- * The names that fit one row of `room` cells after its label, in their own order (a pick moves none of them): from
- * the first, and where the open one is past the last that fits, from as far on as shows it.
- */
+/** Names keep their own order: from the first, or from as far on as shows the open one. */
 export function compactList(saved: readonly string[], current: string | null, room: number): CompactList | null {
   if (saved.length === 0) return null
   const fitFrom = (from: number): string[] => {
@@ -129,7 +105,6 @@ export function compactView(input: CompactInput): CompactView {
   const rows = Math.max(1, input.rows)
   const state = run !== null ? '' : shell.minimized === 'person' ? 'MINIMIZED' : 'COMPACT VIEW'
   const name = input.name ?? 'no project open'
-  // Minimized for want of room, the row says what the designer needs.
   const why = shell.minimized === 'auto' && shell.why !== null ? WHY_TEXT[shell.why] : null
   const text = run !== null ? run.text : why !== null ? why : input.name === null ? 'pick one above · /conductor <what you want> has Claude draft one' : input.goal === '' ? 'Goal: not said yet' : `Goal: ${input.goal}`
   const status = { bar: run?.bar ?? null, text, color: run?.color ?? null }

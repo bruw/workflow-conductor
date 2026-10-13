@@ -12,7 +12,6 @@ test('ease is clamped to 0..1, rises all the way, and is fastest at first', () =
     expect(ease(step / 10)).toBeGreaterThan(last)
     last = ease(step / 10)
   }
-  // Ease-out: past halfway by the middle.
   expect(ease(0.5)).toBeGreaterThan(0.5)
 })
 
@@ -51,7 +50,6 @@ test('row offsets are whole rows that decay to zero and stay there', () => {
 
 test('stepMotion starts a tween for each row whose line changed, and only those', () => {
   const first = stepMotion(stillMotion(), { a: 0, b: 1, c: 2 }, 0)
-  // Rows seen for the first time appear in place.
   expect(first.tweens).toEqual({})
   expect(motionActive(first, 0)).toBe(false)
   expect(stepMotion(first, { a: 0, b: 1, c: 2 }, 16)).toBe(first)
@@ -62,7 +60,6 @@ test('stepMotion starts a tween for each row whose line changed, and only those'
   expect(rowOffsets(moved, 100)).toEqual({ c: 2, a: -1, b: -1 })
   expect(motionActive(moved, 100)).toBe(true)
 
-  // A new row and the pinned row do not tween.
   const pinned = stepMotion(first, { c: 0, a: 1, b: 2, d: 3 }, 100, 'c')
   expect(Object.keys(pinned.tweens).sort()).toEqual(['a', 'b'])
 })

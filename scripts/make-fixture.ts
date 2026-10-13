@@ -1,20 +1,6 @@
 #!/usr/bin/env bun
-// Converts a real workflow transcript directory into a content-free fixture.
-//
-//   bun scripts/make-fixture.ts <transcriptDir> <name>
-//
-// <transcriptDir> is ~/.claude/projects/<proj>/<session>/subagents/workflows/wf_<id>.
-// Writes fixtures/<name>.journal.jsonl and fixtures/<name>.metas.json, plus fixtures/<name>.ts
-// carrying the same two as exports: the plugin test runner only loads code files and
-// refuses node:fs, so tests import the .ts mirror.
-//
-// Kept: type, agentId, label, phase, a shortened key. Every `result` payload becomes
-// `true` (or stays `null`), and metas are reduced to { description, workflowPhase }, so
-// nothing an agent read or wrote in the source project reaches this repo.
-//
-// The committed fixtures were made from:
-//   review-41   wf_f8a8409b-dd4  (41 agents, all finished)
-//   partial-29  wf_35283561-d5a  (29 agents, 3 never reported a result)
+// Converts a real workflow transcript directory into a content-free fixture: nothing an agent read or wrote there reaches this repo.
+//   bun scripts/make-fixture.ts <transcriptDir> <name>   (<transcriptDir>: ~/.claude/projects/<proj>/<session>/subagents/workflows/wf_<id>)
 
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -74,6 +60,7 @@ const journal = lines.join('\n') + '\n'
 const metasJson = JSON.stringify(metas, null, 2)
 writeFileSync(join(out, `${name}.journal.jsonl`), journal)
 writeFileSync(join(out, `${name}.metas.json`), metasJson + '\n')
+// The plugin test runner loads code files only and refuses node:fs, so tests import this .ts mirror of the two.
 writeFileSync(
   join(out, `${name}.ts`),
   [

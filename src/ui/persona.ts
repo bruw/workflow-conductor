@@ -1,11 +1,5 @@
-// The Conductor persona: its four poses as pixels, the ensemble of the splash,
-// its head and arms redrawn small for the header, and the two paints:
-// half-blocks for the splash, octants for the header.
-// Pure TypeScript: no `$`, no engine imports; time is a beat handed in.
-//
-// The pixels are read off docs/redesign-v1/claude-conductor-persona-assets
-// (one pixel of the source's grid each). A pixel is half a cell tall, so a
-// sprite of 28 rows is drawn on 14.
+// The Conductor persona: its poses as pixels, the splash's ensemble, the header's small one, and the two paints
+// (half-blocks for the splash, octants for the header). No `$`, no engine imports; time is a beat handed in.
 
 import { flatten } from '../project/model'
 import type { Project } from '../project/model'
@@ -15,9 +9,9 @@ export type Pose = 'idle' | 'ready' | 'conducting' | 'complete'
 /** Rows of pixels: `#` the body, `o` chalk (eyes, collar, tie), `h` a hand, a space nothing. */
 type Sprite = readonly string[]
 
-/** The theme keys nearest the source's own colours (`#d46944`, `#f1ebe1`, `#f9855e`) in the dark theme. */
+/** The theme keys nearest the persona's own colours (`#d46944`, `#f1ebe1`, `#f9855e`) in the dark theme. */
 const INK: Record<string, string> = { '#': 'clawd_body', o: 'text', h: 'rainbow_orange' }
-/** The same inks where a picture is drawn: an SVG's paint is a CSS colour, and no theme key is one. The source's own. */
+/** The persona's own colours, for an SVG: its paint is a CSS colour, and no theme key is one. */
 const SVG_INK: Record<string, string> = { '#': '#d46944', o: '#f1ebe1', h: '#f9855e' }
 
 export type PersonaSpan = { text: string; color?: string; ground?: string }
@@ -25,7 +19,7 @@ export type PersonaSpan = { text: string; color?: string; ground?: string }
 const HEAD = ['     #########', '     #########', '     #########', '     #########', '     ##o###o##', '     #########', '     #########', '     #########'] as const
 const LEGS = ['       ## ##', '       ## ##', '       ## ##', '       ## ##', '      ### ###', '     #### ####'] as const
 
-/** The four poses, 26 pixels wide, feet on the last row of each. */
+/** Feet on the last row of each. */
 const FULL: Record<Pose, Sprite> = {
   idle: [
     ...HEAD,
@@ -110,11 +104,7 @@ const FULL: Record<Pose, Sprite> = {
 export const FULL_W = 26
 export const FULL_H = 28
 
-/**
- * The header's persona: the conductor from the chest up (head, neck, both
- * arms, baton), redrawn eight pixels tall, so two rows of octants. It has
- * three states, the arms up in each; the bow is drawn as the one at rest.
- */
+/** The header's persona is the conductor from the chest up, eight pixels tall: two rows of octants. The bow is drawn as the one at rest. */
 const REST: Sprite = [
   '      #####',
   '      #####      #',
@@ -150,26 +140,25 @@ const SMALL: Record<Pose, Sprite> = {
   complete: REST,
 }
 
-/** Pixels across the header's persona; its cells with a gap after them; its rows. */
+/** `SMALL_W` is its cells and a gap after them. */
 const SMALL_PX = 18
 export const SMALL_W = SMALL_PX / 2 + 1
 export const SMALL_ROWS = 2
 
-/** The poses in the order the header's persona goes through them, a step to a key that moves the selection. */
+/** The header's persona steps through these, one to a key that moves the selection. */
 const POSES: readonly Pose[] = ['idle', 'ready', 'conducting']
 
-/** The pose after this one; after the last, the first. */
 export function nextPose(pose: Pose): Pose {
   return POSES[(POSES.indexOf(pose) + 1) % POSES.length] ?? 'idle'
 }
 
-/** One of the ensemble, at rest and with its arms up. */
+/** One of the ensemble: at rest, and with its arms up. */
 const AGENT: readonly Sprite[] = [
   [' #####', ' #o#o#', ' #####', '  ###', ' #####', '  # #', '  # #'],
   [' #####', ' #o#o#', ' #####', '# ### #', ' #####', '  # #', '  # #'],
 ]
 
-/** Where the ensemble stands, as pixels from the scene's left and top: an arc at each side of the conductor. */
+/** Pixels from the scene's left and top: an arc at each side of the conductor. */
 const SEATS: readonly { x: number; y: number }[] = [
   { x: 13, y: 2 },
   { x: 3, y: 11 },
@@ -182,16 +171,13 @@ const SCENE_W = 77
 const SCENE_H = 30
 const CONDUCTOR_X = 26
 
-/** The splash: this many beats of this many ms each. */
 export const SPLASH_BEATS = 6
 export const BEAT_MS = 300
 export const SPLASH_MS = SPLASH_BEATS * BEAT_MS
-/** What the conductor does on each beat: the cue, two bars, the bow. */
+/** The cue, two bars, the bow. */
 const SCORE: readonly Pose[] = ['idle', 'ready', 'conducting', 'ready', 'conducting', 'complete']
-/** Rows the splash's scene takes, with the ensemble and without it. */
 export const SCENE_ROWS = SCENE_H / 2
 export const SOLO_ROWS = FULL_H / 2
-/** The scene is drawn with its ensemble from this many columns. */
 export const SCENE_COLUMNS = SCENE_W
 
 type Canvas = string[][]
@@ -200,7 +186,6 @@ function blankCanvas(width: number, height: number): Canvas {
   return Array.from({ length: height }, () => Array.from({ length: width }, () => ' '))
 }
 
-/** Puts a sprite on the canvas, its top-left pixel at `x`, `y`; what falls outside is left out. */
 function stamp(canvas: Canvas, sprite: Sprite, x: number, y: number): void {
   sprite.forEach((row, j) => {
     for (let i = 0; i < row.length; i++) {
@@ -212,7 +197,6 @@ function stamp(canvas: Canvas, sprite: Sprite, x: number, y: number): void {
   })
 }
 
-/** The canvas as rows of spans: two rows of pixels to a row of cells, runs of one look joined. */
 function paint(canvas: Canvas): PersonaSpan[][] {
   const out: PersonaSpan[][] = []
   for (let y = 0; y < canvas.length; y += 2) {
@@ -232,11 +216,7 @@ function paint(canvas: Canvas): PersonaSpan[][] {
   return out
 }
 
-/**
- * The block for each set of a cell's eight pixels: bit `2 * row + column` is
- * the pixel at that place. Unicode 16's octants, in the order of their bits,
- * less the 26 sets that had a block before them.
- */
+/** Indexed by a cell's eight pixels: bit `2 * row + column` is the pixel at that place. Unicode 16's octants in the order of their bits, less the 26 sets that had a block before them. */
 const OCTANT: readonly string[] = (() => {
   const older: Record<number, string> = {
     0: ' ', 255: '█', 15: '▀', 240: '▄', 85: '▌', 170: '▐', 192: '▂', 252: '▆',
@@ -248,10 +228,7 @@ const OCTANT: readonly string[] = (() => {
   return Array.from({ length: 256 }, (_, bits) => older[bits] ?? String.fromCodePoint(next++))
 })()
 
-/**
- * The canvas as rows of spans, eight pixels to a cell. A cell has two colours
- * at most: with a third look in it, the fewest pixels take their neighbour's.
- */
+/** Eight pixels to a cell. A cell has two colours at most: with a third look in it, the fewest pixels take their neighbour's. */
 function paintFine(canvas: Canvas): PersonaSpan[][] {
   const out: PersonaSpan[][] = []
   for (let y = 0; y < canvas.length; y += 4) {
@@ -279,24 +256,21 @@ function paintFine(canvas: Canvas): PersonaSpan[][] {
   return out
 }
 
-/** Rows of pixels in the persona's inks, painted as the splash is: for what stands beside it. */
 export function paintPixels(pixels: readonly (readonly string[])[]): PersonaSpan[][] {
   return paint(pixels.map(row => [...row]))
 }
 
-/** The header's persona in a pose: `SMALL_ROWS` rows, `SMALL_W` cells each. */
 export function smallPersona(pose: Pose): PersonaSpan[][] {
   const canvas = blankCanvas(SMALL_W * 2, SMALL_ROWS * 4)
   stamp(canvas, SMALL[pose] ?? SMALL.idle, 0, 0)
   return paintFine(canvas)
 }
 
-/** CSS pixels to a pixel of the header's persona where it is drawn as a picture: two rows of text tall, narrower than its cells. */
+/** CSS pixels to a pixel: two rows of text tall, narrower than its cells. */
 const SVG_SCALE = 4
 export const SMALL_SVG_W = SMALL_PX * SVG_SCALE
 export const SMALL_SVG_H = SMALL_ROWS * 4 * SVG_SCALE
 
-/** The header's persona in a pose as an SVG document, for a surface that draws one: the same pixels, a rect to each run of one look. */
 export function smallPersonaSvg(pose: Pose): string {
   const rects: string[] = []
   ;(SMALL[pose] ?? SMALL.idle).forEach((row, y) => {
@@ -312,7 +286,6 @@ export function smallPersonaSvg(pose: Pose): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SMALL_PX} ${SMALL_ROWS * 4}" width="${SMALL_SVG_W}" height="${SMALL_SVG_H}" shape-rendering="crispEdges">${rects.join('')}</svg>`
 }
 
-/** The conductor alone in a pose, feet on the last row: `SOLO_ROWS` rows, `FULL_W` cells each. */
 export function fullPersona(pose: Pose): PersonaSpan[][] {
   const canvas = blankCanvas(FULL_W, FULL_H)
   const sprite = FULL[pose] ?? FULL.idle
@@ -320,11 +293,7 @@ export function fullPersona(pose: Pose): PersonaSpan[][] {
   return paint(canvas)
 }
 
-/**
- * The splash on a beat: the conductor, and where there is room for it the
- * ensemble around, each half of it rising on its own beat and all of it on the
- * last. Returns the rows and how wide they are.
- */
+/** With room for it, the ensemble stands around: each half rises on its own beat, all of it on the last. */
 export function splashScene(beat: number, columns: number, rows: number): { lines: PersonaSpan[][]; width: number } {
   const at = Math.max(0, Math.min(SPLASH_BEATS - 1, Math.trunc(beat)))
   const pose = SCORE[at] ?? 'idle'
@@ -339,7 +308,7 @@ export function splashScene(beat: number, columns: number, rows: number): { line
   return { lines: paint(canvas), width: SCENE_W }
 }
 
-/** The splash while a draft is awaited: its two bars, round and round, for as long as that takes. `beat` only grows. */
+/** The splash while a draft is awaited: its two bars, round and round. `beat` only grows. */
 export function waitScene(beat: number, columns: number, rows: number): { lines: PersonaSpan[][]; width: number } {
   return splashScene(1 + (Math.max(0, Math.trunc(beat)) % 2), columns, rows)
 }
@@ -349,7 +318,6 @@ export function draftPose(beat: number): Pose {
   return Math.max(0, Math.trunc(beat)) % 2 === 0 ? 'conducting' : 'ready'
 }
 
-/** The beat the splash is on, `ms` after it began. */
 export function beatAt(ms: number): number {
   return Math.max(0, Math.min(SPLASH_BEATS - 1, Math.floor(ms / BEAT_MS)))
 }
@@ -357,11 +325,7 @@ export function beatAt(ms: number): number {
 /** How long the header's persona holds a gesture before it is at rest again. */
 export const GESTURE_MS = 900
 
-/**
- * What a change to the project calls for: the cue (`ready`) for a block added,
- * the downbeat (`conducting`) for blocks that changed place; null for any
- * other change.
- */
+/** The cue (`ready`) for a block added, the downbeat (`conducting`) for blocks that changed place; null for any other change. */
 export function gestureOf(before: Project | null, after: Project | null): Pose | null {
   if (!before || !after || before === after) return null
   const was = flatten(before)
@@ -376,7 +340,6 @@ export function gestureOf(before: Project | null, after: Project | null): Pose |
   return now.every(row => ids.has(row.node.id)) ? 'conducting' : null
 }
 
-/** The pose while a run is laid over the project: the bars of it while it runs, the bow once it is done. */
 export function runPose(status: 'idle' | 'running' | 'done' | 'failed', clockMs: number): Pose | null {
   if (status === 'running') return Math.floor(clockMs / (BEAT_MS * 2)) % 2 === 0 ? 'conducting' : 'ready'
   if (status === 'done') return 'complete'

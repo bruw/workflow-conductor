@@ -1,25 +1,6 @@
 #!/usr/bin/env bun
-// Prints the graph of a project as the pane would paint it, so its look can be
-// reviewed with no live session.
-//
-//   bun scripts/render-graph.ts <template | project.json | stress case> [options]
-//
-//   --cols N        columns of the graph (default 120)
-//   --rows N        rows of the window (default 45)
-//   --select id     the selected block
-//   --view id       the container opened as the view
-//   --scroll id=n   a carousel's first arm (may be given more than once)
-//   --open p:i      the place whose add list is open: `n4:1`, or `top:0`
-//   --hover p:i     the place whose `[+]` the pointer is on
-//   --quiet         the pane does not hold the keyboard
-//   --pan N         the first row shown (default: the one that shows the selection)
-//   --full          the whole graph, whatever its height
-//   --run           a made-up finished run laid over it
-//   --no-lints      no problem marks (default: the project's real lints, by block)
-//   --ansi          colours, mapped from the theme keys
-//   --list          the names that can be rendered
-//
-// Templates: review, research, migrate, judge-panel. Stress cases: see STRESS below.
+// Prints the graph of a project as the pane would paint it, so its look can be reviewed with no live session.
+//   bun scripts/render-graph.ts <template | project.json | stress case> [options]   (no argument: prints the names and the options)
 
 import { readFileSync } from 'node:fs'
 import { lint } from '../src/project/lints'
@@ -88,7 +69,6 @@ export const STRESS: Record<string, () => Project> = {
       ]),
       node('n14', 'agent', 'report', 'Write up what was found, per area.', {}),
     ]),
-  /** The mock-up's case: a branch of three arms with a `condition`, one not set, one arm a loop holding an agent. */
   'branch-when': () =>
     project('research-answer', 'Answer a question from many sources: search, read, check gaps, write up.', [
       node('n1', 'pipeline', 'Deep read', '', { oncePer: 'deduped sources' }, [
@@ -165,7 +145,6 @@ function load(name: string): Project {
   return parsed.project
 }
 
-/** A finished run in which every leaf but the last got agents, and one of them failed. */
 function fakeRun(made: Project): RunOverlay {
   const byNode: Record<string, NodeRun> = {}
   const leaves = flatten(made).filter(row => row.node.children === undefined)

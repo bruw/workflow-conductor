@@ -1,6 +1,5 @@
-// Advisory lints over a Project. Every rule is structural: it reads what blocks
-// there are, where they stand and which fields are empty, never the words or
-// the numbers typed into a field. Lints never block anything.
+// Advisory lints over a Project. Every rule is structural: it reads what blocks there are, where they stand and
+// which fields are empty, never the words or the numbers typed into a field. Lints never block anything.
 
 import { KINDS, blockCount, typeName, canHoldChildren, flatten, kindOf, walk } from './model'
 import type { Project, ProjectNode } from './model'
@@ -9,7 +8,6 @@ import { KIND_TEACH, SELF_BRIEFED, VOTING_KINDS, placeholderOf } from './teach'
 export type LintRule =
   | 'loop-unbounded'
   | 'code-input-no-output'
-  // structural: what a block is missing to mean anything
   | 'agent-no-brief'
   | 'verify-nothing-before'
   | 'single-branch'
@@ -23,27 +21,24 @@ function blank(text: string | undefined): boolean {
   return text === undefined || text.trim() === ''
 }
 
-/** Whether a block is an agent that has to be told its task: every agent but the kinds whose name is the task. */
 export function needsBrief(node: Pick<ProjectNode, 'type' | 'kind'>): boolean {
   return node.type === 'agent' && !(node.kind !== undefined && SELF_BRIEFED.includes(node.kind))
 }
 
-/** Whether a loop has to say when it stops: every loop but the kind `dry`, whose pattern is its bound. */
+/** The kind `dry` is exempt: its pattern is its bound. */
 export function needsStop(node: Pick<ProjectNode, 'type' | 'kind'>): boolean {
   return node.type === 'loop' && node.kind !== 'dry'
 }
 
-/** A stop condition to name as the example, by the loop's kind: what the kind fills in. */
 const LOOP_STOPS: Readonly<Record<string, string | undefined>> = Object.fromEntries(KINDS.loop.map(kind => [kind, KIND_TEACH[kind].fill?.stopCondition]))
 
-// The node whose output a sibling placed right after `node` receives: the
-// node itself, or the last stage of a pipeline, parallel, sweep or loop.
+// The node whose output a sibling placed right after `node` receives: itself, or the last stage of a container that is no branch.
 function producer(node: ProjectNode): ProjectNode {
   const last = node.children?.at(-1)
   return last && node.type !== 'branch' ? producer(last) : node
 }
 
-// Every node whose output that sibling receives: each arm of a parallel hands its own on, the rest as `producer`.
+// As `producer`, but each arm of a parallel hands its own output on.
 function producers(node: ProjectNode): ProjectNode[] {
   if (node.type === 'parallel' && (node.children?.length ?? 0) > 0) return (node.children ?? []).flatMap(producers)
   const last = node.children?.at(-1)
@@ -53,13 +48,8 @@ function producers(node: ProjectNode): ProjectNode[] {
 /** Containers whose blocks run one after the other: a block in one receives what the block before it made. */
 const CHAINS: readonly string[] = ['pipeline', 'loop', 'phase']
 
-/**
- * Whether anything reaches `node` to work on. It does when a block stands before
- * it in a chain (its own, or any chain around it), when a container around it
- * fans out over items, or when it sits in a loop beside other blocks (the round
- * before feeds it). The top level is a chain. The `start` block is not a block
- * before it: it says the goal and the args, and makes no result to check.
- */
+// Whether anything reaches `node` to work on: a block before it in a chain around it, a fan-out over items, or the
+// round before in a loop. The `start` block is no block before it: it makes no result to check.
 function hasInput(project: Project, id: string): boolean {
   const rows = flatten(project)
   let row = rows.find(one => one.node.id === id)
@@ -83,16 +73,10 @@ export function lint(project: Project): Lint[] {
     const siblings = info.parent?.children ?? project.nodes
     const previous = siblings[info.index - 1]
 
-    // 0. A project that says no goal. Structural: the `start` block with an empty `goal`.
-    // The graph writes `Goal [not set]` on the same block.
     if (node.type === 'start' && blank(node.knobs?.goal)) {
       lints.push({ nodeId: node.id, rule: 'start-no-goal', message: 'the workflow has no goal: say in goal what it is for, in a sentence; Claude writes the script, and reviews the project, against it' })
     }
 
-    // 1, 2. (Barrier not needed, worktree on a reader: gone, they guessed from the words of a block.)
-
-    // 3. Unbounded loop. Structural: a `loop` with an empty `stopCondition`.
-    // The kind `dry` is exempt: the pattern is its bound.
     if (needsStop(node) && blank(node.knobs?.stopCondition)) {
       const stops = kindOf(node)
       lints.push({
@@ -102,9 +86,7 @@ export function lint(project: Project): Lint[] {
       })
     }
 
-    // 4. Code fed by free text. Structural: a `code` node whose previous sibling
-    // is an `agent` with no `output` knob, or a container (not a branch) whose
-    // last stage is such an agent (of a parallel: any arm's). The lint lands on the agent.
+    // The lint lands on the agent, not on the code block.
     if (node.type === 'code' && previous) {
       for (const source of producers(previous)) {
         if (source.type !== 'agent' || !blank(source.knobs?.output)) continue
@@ -116,11 +98,6 @@ export function lint(project: Project): Lint[] {
       }
     }
 
-    // 5. (Fan-out over the cap: gone, it read a number out of `oncePer`.)
-
-    // 6. An agent nobody briefed. Structural: an `agent` block with neither
-    // notes nor a prompt knob. Its title is all Claude has to write a prompt from.
-    // The kinds whose name is the brief (verify, judge, critic) are left alone.
     if (needsBrief(node) && blank(node.logic) && blank(node.knobs?.prompt)) {
       lints.push({
         nodeId: node.id,
@@ -129,9 +106,6 @@ export function lint(project: Project): Lint[] {
       })
     }
 
-    // 7. (A vote with no count: gone with the `votes` knob. The numbers after it stay.)
-
-    // 8. A verify with nothing to verify. Structural: see `hasInput`.
     if (node.kind === 'verify' && !hasInput(project, node.id)) {
       lints.push({
         nodeId: node.id,
@@ -140,11 +114,7 @@ export function lint(project: Project): Lint[] {
       })
     }
 
-    // 9. One block side by side with nothing. Structural: a `parallel` holding
-    // exactly one block, where neither it nor that block states a fan-out (one
-    // block run once per item is a real use of it). A plain parallel is told to
-    // add the other blocks; one of a kind that runs its block several times
-    // (each, sweep, attempts) only lacks what it runs once per.
+    // One block run once per item is a real use of a parallel: only one that states no fan-out is told.
     const only = node.children?.length === 1 ? node.children[0] : undefined
     if (node.type === 'parallel' && only && blank(node.knobs?.oncePer) && blank(only.knobs?.oncePer)) {
       lints.push({
@@ -157,13 +127,8 @@ export function lint(project: Project): Lint[] {
       })
     }
 
-    // 10. A loop nothing decides. Structural: the last block of a round (the
-    // last stage, followed into containers) is what the stop test reads. The
-    // lint fires when that block is an agent with no `output` (free text: the
-    // stop condition has nothing exact to test), or when it is a critic and
-    // the loop states no stop condition (its gaps start another round, every round).
-    // A round that ends in `code`, a `branch` or a subworkflow is left alone, and so is
-    // a loop of kind `count` or `budget`: its stop test reads no block's result.
+    // The last block of a round is what the stop test reads. A round that ends in code, a branch or a subworkflow is
+    // left alone, and so is a loop of kind `count` or `budget`: its stop test reads no block's result.
     if (node.type === 'loop' && node.kind !== 'count' && node.kind !== 'budget' && (node.children?.length ?? 0) > 0) {
       const last = producer(node)
       const free = last.type === 'agent' && blank(last.knobs?.output)
@@ -179,10 +144,7 @@ export function lint(project: Project): Lint[] {
       }
     }
 
-    // 11. An arm nothing picks. Structural: a block directly in a `branch` with
-    // no `condition`, unless it is the last of several arms (the else). The graph
-    // writes `IF [not set]` on the same arms.
-    // A guard has one arm by design: it is not told to add another.
+    // The last of several arms is the else and needs no condition. A guard has one arm by design.
     const arms = info.parent?.type === 'branch' ? siblings.length : 0
     if (arms > 0 && blank(node.knobs?.condition) && (info.index < arms - 1 || arms === 1)) {
       lints.push({
@@ -201,14 +163,9 @@ export function lint(project: Project): Lint[] {
   return lints
 }
 
-// ---------------------------------------------------------------------------
 // Preflight: what a project implies before it is handed off
 
-/**
- * The fewest agents a block implies: one per agent block, the cheapest arm of a branch (none where it has one arm, which may not run). Nothing typed
- * into a field is read for a count: what a block runs once per, its votes and a loop's rounds are words
- * for Claude, so a block that may run more than once counts once and makes the sum a floor (`unknownsOf`).
- */
+/** A floor: nothing typed into a field is read for a count, so a block that may run more than once counts once (`unknownsOf`). */
 function leastAgents(node: ProjectNode): number {
   if (canHoldChildren(node.type)) {
     const kids = (node.children ?? []).map(leastAgents)
@@ -218,10 +175,10 @@ function leastAgents(node: ProjectNode): number {
   return node.type === 'agent' ? 1 : 0
 }
 
-/** Why the count of agents is only a floor: how many blocks of each type that may run its agents more than once, and how many branches whose arm picked decides the count. */
+/** Why the count of agents is only a floor: the blocks that may run their agents more than once, by type. */
 export type Unknowns = { fanouts: number; loops: number; votes: number; subworkflows: number; branches: number }
 
-/** By type and kind alone: a pipeline or a parallel may fan out, a loop repeats, a verify or a judge votes, a subworkflow starts its own; and a branch whose arms do not all start as many agents (its one arm, against none). */
+/** A branch counts when its arms do not all start as many agents (its one arm, against none). */
 function unknownsOf(project: Project): Unknowns {
   const out: Unknowns = { fanouts: 0, loops: 0, votes: 0, subworkflows: 0, branches: 0 }
   for (const { node } of flatten(project)) {
@@ -237,20 +194,16 @@ function unknownsOf(project: Project): Unknowns {
 
 export type Preflight = { blocks: number; agents: number; lintIds: string[]; unknowns: Unknowns }
 
-/** What a hand-off is about to start: how many blocks, the fewest agents they imply (and what makes the real count larger), and which blocks a lint stands on. */
 export function preflight(project: Project): Preflight {
   return { blocks: blockCount(project), agents: project.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lintIds: lintIds(lint(project)), unknowns: unknownsOf(project) }
 }
 
-/** The agents a project starts, as a count: `agents = 3` where every block runs once, `agents ≥ 12` where the number is only the fewest. */
+/** `agents = 3` where every block runs once, `agents ≥ 12` where the number is only the fewest. */
 export function agentsCount(agents: number, unknowns: Unknowns): string {
   return `agents ${unknowns.fanouts + unknowns.loops + unknowns.votes + unknowns.subworkflows + unknowns.branches > 0 ? '≥' : '='} ${agents}`
 }
 
-/**
- * The agents a project starts, as far as the drawing says. Every block runs once: `agents = 3`. Otherwise the
- * floor is marked as one and the reason follows: `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats)`.
- */
+/** `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats)`. */
 export function agentsText(agents: number, unknowns: Unknowns): string {
   const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`
   const why = [
@@ -263,7 +216,7 @@ export function agentsText(agents: number, unknowns: Unknowns): string {
   return `${agentsCount(agents, unknowns)}${why.length === 0 ? '' : ` (more: ${why.join(', ')})`}`
 }
 
-/** The fields of its block a problem is about: the detail pane marks the ones that are not set. */
+/** The detail pane marks the ones that are not set. */
 export function problemFields(rule: LintRule): string[] {
   if (rule === 'agent-no-brief') return ['logic', 'prompt']
   if (rule === 'loop-unbounded' || rule === 'loop-no-decider') return ['stopCondition']
@@ -273,7 +226,6 @@ export function problemFields(rule: LintRule): string[] {
   return []
 }
 
-/** The blocks that carry a lint, each once, in the order the lints were raised. */
 export function lintIds(lints: readonly Lint[]): string[] {
   return [...new Set(lints.map(one => one.nodeId))]
 }
@@ -281,10 +233,7 @@ export function lintIds(lints: readonly Lint[]): string[] {
 /** How many block ids a preflight line names before it says `…`. */
 export const LINT_IDS_MAX = 6
 
-/**
- * `agents = 3 · problems in n3, n5`, or `agents ≥ 12 (more: …)` where a block may run more than once; the
- * blocks that have a problem are named, and nothing is said of problems where there are none. It informs; nothing is blocked.
- */
+/** `agents = 3 · problems in n3, n5`; nothing is said of problems where there are none. */
 export function preflightLine(project: Project): string {
   const { agents, lintIds: ids, unknowns } = preflight(project)
   const named = `${ids.slice(0, LINT_IDS_MAX).join(', ')}${ids.length > LINT_IDS_MAX ? ', …' : ''}`

@@ -5,8 +5,7 @@ import type { RunEvent } from './events'
 import { journalToEvents } from './journal'
 import type { AgentMeta } from './journal'
 
-// Dev aid: turns a recorded journal into the event list of a whole run, so the pane can
-// be driven without a real workflow.
+// Dev aid: turns a recorded journal into a whole run's events, so the pane can be driven without a real workflow.
 
 export type ReplayFixture = { journal: string; metas: Record<string, AgentMeta> }
 
@@ -18,11 +17,7 @@ export function replayTokens(agentId: string): number {
   return 1200 + hash
 }
 
-/**
- * The events of a replayed run: a named `run-start`, the journal's events with made-up
- * token counts on each `agent-end`, and a `run-end`. A recording that stops with agents open
- * is an interrupted run: those agents end failed, and so does the run.
- */
+/** A recording that stops with agents open is an interrupted run: those agents end failed, and so does the run. */
 export function replayEvents(name: string, fixture: ReplayFixture): RunEvent[] {
   const runId = `replay:${name}`
   const events: RunEvent[] = [{ kind: 'run-start', runId, name }]
@@ -45,7 +40,6 @@ export function replayEvents(name: string, fixture: ReplayFixture): RunEvent[] {
   return events
 }
 
-/** How many of `total` events are due once `step` of `steps` equal steps have passed. */
 export function replayDue(total: number, step: number, steps: number): number {
   if (steps <= 0 || step >= steps) return total
 
@@ -55,17 +49,11 @@ export function replayDue(total: number, step: number, steps: number): number {
 /** Labels of the agents a project replay adds that no node of the project claims. */
 export const REPLAY_STRAYS = ['fix lint', 'stray check'] as const
 
-/** How many agents a project replay gives a leaf: 2 to 4, by its id. */
 function replayAgents(id: string): number {
   return 2 + (idNumber(id) % 3)
 }
 
-/**
- * A made-up run of a project, for the overlay: several agents per leaf node, labelled
- * `<nodeId>: <title> <k>` as a handed-off script would, node after node; one agent
- * fails; two more carry labels no node claims (one plain, one with an id the project
- * does not hold). Token counts are made up. `code`, `start` and empty `phase` nodes spawn nothing.
- */
+/** Labels are `<nodeId>: <title> <k>`, as a handed-off script writes them; one agent fails and two carry labels no node claims. */
 export function replayProjectEvents(project: Project, name: string = project.name): RunEvent[] {
   const runId = `replay:project:${name}`
   const events: RunEvent[] = [{ kind: 'run-start', runId, name }]
@@ -79,7 +67,6 @@ export function replayProjectEvents(project: Project, name: string = project.nam
   }
   const strayId = `n${rows.reduce((max, row) => Math.max(max, idNumber(row.node.id)), 0) + 90}`
   const strays = [REPLAY_STRAYS[0], `${strayId}: ${REPLAY_STRAYS[1]}`]
-  // The failure lands in the second leaf when there is one, on its second agent.
   const failing = leaves[Math.min(1, leaves.length - 1)]?.node.id
 
   const run = (agentId: string, label: string, phase: string | undefined, ok: boolean): RunEvent[][] => {
@@ -95,7 +82,6 @@ export function replayProjectEvents(project: Project, name: string = project.nam
   for (const [at, { node }] of leaves.entries()) {
     const count = replayAgents(node.id)
     const agents = Array.from({ length: count }, (_, k) => run(`replay-${node.id}-${k + 1}`, `${node.id}: ${node.name} ${k + 1}`, phaseOf.get(node.id), !(node.id === failing && k === 1)))
-    // One stray beside the first leaf, one beside the last.
     const stray = at === 0 ? strays[0] : at === leaves.length - 1 ? strays[1] : undefined
     if (stray !== undefined) agents.push(run(`replay-stray-${at === 0 ? 1 : 2}`, stray, undefined, true))
     // Starts together, then usage, then ends: a node's agents overlap as a fan-out does.

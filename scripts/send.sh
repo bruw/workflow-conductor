@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Thin wrapper over tmux send-keys for the dev session.
 # Usage: scripts/send.sh '/conductor' Enter
 set -euo pipefail
 

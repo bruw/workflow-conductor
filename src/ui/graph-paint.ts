@@ -1,8 +1,5 @@
-// The graph's paint: a layout as rows of styled spans, one grapheme per cell (two for a wide one),
-// windowed by `panY` (the graph never pans sideways). Pure TypeScript: no `$`,
-// no engine imports. The layout says the words and where they go; here each
-// role of a word gets its look, and what is laid over the cards is drawn: the
-// run, the pointer, a card in the hand, cards on the move, the window's edges.
+// The graph's paint: a layout as rows of styled spans, one grapheme per cell (two for a wide one), windowed by `panY`.
+// The layout says the words and where they go; here each role gets its look. No `$`, no engine imports.
 
 import type { NodeType } from '../project/model'
 import type { Place } from '../project/ops'
@@ -16,29 +13,26 @@ import { ACCENT, ACTIVE, FADED, GLYPH, PHASE_GROUND, RULE } from './theme'
 /** How a run of cells is drawn while the pointer is on it, or on any other of its `scope`. */
 export type Hover = { scope: string; color: string; bold: true; inverse?: true }
 
-/** One run of cells drawn alike. `ground` is the colour behind them where it is not the pane's own: a phase's. */
+/** `ground` is the colour behind the cells where it is not the pane's own: a phase's. */
 export type Span = { text: string; color?: string; bold?: true; inverse?: true; hover?: Hover; ground?: string }
 
 type Look = Omit<Span, 'text' | 'ground'>
 
-/** A run laid over the project: counts by node id, and the sum of the agents no block claims. */
 export type RunOverlay = {
   status: RunStatus
   byNode: Record<string, NodeRun>
   /** Null when every agent names a block. */
   unmapped: NodeRun | null
-  /** The run's tick clock, for the spinner frame. */
   now?: number
 }
 
-/** What the run overlay puts on a card. */
 export type CardRun = {
   /** Spinner frame, `✓`, `✗`, or `·` while it has no agent. */
   glyph: string
   color: 'claude' | 'success' | 'error' | 'inactive'
   /** `2/4 done · 1 failed · 27.7k`; `waiting` or `not run` with no agent. */
   text: string
-  /** The same in fewer words, longest first, for a border too short for `text`: without the tokens, then the count alone. */
+  /** The same in fewer words, longest first, for a border too short for `text`. */
   shorter: string[]
   /** False once the run is over and the block got no agent. */
   reached: boolean
@@ -54,10 +48,7 @@ function addRuns(a: NodeRun, b: NodeRun | undefined): NodeRun {
   return { total: a.total + b.total, running: a.running + b.running, done: a.done + b.done, failed: a.failed + b.failed, tokens: a.tokens + b.tokens }
 }
 
-/**
- * A block's agents in words nobody can misread: `2/4 done · 1 failed · 22.3k`
- * (done are the ones that ended well, of all started; failures are named, never a bare mark).
- */
+/** `2/4 done · 1 failed · 22.3k`: done are the ones that ended well, of all started; failures are named, never a bare mark. */
 function runWords(sum: NodeRun): { text: string; shorter: string[] } {
   const count = `${sum.done}/${sum.total}`
   const failed = sum.failed > 0 ? ` · ${sum.failed} failed` : ''
@@ -66,7 +57,7 @@ function runWords(sum: NodeRun): { text: string; shorter: string[] } {
   return { text: sum.tokens > 0 ? `${full} · ${fmtTokens(sum.tokens)}` : full, shorter: [full, `${count}${failed}`, count] }
 }
 
-/** A card's status as it fits `room` cells, glyph included: the longest wording that does, '' when none. */
+/** The longest wording that fits `room` cells, glyph included; '' when none does. */
 function fitStatus(run: CardRun | undefined, room: number): string {
   if (!run) return ''
   for (const words of [run.text, ...run.shorter]) if (words.length + 2 <= room) return `${run.glyph} ${words}`
@@ -74,12 +65,10 @@ function fitStatus(run: CardRun | undefined, room: number): string {
 }
 
 export type GraphPaintOptions = {
-  /** The window: how many cells are drawn. The breadcrumb's rows of a nested view are the first of `rows`. */
+  /** The breadcrumb's rows of a nested view are the first of `rows`. */
   columns: number
   rows: number
-  /** The row of the graph that is the window's first (under the breadcrumb). */
   panY: number
-  /** The slot under the pointer: its `[+]` is lit. */
   hoverAt?: Place | null
   run?: RunOverlay
   /** A run locks the project: no slots, and the chips cannot be pressed. */
@@ -90,23 +79,15 @@ export type GraphPaintOptions = {
   offsets?: Record<string, { dx: number; dy: number; dh?: number }>
   /** Colours and hovers left out: what a graph too large for one tree falls back to. */
   plain?: boolean
-  /** Said on an empty graph in place of its `[+]`: Claude is drafting the project. */
   emptyNote?: string
   /** Blocks an edit just touched: drawn in `claude`, their name inverse while `strong`. */
   flash?: { ids: readonly string[]; strong: boolean } | null
-  /** The pane does not hold the keyboard: an empty graph names no key, and no `[+]` is lit as the one `n` adds at. */
   quiet?: boolean
 }
 
 type Frame = readonly [string, string, string, string, string, string]
 
-/**
- * A card's border by what it is, at rest and selected (heavy): a leaf's is a plain line, round; a chain's
- * (pipeline, the loops) is dashed, a stack's (parallel, sweep, branch) dotted; a phase has none and stands
- * on a ground of its own (`PHASE_GROUND`), with the plain heavy line while it is selected.
- * A cell is twice as tall as wide, so a horizontal glyph has half the dashes of its vertical one
- * (`╴` with `╎`, `╌` with `┊`): the pitch is then the same along both sides.
- */
+/** A chain's line is dashed, a stack's dotted; a phase has none at rest. A cell is twice as tall as wide, so a horizontal glyph has half the dashes of its vertical one: the pitch is the same along both sides. */
 const FRAMES: Record<'leaf' | 'chain' | 'stack' | 'phase', { rest: Frame; selected: Frame }> = {
   leaf: { rest: ['╭', '─', '╮', '│', '╰', '╯'], selected: ['┏', '━', '┓', '┃', '┗', '┛'] },
   chain: { rest: ['┌', '╴', '┐', '╎', '└', '┘'], selected: ['┏', '╸', '┓', '╏', '┗', '┛'] },
@@ -120,7 +101,7 @@ function shapeOf(card: Pick<GraphCard, 'type' | 'flow'>): keyof typeof FRAMES {
   return card.type === 'phase' ? 'phase' : (card.flow ?? 'leaf')
 }
 
-/** One row between two blocks of a chain: `↓` hands each result on as it arrives, `all ⇓` waits for all of them. */
+/** `↓` hands each result on as it arrives, `all ⇓` waits for all of them. */
 export const ARROW = { stream: '↓', barrier: '⇓' } as const
 export const ARROW_ALL = 'all '
 export const GUTTER_GLYPH = { left: '◀', right: '▶' } as const
@@ -134,10 +115,7 @@ function pressed(scope: string): Hover {
   return { scope, color: 'claude', bold: true, inverse: true }
 }
 
-/**
- * Every block's run: its own agents plus those of everything it holds, drawn or not (a collapsed
- * container and a carousel say the sum of what they hide). Keyed by block id, and `unmapped`.
- */
+/** Each block's own agents plus those of everything it holds, drawn or not. Keyed by block id, and `unmapped`. */
 export function graphRuns(layout: GraphLayout, run: RunOverlay): Map<string, CardRun> {
   const blocks: { id: string; type: NodeType | 'unmapped'; parentId: string | undefined }[] = [...layout.blocks]
   if (layout.cards.some(card => card.type === 'unmapped')) blocks.push({ id: UNMAPPED_ID, type: 'unmapped', parentId: undefined })
@@ -166,7 +144,7 @@ export function graphRuns(layout: GraphLayout, run: RunOverlay): Map<string, Car
   return out
 }
 
-/** The graph as rows of spans: exactly `rows` rows, none wider than `columns`. */
+/** Exactly `rows` rows, none wider than `columns`. */
 export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Span[][] {
   const width = Math.max(0, Math.trunc(options.columns))
   const height = Math.max(0, Math.trunc(options.rows))
@@ -175,7 +153,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
   const panY = Math.trunc(options.panY) || 0
   const chars: string[][] = Array.from({ length: height }, () => new Array<string>(width).fill(' '))
   const looks: number[][] = Array.from({ length: height }, () => new Array<number>(width).fill(0))
-  /** The cells that stand on a phase's ground. */
   const grounds: boolean[][] = Array.from({ length: height }, () => new Array<boolean>(width).fill(false))
   const table: Look[] = [{}]
   const known = new Map<string, number>([['{}', 0]])
@@ -188,11 +165,7 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     known.set(key, table.length - 1)
     return table.length - 1
   }
-  /**
-   * Writes at a cell of the window, inside the columns `from` … `to`. A wide grapheme takes two cells: its glyph, then
-   * a cell that holds '' and draws nothing, so a row is always `width` cells. One that would stand across an edge
-   * is a space in the cell it has.
-   */
+  /** A wide grapheme takes two cells: its glyph, then a cell that holds '' and draws nothing, so a row is always `width` cells. One that would stand across an edge is a space in the cell it has. */
   const write = (x: number, row: number, text: string, style: number, from: number = 0, to: number = width): void => {
     const line = chars[row]
     const tone = looks[row]
@@ -224,7 +197,7 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
   }
   /** The cells of the graph a card may be drawn in: the inside of the container it is in. Null for no bound. */
   let bound: { x: number; y: number; w: number; h: number } | null = null
-  /** Writes at a cell of the graph: under the breadcrumb, moved by the pan, kept inside `bound`. */
+  /** A cell of the graph: under the breadcrumb, moved by the pan, kept inside `bound`. */
   const put = (x: number, y: number, text: string, style: number): void => {
     const row = y - panY
     if (row < 0 || row >= room) return
@@ -232,7 +205,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     if (y < bound.y || y >= bound.y + bound.h) return
     write(x, row + top, text, style, bound.x, bound.x + bound.w)
   }
-  /** Puts cells of the graph on a phase's ground, or back on the pane's own: clipped as `put` clips. */
   const shade = (x: number, y: number, w: number, h: number, on: boolean): void => {
     for (let line = y; line < y + h; line++) {
       const row = line - panY
@@ -260,15 +232,13 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     // A block an edit just touched borrows `claude` for a moment, whatever its type.
     const flashed = !faded && flashIds.has(card.id)
     const tint = faded ? 'inactive' : accentOf(card.type)
-    // The selection is the heavy border in `claude`. At rest a leaf's border is quiet and a container's says its type
-    // by its colour, and by its line how it runs what it holds.
+    // The selection is the heavy border in `claude`; at rest a leaf's border is quiet and a container's has its type's colour.
     const border = faded ? 'inactive' : card.selected || flashed ? 'claude' : card.kind === 'leaf' ? RULE : tint
     const shape = shapeOf(card)
     const frame = lifted ? (shape === 'leaf' ? LIFTED : FRAMES[shape].rest) : card.selected ? FRAMES[shape].selected : FRAMES[shape].rest
     return { faded, loud: flashed && flashStrong, tint, frame, edge: look(card.selected && !faded ? { color: border, bold: true } : { color: border }), run }
   }
 
-  /** The look of one run of words, by what it says. */
   const segLook = (seg: Seg, tone: Tone): Look => {
     const dim = { color: tone.faded ? 'inactive' : FADED }
     const loud = tone.loud ? { inverse: true as const } : {}
@@ -297,7 +267,7 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     }
   }
 
-  /** Writes segments from `x`. On a border, cells of the line show through a `rule` that is not blank. */
+  /** On a border, cells of the line show through a `rule` that is not blank. */
   const putSegs = (segs: readonly Seg[], x: number, y: number, tone: Tone, border: boolean): void => {
     let at = x
     for (const seg of segs) {
@@ -307,7 +277,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     }
   }
 
-  /** A card's top border and what is written on it. */
   const drawTop = (card: GraphCard, x: number, y: number, tone: Tone): void => {
     const { frame, edge } = tone
     put(x, y, `${frame[0]}${frame[1].repeat(Math.max(0, card.w - 2))}${frame[2]}`, edge)
@@ -315,8 +284,7 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     putSegs(card.top.right, x + card.w - 2 - segsWidth(card.top.right), y, tone, true)
   }
 
-  // A card on the move never leaves the container it is in: it is drawn inside that one's border only, as that one
-  // is inside its own (parents come before their children). At rest every card is inside already.
+  // A card on the move is drawn inside its container's border only, as that one is inside its own (parents come before their children).
   const insides = new Map<string, { x: number; y: number; w: number; h: number }>()
   // Whether a card's cells stand on the phase ground: a phase turns it over, every other card has its container's.
   const shaded = new Map<string, boolean>()
@@ -360,9 +328,8 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
   // Arrows, the words between arms, gutters and slots stand where the cards will be: left out while cards slide.
   if (!moving) {
     const drafting = options.emptyNote !== undefined && options.emptyNote !== '' && layout.blank
-    // A project with no block of its own: under its `[+]`, dim, how to start. Read-only (the start screen's Blank) the `[+]` is dim too, and no key is named.
+    // A project with no block of its own says how to start, dim, under its `[+]`. Locked, the `[+]` is dim too and no key is named.
     const first = layout.blank ? layout.slots.find(slot => slot.mark !== null) : undefined
-    // While Claude drafts, the note stands where that `[+]` would.
     if (drafting) put(1, first?.mark?.y ?? 0, clip(options.emptyNote ?? '', Math.max(1, width - 2)), look({ color: 'claude' }))
     if (first?.mark && !drafting) {
       const { x, y } = first.mark
@@ -371,7 +338,7 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
       for (const [i, line] of lines.entries()) put(x, y + 2 + i, clip(line, Math.max(1, width - x - 1)), faint)
     }
     if (!options.locked && dragId === null && !drafting) {
-      // Every `[+]` is drawn, dim. The active one is lit: its add list is open, the pointer is on it, or `n` adds there.
+      // The active `[+]` is lit: its add list is open, the pointer is on it, or `n` adds there.
       const active = { color: ACTIVE, bold: true } as const
       for (const slot of layout.slots) {
         if (!slot.mark) continue
@@ -388,7 +355,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
       put(edge.x, edge.y, ARROW[edge.kind], look(edge.kind === 'barrier' ? { bold: true } : {}))
       if (edge.kind === 'barrier') put(edge.x - ARROW_ALL.length, edge.y, ARROW_ALL, faint)
     }
-    // Between two arms: `OR` (one of them runs), `∥` (all do).
     for (const rule of layout.rules) put(rule.x, rule.y, ` ${rule.label} `.slice(0, rule.w), look({ color: FADED, bold: true }))
     for (const gutter of layout.gutters) {
       const style = look({ color: 'claude', bold: true, hover: pressed(`conductor-gutter-${gutter.id}-${gutter.side}`) })
@@ -443,8 +409,7 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     }
   }
 
-  // The breadcrumb, on rows of its own: how deep this view is, then the way down to it. The view's own crumb is lit,
-  // every other one a press away; a rule stands between them and the graph.
+  // The breadcrumb, on rows of its own: the view's own crumb is lit, every other one a press away.
   if (top > 0) {
     if (layout.level !== '') write(1, 0, layout.level, look({ bold: true }))
     const pad = ' '.repeat(CRUMB_PAD)

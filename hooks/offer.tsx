@@ -35,24 +35,20 @@ export const takeOffered = (): boolean => {
 }
 
 /**
- * The project the last "Conductor" answer led to, until it is handed off or run: while it waits on the board the question
- * is not asked again (Claude would draft a second project, or write a script the board knows nothing of).
+ * The project the last "Conductor" answer led to, until it is handed off or run. While it waits the question is not
+ * asked again: Claude would draft a second project, or write a script the board knows nothing of.
  */
 let waiting: string | null = null
 /** The tool already answered in this turn that a project waits: a second call is for another workflow, and asks. */
 let answered = false
 
-/**
- * What this file asks of the board once "Conductor" is answered. `$` does not cross files, so project.tsx's
- * session.start hook gives this its own, as it gives run.tsx its `RunBoard`.
- */
+/** `$` does not cross files, so project.tsx's session.start hook gives this file its board, as it gives run.tsx its `RunBoard`. */
 export type OfferBoard = { drafting: () => Promise<void> }
 let offerBoard: OfferBoard | undefined
 export const setOfferBoard = (board: OfferBoard): void => {
   offerBoard = board
 }
 
-/** The draft a "Conductor" answer asked for has landed, as project `name`. */
 export const offerDrafted = (name: string): void => {
   waiting = name
 }
@@ -60,13 +56,12 @@ export const offerDrafted = (name: string): void => {
 /** The project handed off on the board (`r`) whose hand-off Claude has not been given yet: the tool's next answer is it. */
 let handing: string | null = null
 
-/** Project `name` was handed off on the board: it waits for no approval, and the tool's next answer is its hand-off. */
 export const offerHanded = (name: string): void => {
   handing = name
   if (waiting === name) waiting = null
 }
 
-/** Project `name` was handed off, or a run of it started: it waits for no approval. */
+/** Handed off or run: project `name` waits for no approval. */
 export const offerSettled = (name: string): void => {
   if (waiting === name) waiting = null
 }
@@ -79,7 +74,7 @@ export const offerPrompted = (): void => {
 }
 
 export const registerOffer = (on: On, tracker: Tracker): void => {
-  // Not deferred: Claude calls a tool before a workflow only when its description is in front of it (API-NOTES S13, S14).
+  // Not deferred: Claude calls a tool before a workflow only when its description is in front of it.
   // The matcher is always true: run.tsx holds the unmatched session.start, project.tsx the one on `cwd`.
   on('session.start', { isInteractive: [true, false] }, async ($, e, next) => {
     await $.tool.register({ name: OFFER_TOOL_NAME, description: OFFER_TOOL_DESCRIPTION, isDeferred: false })
@@ -87,12 +82,11 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
     return next(e)
   })
 
-  // The question. Whatever happens here Claude gets a result to act on, never a throw and never a deny (it does
-  // not take instructions from a refusal).
+  // Claude always gets a result to act on, never a throw and never a deny: it does not take instructions from a refusal.
   on('tool.call', { tool: OFFER_TOOL_FULL_NAME }, async ($, e) => {
     const conductor = async (asked: boolean): Promise<{ result: string }> => {
       offered = true
-      // The board says so while Claude drafts: project.tsx shows the splash until the project lands.
+      // project.tsx shows the splash until the project lands.
       await offerBoard?.drafting().catch(() => undefined)
 
       return { result: offerBrief(asked) }

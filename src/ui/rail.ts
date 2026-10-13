@@ -22,21 +22,17 @@ export type Row = {
   color: ColorKey
   /** The whole line left to right, glyph included, padded to the width. */
   parts: Part[]
-  /** The parts joined. */
   text: string
   /** Phase title: on a phase row its own, on an agent row its group's. */
   phase?: string
   /** Phase rows: whether its agents follow. */
   open?: boolean
   counts?: Counts
-  /** Formatted token total (`18.2k`). */
   tokens?: string
-  /** Phase rows: progress bar of settled agents. */
   bar?: string
 }
 
 export type RailUi = {
-  /** Phases the person opened. */
   expanded: ReadonlySet<string>
   /** Phases the person closed; wins over the automatic expansion on failure. */
   collapsed?: ReadonlySet<string>
@@ -86,7 +82,6 @@ export function fmtDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`
 }
 
-/** A progress bar `width` cells wide, filled in eighths of a cell. */
 export function bar(done: number, total: number, width: number = BAR_WIDTH): string {
   const cells = Math.max(0, Math.floor(width))
   const ratio = total > 0 ? Math.min(1, Math.max(0, done / total)) : 0
@@ -139,7 +134,6 @@ function stateColor(counts: Counts): ColorKey {
   return counts.total > 0 ? 'success' : 'inactive'
 }
 
-/** `settled/total`, a failure count when there is one, and tokens, in fixed columns. */
 function tally(counts: Counts & { tokens: number }): Part[] {
   const settled = `${counts.done + counts.failed}/${counts.total}`
   const failed = counts.failed > 0 ? `${counts.failed}${FAILED} ` : ''
@@ -176,10 +170,6 @@ export function groupByPhase(state: RunState): { phase: string; agents: AgentRun
   return ordered
 }
 
-/**
- * The run as rows: a header, one row per phase with its agents beneath when open, a
- * footer. An idle state with no agents has no rows.
- */
 export function buildRunRows(state: RunState, ui: RailUi): Row[] {
   const agents = Object.values(state.agents)
   if (state.status === 'idle' && agents.length === 0) return []
@@ -297,7 +287,6 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
   return rows
 }
 
-/** The phase a status line names: the last one with an agent running, else the last seen. */
 export function currentPhase(state: RunState): string | undefined {
   const groups = groupByPhase(state)
   const busy = groups.filter(group => group.agents.some(agent => agent.status === 'running'))
@@ -305,12 +294,7 @@ export function currentPhase(state: RunState): string | undefined {
   return (busy.at(-1) ?? groups.at(-1))?.phase
 }
 
-/**
- * Status line while the pane is closed: `wf 7/12 ▸ verify`. With `titles` (the
- * run came from a project: its blocks' titles by id, in project order) it names
- * the block that is running, the last in that order: `wf 3/4 ▸ n3 review`.
- * Agents with no phase are not named: there is nothing to say of them.
- */
+/** Status line while the pane is closed: `wf 7/12 ▸ verify`. With `titles` (a project's block titles by id, in project order) it names the last block running: `wf 3/4 ▸ n3 review`. */
 export function statusText(state: RunState, titles?: Readonly<Record<string, string>>): string {
   const all = countOf(Object.values(state.agents))
   const head = `wf ${all.done + all.failed}/${all.total}`
@@ -331,7 +315,7 @@ export function endText(state: RunState): string {
   return `wf ${oneLine(state.name ?? state.runId ?? '') || 'workflow'} ${state.status}: ${all.done}/${all.total} agents${failed} · ${fmtTokens(all.tokens)} tokens`
 }
 
-/** Flips one phase, from what the person sees (`open`) to its opposite. */
+/** `open` is what the person sees now; the phase goes to its opposite. */
 export function togglePhase(ui: RailUiState, phase: string, open: boolean): RailUiState {
   const expanded = (ui.expanded ?? []).filter(one => one !== phase)
   const collapsed = (ui.collapsed ?? []).filter(one => one !== phase)

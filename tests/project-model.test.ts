@@ -107,7 +107,6 @@ test('the start block stands first and alone says a goal and args', async () => 
   expect(rejected({ ...base, nodes: [{ id: 'n3', type: 'pipeline', name: 'p', children: [start] }] })).toMatch(/start/)
   expect(rejected({ ...base, nodes: [{ ...agent, knobs: { goal: 'mine' } }] })).toMatch(/goal/)
 
-  // A file with no start block is given an empty one, with an id of its own.
   const given = parsed(JSON.stringify({ ...base, nodes: [agent] }))
   expect(given.nodes.map(node => node.type)).toEqual(['start', 'agent'])
   expect(new Set(given.nodes.map(node => node.id)).size).toBe(2)

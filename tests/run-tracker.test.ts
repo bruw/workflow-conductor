@@ -62,7 +62,6 @@ test('a burst of spawns reads the journal at most about twice a second', async (
   tracker.attach(host)
   tracker.runStarted({ runId: 'wf_1', name: 'burst', transcriptDir: '/t/wf_1' })
 
-  // 16 agents at once, then one more every 50 ms for two seconds: 56 spawns.
   for (let i = 0; i < 16; i++) {
     journal += started(`a${i}`, 'One')
     tracker.agentSpawned({ runId: 'wf_1', agentId: `a${i}`, label: `a${i}` })
@@ -79,7 +78,6 @@ test('a burst of spawns reads the journal at most about twice a second', async (
   expect(tracker.state().byPhase).toMatchObject({ One: { total: 16 }, Two: { total: 40 } })
   expect(Object.values(tracker.state().agents).every(agent => agent.phase !== undefined)).toBe(true)
 
-  // Every phase is known: the journal is left alone from here on.
   const reads = log.reads.length
   await advance(3000)
   expect(log.reads.length).toBe(reads)
@@ -114,7 +112,6 @@ test('state writes are coalesced: full changes per tick, token counts twice a se
   expect(log.writes.length).toBe(1)
   expect(Object.keys(log.writes[0]?.agents ?? {})).toEqual(['a1', 'a2'])
 
-  // Forty usage reports in two seconds reach the store four or five times.
   const before = log.writes.length
   for (let i = 0; i < 40; i++) {
     tracker.agentUsage('a1', 10)
@@ -139,7 +136,6 @@ test('the tick runs only while something is running, and the spinner only while 
   tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'a1' })
   await advance(2000)
   expect(log.frames).toEqual([])
-  // Out of sight, the run is said on the status line.
   expect(typeof log.statuses.at(-1)).toBe('string')
 
   show(true)
@@ -215,7 +211,6 @@ test('a run picked up after a reload keeps its project and the known node ids', 
   expect(second.state().agents.a2?.nodeId).toBe('n2')
   expect(second.state().agents.a3?.nodeId).toBe(undefined)
 
-  // Nothing stored, nothing claimed.
   const third = createTracker()
   third.attach(fakeHost().host, undefined, { name: 'demo', nodeIds: ['n1'] })
   expect(third.project()).toBe(undefined)
@@ -231,7 +226,6 @@ test('a handoff holds until the first run starts or three minutes pass', async (
   tracker.runStarted({ runId: 'wf_1' })
   expect(tracker.project()).toBe('demo')
   expect(projects).toEqual(['demo'])
-  // Spent: the run after it is not the project's.
   tracker.runStarted({ runId: 'wf_2' })
   expect(tracker.project()).toBe(undefined)
   expect(projects).toEqual(['demo', null])
@@ -246,7 +240,6 @@ test('a handoff holds until the first run starts or three minutes pass', async (
   expect(other.project()).toBe(undefined)
   expect(other.state().agents.a1?.nodeId).toBe('n5')
 
-  // A second handoff replaces the first and starts the three minutes again.
   const again = fakeHost()
   const third = createTracker()
   third.attach(again.host)

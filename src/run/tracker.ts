@@ -7,9 +7,8 @@ import { reduce, remap } from './reducer'
 import type { Mapping } from './reducer'
 import { replayDue } from './replay'
 
-// Decides WHEN things happen for a live run: which agents count, when the state is
-// written, when the journal is read, when the run is held finished. Everything outside
-// reaches it through a TrackerHost, so it holds no `$` and runs under a fake host in tests.
+// Decides when things happen for a live run: which agents count, when the state is written, the journal read, the run held finished.
+// Reaches everything outside through a TrackerHost, so it runs under a fake host in tests.
 
 export const TICK_MS = 96
 /** No agent running and no spawn for this long: the run is held finished. */
@@ -32,32 +31,27 @@ const STALE_TICKS = Math.ceil(STALE_MS / TICK_MS)
 export type Timer = { cancel: () => void }
 
 export type TrackerHost = {
-  /** Stores the run state where the pane reads it. */
   write: (state: RunState) => unknown
   /** Stores the tick clock (ms), which the pane's spinner follows. */
   frame: (now: number) => unknown
   readText: (path: string) => Promise<string>
   every: (ms: number, fn: () => void) => Timer
   after: (ms: number, fn: () => void) => Timer
-  /** Whether the run pane is on screen now. */
   paneShown: () => Promise<boolean>
   status: (text: string | undefined) => unknown
   toast: (text: string) => unknown
-  /** Stores which project the tracked run belongs to; null when it was not started from one. */
+  /** Null: the run was not started from a project. */
   project?: (name: string | null) => unknown
 }
 
-/**
- * A project's claim on a run: handed off, the next run that starts is its run; adopted, the run already tracked is.
- * `match` is each block's own, by id in project order, for a run whose labels carry no block id.
- */
+/** A project's claim on a run: handed off, the next run to start is its run; adopted, the run already tracked is. */
 export type Handoff = { name: string; nodeIds: readonly string[]; titles?: Readonly<Record<string, string>>; match?: Readonly<Record<string, readonly string[]>> }
 
 type Claim = Mapping & { name: string; titles?: Readonly<Record<string, string>> }
 
 const claimOf = (from: Handoff): Claim => ({ name: from.name, ids: new Set(from.nodeIds), titles: from.titles, match: from.match })
 
-/** `project` is the saved project named as the run's workflow, when there is one: the run is that project's, handed off or not. */
+/** `project`: the saved project the run's workflow is named as; the run is that project's, handed off or not. */
 export type RunStarted = { runId: string; name?: string; transcriptDir?: string; project?: Handoff }
 export type AgentSpawned = { runId: string; agentId: string; label: string; index?: number }
 export type AgentEnded = { ok: boolean; durationMs?: number; tokens?: number }
@@ -85,7 +79,6 @@ export function createTracker() {
   let expiry: Timer | undefined
   /** The project whose handoff is being worked on: from the handoff until the person's next prompt after its claim is spent. A run of it meanwhile (the first, a retry) comes out of the handoff. */
   let handed: string | undefined
-  /** Whether the tracked run is a replay: no workflow is behind it. */
   let replayed = false
 
   /** Agents of the tracked run still running, with their token total so far. */
@@ -195,7 +188,7 @@ export function createTracker() {
     ticker = undefined
   }
 
-  /** Holds failed every agent not heard from for STALE_MS: its end was missed, or will never come. */
+  /** An agent not heard from for STALE_MS is held failed: its end was missed, or never comes. */
   const closeStale = (): void => {
     const stale = Object.values(state.agents).filter(agent => agent.status === 'running' && ticks - (heard.get(agent.agentId) ?? 0) >= STALE_TICKS)
     for (const agent of stale) totals.delete(agent.agentId)
@@ -267,7 +260,7 @@ export function createTracker() {
     expiry = host?.after(HANDOFF_MS, dropPending)
   }
 
-  /** Forgets the run held so far so that `runId` can start clean. `own` is the saved project the run is named as. */
+  /** Forgets the run held so far so that `runId` starts clean. `own` is the saved project the run is named as. */
   const begin = (runId: string, own?: Handoff): void => {
     replaying?.cancel()
     replaying = undefined
@@ -310,11 +303,7 @@ export function createTracker() {
     /** The state as of every event so far (the stored copy may lag by a tick). */
     state: (): RunState => state,
 
-    /**
-     * Gives the tracker its host. `stored` is the state a previous load of the module
-     * left behind: a run in it is picked up where it was, with `claim` as the project it
-     * came from (the node ids are not stored; the caller reads them from the project file).
-     */
+    /** `stored` is the state a previous load of the module left: its run is picked up, with `claim` as its project (node ids are not stored). */
     attach(next: TrackerHost, stored?: RunState, claim?: Handoff): void {
       host = next
       if (stored && state.status === 'idle' && Object.keys(state.agents).length === 0) {
@@ -331,10 +320,7 @@ export function createTracker() {
       startTicker()
     },
 
-    /**
-     * A project was handed off: the first run to start within HANDOFF_MS is counted against
-     * its node ids. After that the claim is dropped, so a later unrelated run is not taken.
-     */
+    /** The first run to start within HANDOFF_MS is the project's; then the claim drops, so a later unrelated run is not taken. */
     handoff(next: Handoff): void {
       dropPending()
       pending = claimOf(next)
@@ -343,32 +329,26 @@ export function createTracker() {
     },
 
     /**
-     * The person sent a prompt in the main conversation. While a handoff waits for its run they are answering what
-     * Claude asked about the project: the wait starts again. With none waiting, the handoff's work is over: a later
-     * run of the project is one the person asked for anew.
+     * While a handoff waits, a prompt is the person answering Claude about the project: the wait starts again.
+     * With none waiting the handoff's work is over: a later run of the project is one asked for anew.
      */
     prompted(): void {
       if (pending === undefined) handed = undefined
       else armExpiry()
     },
 
-    /**
-     * Gives the run tracked now, running or over and still shown, a project after the fact: a project drawn of the
-     * script it runs. Every agent seen so far is placed again by the claim, and the ones still to come are placed
-     * by it. Returns the labels of the agents no block claims, one per agent; null when there is no run to give it to.
-     */
+    /** Returns the labels of the agents no block claims, one per agent; null with no run to give the project to. */
     adopt(claim: Handoff): string[] | null {
       if (state.status === 'idle') return null
       take(claim)
       return state.unmapped.map(id => state.agents[id]?.label ?? '')
     },
 
-    /** Whether a project was handed off and its run has not started yet: Claude is writing the script for it. */
+    /** A project is handed off and its run has not started: Claude is writing the script for it. */
     awaitsRun: (): boolean => pending !== undefined,
 
     busy,
 
-    /** The project the tracked run was started from, if any. */
     project: (): string | undefined => active?.name,
 
     /** Whether the tracked run comes out of a handoff of its project (the run it waited for, or a retry of it), not only out of its name. */
@@ -400,7 +380,6 @@ export function createTracker() {
       if (ticks - lastRead >= JOURNAL_EVERY) readJournal()
     },
 
-    /** Adds one model request's tokens to an agent's total; an agent not tracked is ignored. */
     agentUsage(agentId: string, tokens: number): void {
       const total = totals.get(agentId)
       if (total === undefined || !Number.isFinite(tokens) || tokens <= 0) return
@@ -416,10 +395,7 @@ export function createTracker() {
       apply([{ kind: 'agent-end', agentId, ok: end.ok, durationMs: end.durationMs, tokens: end.tokens !== undefined && end.tokens > 0 ? end.tokens : total }])
     },
 
-    /**
-     * Feeds a recorded run through: at once, or spread over REPLAY_MS. `own` is the project it is replayed over.
-     * Refused (false) while `busy`: the real run's agents would be dropped as a superseded run's.
-     */
+    /** Refused (false) while `busy`: the real run's agents would be dropped as a superseded run's. */
     replay(events: readonly RunEvent[], mode: 'fast' | 'slow', own?: Handoff): boolean {
       if (busy()) return false
       const first = events.find(event => event.kind === 'run-start')

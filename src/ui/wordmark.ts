@@ -1,6 +1,5 @@
-// The splash's wordmark: Conductor drawn as pixels, in the persona's body ink
-// and painted like it (half-blocks: a pixel is half a cell tall).
-// Pure TypeScript: no `$`, no engine imports.
+// The splash's wordmark: Conductor drawn as pixels, painted like the persona
+// (half-blocks: a pixel is half a cell tall). No `$`, no engine imports.
 
 import { paintPixels } from './persona'
 import type { PersonaSpan } from './persona'
@@ -11,7 +10,6 @@ type Glyph = readonly string[]
 const NONE = ['', ''] as const
 const rows = (row: string, count: number): string[] => Array.from({ length: count }, () => row)
 
-/** Square letters, strokes two pixels thick, a corner cut here and there. */
 const GLYPHS: Record<string, Glyph> = {
   C: [' #####', '######', ...rows('##', 6), '######', ' #####'],
   o: [...NONE, '######', '######', ...rows('##  ##', 4), '######', ' #### '],
@@ -27,7 +25,6 @@ const WORD = 'Conductor'
 /** Pixels between two letters. */
 const GAP = 2
 
-/** The wordmark's rows of spans and how wide they are. */
 export function wordmark(): { lines: PersonaSpan[][]; width: number } {
   const canvas: string[][] = Array.from({ length: 10 }, () => [])
   ;[...WORD].forEach((letter, at) => {

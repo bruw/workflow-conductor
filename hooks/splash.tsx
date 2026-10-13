@@ -3,18 +3,13 @@ import type { ClientModule, JsonValue } from 'claude-code'
 import { BEAT_MS, SPLASH_BEATS, splashScene, waitScene } from '../src/ui/persona'
 import { TEXT } from '../src/ui/theme'
 
-// The splash's scene: a surface module, so that its beats are counted where
-// they are drawn. It has no `$` and posts nothing: hooks/project.tsx shows it
-// for the splash's time and then draws the designer in its place. While a draft
-// is awaited the beat comes with the props (`beat`): hooks/project.tsx counts
-// it for as long as the wait lasts, and no ticker runs here.
+// The splash's scene, a surface module with no `$` that posts nothing: its beats are counted where they are drawn.
+// While a draft is awaited the beat comes with the props, counted by hooks/project.tsx, and no ticker runs here.
 
 type SplashProps = { rows: number; beat?: number }
 type SplashState = { beat: number }
 
-// The one ticker, as in ./canvas.tsx: the handle and the beat's body live here
-// because a drawing's closures are replaced on every call. It runs from the
-// first drawing to the last beat.
+// The handle and the beat's body are module variables because a drawing's closures are replaced on every call.
 let stopTicker: (() => void) | null = null
 let onBeat: (() => void) | null = null
 

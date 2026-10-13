@@ -27,7 +27,6 @@ const NONE = { expanded: new Set<string>() }
 const start = (agentId: string, label: string, phase?: string): RunEvent => ({ kind: 'agent-start', runId: 'wf_1', agentId, label, phase })
 const end = (agentId: string, ok: boolean, tokens: number, durationMs?: number): RunEvent => ({ kind: 'agent-end', agentId, ok, tokens, durationMs })
 
-// Two phases and a loose agent: one phase mid-run, one with a failure.
 const MIXED = reduceAll([
   { kind: 'run-start', runId: 'wf_1', name: 'demo' },
   start('a1', 'review:bugs', 'Review'),
@@ -177,7 +176,6 @@ test('the partial fixture stays running and names its busy phase', async () => {
   expect(rows.filter(row => row.color === 'claude' && row.kind === 'phase').map(row => row.phase)).toContain(currentPhase(state))
   expect(statusText(state)).toContain(currentPhase(state) ?? '?')
 
-  // Replayed, a recording that stops with agents open is an interrupted run: they end failed, and so does the run.
   const replayed = reduceAll(replayEvents('partial-29', partial29))
   expect(replayed.status).toBe('failed')
   expect(buildRunRows(replayed, NONE)[0]?.counts).toEqual({ total: 29, running: 0, done: 26, failed: 3 })

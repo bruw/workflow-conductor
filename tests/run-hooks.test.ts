@@ -119,7 +119,6 @@ test('a workflow run is followed from launch to the quiet end', async ($, on) =>
   })
   expect(typeof statuses.at(-1)).toBe('string')
 
-  // Usage is a running total per agent; the main loop and the stray agent are ignored.
   await step(a)
   await step(a)
   await step(undefined)
@@ -141,7 +140,6 @@ test('a workflow run is followed from launch to the quiet end', async ($, on) =>
   expect(state.status).toBe('running')
   expect(typeof statuses.at(-1)).toBe('string')
 
-  // One agent still runs: no amount of quiet ends the run.
   await clock.advance(QUIET_MS + 1000)
   expect((await stored()).status).toBe('running')
 
@@ -156,7 +154,6 @@ test('a workflow run is followed from launch to the quiet end', async ($, on) =>
   expect(statuses.at(-1)).toBe(undefined)
   expect(toasts).toHaveLength(1)
 
-  // A late spawn for the same run reopens it, and the next quiet period closes it again.
   const late = await $.agent.spawn({ ...SPAWN, description: 'n2: four', workflow: { runId: 'wf_1', agentIndex: 4 } })
   await clock.advance(200)
   expect((await stored()).status).toBe('running')

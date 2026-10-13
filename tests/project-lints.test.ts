@@ -13,7 +13,6 @@ function project(...nodes: ProjectNode[]): Project {
   return { version: 1, name: 'demo', nodes: [START, ...nodes] }
 }
 
-// Node ids that trip `rule`.
 function hits(rule: LintRule, ...nodes: ProjectNode[]): string[] {
   return lint(project(...nodes))
     .filter(one => one.rule === rule)

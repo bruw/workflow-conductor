@@ -1,28 +1,27 @@
 # Blocks and kinds
 
-Nine blocks, the ones a workflow script is written in. A pattern is a **kind** of the block it is made of. Each block's kinds answer one question about it; the first kind listed is the plain block and is not written in the file.
+Nine blocks for creating workflows + **kinds** that represent useful patterns
 
 The source of truth is `KINDS` in `src/project/model.ts` and `KIND_TEACH` / `KNOBS_BY_TYPE` in `src/project/teach.ts`.
 
 ## Fields per block
 
-The same for every kind of a block: a kind adds no field. The file's keys are in brackets.
+The same for every kind of a block: a kind adds no field. A field's key in the file is its name in camelCase (`oncePer`, `stopCondition`).
 
 | Block | Text fields | Chips |
 | --- | --- | --- |
-| agent | name (`name`) · logic (`logic`) · prompt (`prompt`) · output (`output`) | model · effort |
+| agent | name · logic · prompt · output | model · effort |
 | code | name · logic · output | |
 | subworkflow | name · logic · prompt · output | |
-| start | goal (`goal`) · args (`args`) | |
-| pipeline | name · logic · once per (`oncePer`) | |
-| parallel | name · logic · once per (`oncePer`) | |
-| loop | name · logic · stop condition (`stopCondition`) | |
-| branch | name · logic; each arm: condition (`condition`) | |
+| start | goal · args | |
+| pipeline | name · logic · once per | |
+| parallel | name · logic · once per | |
+| loop | name · logic · stop condition | |
+| branch | name · logic | |
 | phase | name | |
 
-`prompt`, `output`, `oncePer`, `stopCondition`, `condition`, `model`, `effort`, `isolation` and `agentType` sit under `knobs`. The last two have no control in the pane: Claude sets them, and the pane shows them read-only when set.
-
-The detail pane's top row is the block itself and, at the right, its id (`agent verify ▾      n4`), then these fields.
+- A block directly inside a branch is an arm and also has a condition, whatever its type.
+- Everything but `name` and `logic` sits under `knobs`, with `isolation` and `agentType`: those two have no control, Claude sets them and the pane shows them read-only.
 
 ## Kinds
 
@@ -46,7 +45,7 @@ Prefill is written into the field when the block is added; a hint shows while th
 | | target | until enough has been collected | `10 items collected` | |
 | | budget | while the turn's token budget lasts | `budget below 50k tokens` | |
 | **parallel**: what differs between its arms? | arms | different jobs side by side | | once per: leave empty |
-| | each | the same job once per item, waits for all | | once per: the items, e.g. changed files |
+| | each | the same job once per item, waits for all | | once per: the items, e.g. changed files, ×4 dimensions |
 | | sweep | the same search from different angles | `4 search angles: by container, by content, by entity, by time` | |
 | | attempts | independent tries at one task | `×3 angles: MVP-first, risk-first, user-first` | |
 | **branch**: how is its arm picked? | if-else | a condition on an earlier result | | condition: e.g. no findings; last arm empty for the else |
@@ -57,8 +56,8 @@ Prefill is written into the field when the block is added; a hint shows while th
 
 ## Rules
 
-- Votes are neither a kind nor a knob: a verify or a judge says them in its logic (`3 votes`, `2 voters`, `5 judges`), which the kind fills in and the user edits as text. Nothing reads the number: it is for Claude, at the hand-off.
 - A pattern that spans several blocks (judge panel: attempts, judge, merge) is a template, not a kind.
-- Changing a block's kind keeps every value that was typed; a value still as the old kind filled it in is replaced by the new kind's.
+- Changing a block's kind keeps every value that was typed; a value still as the old kind filled it in is replaced by the new kind's. An empty container gets the new kind's starter blocks.
 - A loop of kind pass or dry is added with its starter blocks in one edit (one undo).
-- No field is read for a count or a meaning. `once per`, a stop condition and the votes in a logic are words for Claude; the agent count takes one per agent block and says `≥` when the project holds a pipeline, a parallel, a loop, a verify, a judge or a subworkflow.
+- No field is read for a count or a meaning: `once per`, a stop condition and the votes in a logic are words for Claude.
+- The agent count is a floor: one per agent block, the cheapest arm of a branch (none for a single arm). It says `≥` when the project holds a pipeline, a parallel, a loop, a verify, a judge, a subworkflow, or a branch whose arms differ in agents.

@@ -31,7 +31,6 @@ test('searchBlocks ranks a name that starts with the query first', async () => {
   expect(searchBlocks('PIPE')[0]).toEqual({ type: 'pipeline' })
   expect(searchBlocks('judge')[0]).toEqual({ type: 'agent', kind: 'judge' })
   expect(searchBlocks('dry')[0]).toEqual({ type: 'loop', kind: 'dry' })
-  // A type's name finds every kind of it.
   expect(searchBlocks('loop')).toEqual(KINDS.loop.map(kind => ({ type: 'loop', kind })))
   // Held anywhere in a name, after the ones that start with it.
   expect(searchBlocks('ver').slice(0, 2)).toEqual([

@@ -1,7 +1,5 @@
-// The $.state contract. Every $.state key the mod uses is declared here.
-// Self-contained by rule (no imports), so shapes are spelled out again: the run
-// shapes mirror src/run/events.ts, the project shapes mirror src/project/model.ts and
-// src/project/session.ts. `tsc` fails where a mirror drifts from its source.
+// The $.state contract: every $.state key the mod uses is declared here.
+// Self-contained by rule (no imports), so the shapes mirror src/run/events.ts, src/project/model.ts and src/project/session.ts; `tsc` fails where one drifts.
 
 export type ConductorProjectNode = {
   id: string
@@ -64,7 +62,6 @@ export type ConductorProjectUi = {
 declare module 'claude-code' {
   interface PluginState {
     conductor: {
-      /** The live run, as src/run/reducer.ts folds it (RunState). */
       run: {
         runId?: string
         name?: string
@@ -85,11 +82,10 @@ declare module 'claude-code' {
         byPhase: Record<string, { total: number; running: number; done: number; failed: number; tokens: number }>
         unmapped: string[]
       }
-      /** Phases the person opened or closed in the run view. */
       runUi: { expanded: string[]; collapsed: string[] }
       /** The run's tick clock in ms; advances only while an agent runs. */
       runClock: number
-      /** The project the tracked run was started from; null when it came from none. */
+      /** Null: the tracked run came from no project. */
       runProject: string | null
       /** The tracked run's script file, and the project drawn of that run after it started (`attach`); null with no run of a script. */
       runScript: { runId: string; path: string; drawn: string | null } | null
@@ -97,7 +93,6 @@ declare module 'claude-code' {
       runTimes: { runId: string | null; startedAt: number | null; endedAt: number | null; seenAt: number | null }
       project: ConductorProject | null
       projectUi: ConductorProjectUi
-      /** Whether this session has seen the splash. */
       splashed: boolean
       /** Beats counted since a draft was asked for: the splash that waits for it and the header's persona move on them. */
       draftBeat: number

@@ -19,11 +19,9 @@ test('handoff: one visible line, one context entry that names the file, the name
 
   expect(context).toContain(PATH)
   expect(context).toContain('meta.name = "demo"')
-  // The phases are the top-level blocks, in order; the start block is no stage.
   const stages = project.nodes.filter(node => node.type !== 'start')
   expect(context).toContain(`meta.phases = [${stages.map(node => `"${node.id} ${node.name}"`).join(', ')}]`)
   expect(context).not.toContain(`"${project.nodes[0]?.id} start"`)
-  // The goal is the start block's.
   expect(context).toContain(project.nodes[0]?.knobs?.goal ?? '?')
 })
 
@@ -52,7 +50,6 @@ test('the outline names every block, indented by depth, and stops at its cap', (
     }
   }
 
-  // An arm of a branch opens with what picks it.
   const branched: Project = {
     version: 1,
     name: 'deep',

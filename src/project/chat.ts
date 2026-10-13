@@ -1,8 +1,5 @@
-// The project as Claude edits it from chat: the tool's description and schema
-// (generated from the teaching content and the model, never a second copy),
-// the two ways an edit arrives (a list of ops, or a whole tree), and the words
-// the tool answers with. Every edit goes through ops.ts and is checked by
-// parseProject before it counts. Pure TypeScript: no `$`, no engine imports.
+// The project as Claude edits it from chat: the tool's description and schema, generated from the teaching content
+// and the model; the edits; the tool's answers. Every edit goes through ops.ts and is checked by parseProject.
 
 import { OUTLINE_MAX, outline } from './handoff'
 import { OFFER_TOOL_FULL_NAME } from './offer'
@@ -17,7 +14,6 @@ import { PROJECT_DIR, carryUi, initialUi } from './session'
 import type { ProjectUi } from './session'
 import { KIND_TEACH, KNOB_HELP, TEACH, defaultName, fillOf, logicOf } from './teach'
 
-/** The tool's short name; the model calls it as `mcp__conductor__project`. */
 export const TOOL_NAME = 'project'
 export const TOOL_FULL_NAME = 'mcp__conductor__project'
 export const PROJECT_DIR_HINT = `${PROJECT_DIR}/<name>.json`
@@ -27,22 +23,19 @@ export const OP_KINDS = ['add', 'update', 'move', 'remove'] as const
 
 const KNOB_NAMES = Object.keys(KNOB_HELP)
 
-/** One line per block type: its id, what it does and when to use it (the detail pane's two lines, word for word). */
 function typeLines(): string[] {
   return NODE_TYPES.map(type => `- ${type}${canHoldChildren(type) ? ' (container)' : ''}: ${TEACH[type].hint}. Use when ${TEACH[type].when}.`)
 }
 
-/** The kinds of a type but its plain one: the ones a block names. */
+/** All but the plain kind, which a block does not name. */
 function namedKinds(type: keyof typeof KINDS): readonly Kind[] {
   return kindsOf(type).slice(1)
 }
 
-/** Every type that has kinds with the ones a block may name: `agent: scout, check, …. loop: …`. */
 function kindNames(): string {
   return (Object.keys(KINDS) as (keyof typeof KINDS)[]).map(type => `${type}: ${namedKinds(type).join(', ')}`).join('. ')
 }
 
-/** Every kind in a phrase, by type: what `kind` says in the schema. */
 function kindLine(): string {
   return (Object.keys(KINDS) as (keyof typeof KINDS)[]).map(type => `${type}: ${namedKinds(type).map(kind => `${kind} = ${KIND_TEACH[kind].hint}`).join('; ')}`).join('. ')
 }
@@ -53,7 +46,7 @@ function knobLine(): string {
     .join('; ')
 }
 
-/** What the model reads once it has loaded the tool (it is deferred: only its name is in every turn). */
+/** The tool is deferred: only its name is in every turn, and the model reads this once it loads the tool. */
 export function toolDescription(): string {
   return [
     `Reads and edits the user's Conductor workflow project: the board of blocks they see, saved at ${PROJECT_DIR_HINT}. Use it whenever the user asks to draft, add, change, move or remove workflow blocks or steps ("add a verify after n3", "this block"); do not edit that file by hand. A project is a spec the user reviews, not a script: never run it from here.`,
@@ -102,19 +95,14 @@ export const TOOL_SCHEMA: Record<string, unknown> = {
   },
 }
 
-/** What a draft is, whichever way it was asked for: the two sentences every brief for one says. */
 const DRAFT_RULES = [
   'The project is a spec the user reviews on the board. Do not write a workflow script and do not run anything.',
   'Pick the structure the task needs and no more: a few blocks with clear logic beat many. Give a block its kind where one fits, and use knobs where they say something (oncePer, stopCondition, output).',
 ]
 
-/** How every brief for a draft ends: what Claude says once the project is on the board. */
 const DRAFT_AFTER = 'Afterwards stop: the user takes it from there. Say in two or three lines what the blocks do, name any lint you chose to leave, and tell the user to review and edit the project on the board and to approve it there with r (Implement and Run).'
 
-/**
- * What Claude is told, unseen, when the person asks for a draft (`/conductor <description>`): a new project, which
- * Claude names. It names the tool in full: the tool is deferred, and the name is what Claude loads it by.
- */
+/** For `/conductor <description>`. It names the tool in full: the tool is deferred, and the name is what Claude loads it by. */
 export function draftBrief(description: string): string[] {
   return [
     [
@@ -128,10 +116,7 @@ export function draftBrief(description: string): string[] {
   ]
 }
 
-/**
- * What the question before a workflow answers with when the person wants it in Conductor: the draft's brief, for a
- * project Claude names itself, ending at the board. `asked` is false when an "Always Conductor" kept earlier answered.
- */
+/** `asked` is false when an "Always Conductor" kept earlier answered. */
 export function offerBrief(asked: boolean): string {
   return [
     `${asked ? 'The user chose Conductor' : 'The user chose Always Conductor earlier, so they were not asked'}: they want this workflow as a project on the Conductor board, to review and edit before anything is written or run.`,
@@ -143,12 +128,7 @@ export function offerBrief(asked: boolean): string {
   ].join('\n')
 }
 
-/**
- * What a "Visualize" answer adds to the Workflow tool's result: Claude draws a project of the script that is running.
- * `scriptPath` is the run's script file; `asked` is false when an "Always visualize" kept earlier answered. `name` is
- * the workflow's name as a project's (`projectName`), undefined for a run that has none: under it the next run of the
- * same script finds the project, and is shown on it with no question.
- */
+/** Added to the Workflow tool's result. Under `name` the next run of the same script finds the project, and is shown on it with no question. */
 export function visualizeBrief(scriptPath: string, asked: boolean, name: string | undefined): string {
   return [
     `Conductor: ${asked ? 'the user chose to see' : 'the user chose Always visualize earlier, so they see'} this workflow run as a project on the Conductor board. The run goes on meanwhile: do not change, re-run or stop the script.`,
@@ -162,7 +142,7 @@ export function visualizeBrief(scriptPath: string, asked: boolean, name: string 
   ].join('\n')
 }
 
-/** A label two blocks both list in `match`: the first in project order takes its agents, and the other shows none. One line each. */
+/** A label two blocks both list in `match`: the first in project order takes its agents, and the other shows none. */
 function sharedMatch(project: Project): string[] {
   const first = new Map<string, string>()
   const notes: string[] = []
@@ -176,7 +156,7 @@ function sharedMatch(project: Project): string[] {
   return notes
 }
 
-/** What an attach adds to its edit report: the agents of the run no block took, each label once. Later phases may still place some. */
+/** The agents of the run no block took, each label once. Later phases may still place some. */
 export function attachNote(project: Project, unplaced: readonly string[]): string {
   const labels = [...new Set(unplaced)]
   const placed =
@@ -186,12 +166,11 @@ export function attachNote(project: Project, unplaced: readonly string[]): strin
   return [placed, ...sharedMatch(project)].join('\n')
 }
 
-/** Added to an edit's answer when the board could not be put on screen (an open nobody typed waits under 144 columns: API-NOTES S12). */
+/** Added to an edit's answer when the board could not be put on screen (an open nobody typed waits under 144 columns). */
 export function unplacedNote(name: string): string {
   return `The board is not on screen (the terminal is too narrow for it to open by itself; the band above the prompt names the project): tell the user that /conductor opens it (project ${name}).`
 }
 
-// ---------------------------------------------------------------------------
 // Edits
 
 /** `notes` are things the edit did that the caller may not have meant, said in the answer. */
@@ -207,7 +186,7 @@ const TYPES_HINT = `types: ${NODE_TYPES.join(', ')}`
 const CONTAINERS_HINT = `containers: ${CONTAINER_TYPES.join(', ')}`
 const KNOBS_HINT = `knobs: ${KNOB_NAMES.join(', ')}`
 
-// A refusal Claude can act on: the model's own reason, plus the list it should have picked from.
+// A refusal Claude can act on: the reason, plus the list it should have picked from.
 function explain(error: string): string {
   if (error.includes('unknown type')) return `${error}; ${TYPES_HINT}`
   if (error.includes('cannot hold children')) return `${error}; ${CONTAINERS_HINT}`
@@ -231,7 +210,7 @@ function signature(project: Project): Map<string, string> {
   return out
 }
 
-/** Which blocks an edit added, changed (their own fields or their container) or removed. Order among siblings is not compared. */
+/** Order among siblings is not compared. */
 export function diffProjects(before: Project | null, after: Project): Change {
   const old = before ? signature(before) : new Map<string, string>()
   const now = signature(after)
@@ -244,7 +223,7 @@ export function diffProjects(before: Project | null, after: Project): Change {
   return change
 }
 
-/** A `condition` on a block that is no arm of a branch picks nothing: said of every such block among `ids`, so the edit can be put right. */
+/** A `condition` on a block that is no arm of a branch picks nothing. */
 export function strayConditions(project: Project, ids: readonly string[]): string[] {
   return flatten(project)
     .filter(row => ids.includes(row.node.id) && (row.node.knobs?.condition ?? '').trim() !== '' && (row.parentId === undefined ? undefined : findNode(project, row.parentId)?.type) !== 'branch')
@@ -263,10 +242,7 @@ function checked(before: Project, candidate: Project, touched: Iterable<string> 
   return { ok: true, project: parsed.project, ...change, ...(said.length > 0 ? { notes: said } : {}) }
 }
 
-/**
- * What an `add` beside a sibling did when that sibling stands directly in a branch or a parallel:
- * the new block is not a step after it but another arm, or another block run at the same time. Null elsewhere.
- */
+/** An `add` beside a sibling in a branch or a parallel makes another arm, not a step after it. Null elsewhere. */
 export function armNote(project: Project, id: string, beside: string): string | null {
   const row = flatten(project).find(one => one.node.id === id)
   const parent = row?.parentId === undefined ? undefined : findNode(project, row.parentId)
@@ -276,7 +252,7 @@ export function armNote(project: Project, id: string, beside: string): string | 
   return null
 }
 
-/** The blocks that stand at another place among the siblings they keep: a tree written in another order, which `diffProjects` does not compare. */
+/** A tree written in another order: `diffProjects` does not compare order. */
 function reordered(before: Project, after: Project): string[] {
   const order = (project: Project): Map<string, string[]> => {
     const out = new Map<string, string[]>()
@@ -294,11 +270,7 @@ function reordered(before: Project, after: Project): string[] {
   return moved
 }
 
-/**
- * Replaces the whole tree. A block whose id is in the project as it stood keeps
- * it; every other block is new and gets a fresh id, whatever id it came with,
- * so ids are never reused and never collide.
- */
+/** A block whose id is in the project as it stood keeps it; every other gets a fresh id, whatever it came with, so ids never collide. */
 export function replaceProject(before: Project, rawNodes: unknown): Edit {
   if (!Array.isArray(rawNodes)) return { ok: false, error: 'write needs `nodes`: the array of top-level blocks' }
   const known = new Set(flatten(before).map(row => row.node.id))
@@ -354,7 +326,6 @@ export function replaceProject(before: Project, rawNodes: unknown): Edit {
   return checked(before, parsed.project, reordered(before, parsed.project))
 }
 
-// Where an op points: beside a sibling, or at the end of a container; the end of the top level with none.
 function placeOf(project: Project, op: Record<string, unknown>): Place | string {
   // A null is a place not said, as one left out is.
   const beside = op.after ?? op.before
@@ -385,7 +356,6 @@ function patchOf(raw: Record<string, unknown>): NodePatch {
 
 type Grown = { project: Project; ids: string[] } | { error: string }
 
-// Adds one block and, inside it, its children.
 function grow(project: Project, raw: unknown, at: Place): Grown {
   if (!isRecord(raw)) return { error: 'a block must be an object' }
   const block = readType(raw.type, raw.kind)
@@ -411,7 +381,7 @@ function grow(project: Project, raw: unknown, at: Place): Grown {
   return { project: current, ids }
 }
 
-/** Applies the ops in order. One refused op refuses them all, and says which. */
+/** One refused op refuses them all. */
 export function applyOps(before: Project, ops: unknown): Edit {
   if (!Array.isArray(ops)) return { ok: false, error: 'apply needs `ops`: an array of { op: add | update | move | remove, … }' }
   let project: Project = before
@@ -473,7 +443,6 @@ export function applyOps(before: Project, ops: unknown): Edit {
   return checked(before, project, touched, notes)
 }
 
-// ---------------------------------------------------------------------------
 // What the tool answers with
 
 function lintLines(project: Project): string[] {
@@ -515,10 +484,8 @@ export function editReport(project: Project, change: Change, revision?: number):
 }
 
 /**
- * Whether Claude holds `stored` whole after the edit it made with `input`: the answer's outline names every block
- * (id, type, kind, name, place), and each text the outline does not say (logic, knob values with the start block's goal among them, `match`) is one
- * Claude sent in this edit or one the block had in the project it last saw (`seen`). False for a text that came from
- * elsewhere: what a kind fills in, a block kept from a project Claude never read.
+ * Whether Claude holds `stored` whole after the edit it made with `input`: every text the answer's outline does not say is one
+ * Claude sent or one the block had in the project it last saw (`seen`). False for a text from elsewhere, such as what a kind fills in.
  */
 export function knownAfterEdit(stored: Project, seen: Project | undefined, input: unknown): boolean {
   const rows = flatten(stored)
@@ -536,7 +503,6 @@ export function knownAfterEdit(stored: Project, seen: Project | undefined, input
   return rows.every(({ node }) => texts(node).every(text => known(node.id, text)))
 }
 
-/** The project a path names, when it is a project file under `root`; null for any other path. */
 export function projectOfPath(root: string, cwd: string, path: string): string | null {
   if (path === '') return null
   const absolute = path.startsWith('/') ? path : `${cwd.replace(/\/+$/, '')}/${path}`
@@ -553,18 +519,17 @@ export function projectOfPath(root: string, cwd: string, path: string): string |
   return /^[a-z0-9-]+\.json$/.test(file) ? file.slice(0, -'.json'.length) : null
 }
 
-/** A change in a few words, for the message row and the undo history: `added n12; changed n3, n4`. '' for none. */
+/** For the message row and the undo history: `added n12; changed n3, n4`. */
 export function changeWords(change: Change): string {
   const list = (ids: string[]): string => (ids.length > 4 ? `${ids.slice(0, 4).join(', ')} and ${ids.length - 4} more` : ids.join(', '))
   return [change.added.length > 0 ? `added ${list(change.added)}` : '', change.changed.length > 0 ? `changed ${list(change.changed)}` : '', change.removed.length > 0 ? `removed ${list(change.removed)}` : ''].filter(Boolean).join('; ')
 }
 
-/** What the model is told, unseen, with a prompt sent after the board changed by hand since it last read the project, when the change itself cannot be said (`changedNote`). */
+/** Sent, unseen, with a prompt when the board changed by hand and the change itself cannot be said (`changedNote`). */
 export function staleNote(name: string, revision: number): string {
   return `Conductor: the user changed the "${name}" workflow project on the board by hand since you last read or edited it (it is now revision ${revision}). This note cannot say what changed, so what you know of it is out of date: call ${TOOL_FULL_NAME} with action "read" before you describe, review or edit it.`
 }
 
-// A block on one line, its fields in the file's order: its own, and with `deep` everything it holds.
 function blockOf(node: ProjectNode, deep: boolean): Record<string, unknown> {
   const { id, type, kind, name, logic, knobs, match, children } = node
   const own = { id, type, kind, name, logic, knobs: knobs && Object.keys(knobs).length > 0 ? knobs : undefined, match }
@@ -573,7 +538,6 @@ function blockOf(node: ProjectNode, deep: boolean): Record<string, unknown> {
 
 const TOP = ''
 
-// The ids each container holds, in order; the top level's under TOP.
 function childIds(rows: readonly Row[]): Map<string, string[]> {
   const out = new Map<string, string[]>()
   for (const row of rows) out.set(row.parentId ?? TOP, [...(out.get(row.parentId ?? TOP) ?? []), row.node.id])
@@ -582,12 +546,7 @@ function childIds(rows: readonly Row[]): Map<string, string[]> {
 
 const whereWords = (parentId: string): string => (parentId === TOP ? 'at the top level' : `inside ${parentId}`)
 
-/**
- * Everything that differs between the project as Claude last saw it and the board, a line each, so that the one
- * and the lines give the other exactly: new blocks whole and where they stand, changed blocks as they are now,
- * blocks that went to another container, the order of a container whose blocks changed places, the ids gone.
- * None when nothing differs.
- */
+/** Everything that differs between the project as Claude last saw it and the board, so that the one and the lines give the other exactly. */
 export function boardChanges(seen: Project, now: Project): string[] {
   const old = new Map(flatten(seen).map(row => [row.node.id, row]))
   const rows = flatten(now)
@@ -630,10 +589,7 @@ export function boardChanges(seen: Project, now: Project): string[] {
   ]
 }
 
-/**
- * What the model is told, unseen, in place of `staleNote` when the project as it last saw it is at hand: the change
- * itself, so no read is needed. Null when saying the change takes more than the project does: a read is cheaper.
- */
+/** In place of `staleNote` when the project as Claude last saw it is at hand. Null when saying the change takes more than the project does: a read is cheaper. */
 export function changedNote(name: string, revision: number, seen: Project, now: Project, selectedId: string | null): string | null {
   const lines = boardChanges(seen, now)
   if (lines.join('\n').length > serializeProject(now).length) return null
@@ -648,12 +604,7 @@ export function changedNote(name: string, revision: number, seen: Project, now: 
 /** When the hooks module takes the mark's ids back: once the graph has shown it. */
 export const FLASH_CLEAR_MS = FLASH_MS + 400
 
-/**
- * The pane's state once an edit from chat (or a reload of the file) has landed:
- * the project is the one shown, the touched blocks are marked for a moment, and
- * the selection goes to the first new block so the graph scrolls to it. `seq`
- * only ever grows, so the graph can tell one edit from the next.
- */
+/** The selection goes to the first new block so the graph scrolls to it. `seq` only ever grows, so the graph can tell one edit from the next. */
 export function showEdit(ui: ProjectUi, name: string, project: Project, change: Change): ProjectUi {
   const same = ui.name === name && ui.status === 'ready'
   // A draft being laid out stays so under a later edit of Claude's turn (a lint fixed): the turn's end is what ends it.
@@ -661,7 +612,7 @@ export function showEdit(ui: ProjectUi, name: string, project: Project, change: 
   const base: ProjectUi = same ? { ...ui, picker: null, confirmId: null, editing: false, freshId: null, drafting: ui.drafting === 'show' ? 'show' : null, notice: null, runCleared: true, unsaved: false } : { ...carryUi(ui, initialUi()), name, status: 'ready' }
   const still = same && ui.selectedId !== null && findNode(project, ui.selectedId) ? ui.selectedId : null
   const selectedId = change.added[0] ?? still ?? change.changed[0] ?? project.nodes[0]?.id ?? null
-  // Said on the message row, with the way back: an edit from chat is undone like any other.
+  // An edit from chat is undone like any other.
   const said = changeWords(change)
   return { ...base, selectedId, notice: said !== '' ? `Claude ${said} · ${UNDO_HINT}` : base.notice, flash: { ids: [...change.added, ...change.changed], seq: (ui.flash?.seq ?? 0) + 1 } }
 }

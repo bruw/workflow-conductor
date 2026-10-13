@@ -24,14 +24,14 @@ export type NodeRun = { total: number; running: number; done: number; failed: nu
 export type RunState = {
   runId?: string
   name?: string
-  /** Where the run's journal is: kept here so that a load of the module that follows a run midway still reads its phases. */
+  /** Kept in the state so that a load of the module midway through a run still reads its phases. */
   transcriptDir?: string
   status: RunStatus
   /** By agentId. */
   agents: Record<string, AgentRun>
   /** By project node id. */
   byNode: Record<string, NodeRun>
-  /** By phase title (used when no project is loaded). */
+  /** By phase title, for a run with no project. */
   byPhase: Record<string, NodeRun>
   /** AgentIds whose label carries no known node id. */
   unmapped: string[]

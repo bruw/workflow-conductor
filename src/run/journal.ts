@@ -3,7 +3,7 @@ import type { RunEvent } from './events'
 export type AgentMeta = { description?: string; workflowPhase?: string }
 
 export type JournalOptions = {
-  /** Run id stamped on the events; the journal itself does not carry one. */
+  /** The journal carries no run id of its own. */
   runId?: string
 }
 
@@ -21,11 +21,7 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-/**
- * Converts the contents of a workflow `journal.jsonl` into run events.
- * `metas` maps agentId to the reduced contents of its `agent-<id>.meta.json`, used when a
- * `started` line lacks a label or phase. Unknown and malformed lines are skipped.
- */
+/** `metas` (by agentId, from `agent-<id>.meta.json`) gives the label or phase a `started` line lacks. */
 export function journalToEvents(journalText: string, metas: Record<string, AgentMeta> = {}, options: JournalOptions = {}): RunEvent[] {
   const runId = options.runId ?? ''
   const events: RunEvent[] = []
@@ -65,16 +61,13 @@ export function journalToEvents(journalText: string, metas: Record<string, Agent
   return events
 }
 
-/**
- * The phase of every agent the journal has a `started` line for: its title, or null when
- * the line names none. An agent missing from the map has not been journalled yet.
- */
+/** Null: the `started` line names no phase. Absent: the agent is not journalled yet. */
 export function journalPhases(journalText: string): Map<string, string | null> {
   const phases = new Map<string, string | null>()
   if (typeof journalText !== 'string') return phases
 
   for (const line of journalText.split('\n')) {
-    // Read again with every burst of spawns: a line that does not say the word (a result, with all it carries) is not parsed.
+    // Read with every burst of spawns, so a line without the word (a result, with all it carries) is not parsed.
     if (!line.includes('"started"')) continue
     const entry = parseLine(line)
     if (entry?.type !== 'started') continue
@@ -93,11 +86,7 @@ function count(value: unknown): number {
 /** The usage counts that make up the token figure shown: prompt tokens mostly arrive as cache writes and reads. */
 export const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'] as const
 
-/**
- * Totals the four usage counts over an agent transcript (`agent-<id>.jsonl`).
- * One API message is written as several lines that repeat the same `message.id` and usage,
- * so usage is counted once per message id (the largest seen); lines without an id each count.
- */
+/** One API message is several lines repeating its `message.id` and usage: counted once per id, the largest seen. */
 export function sumUsage(transcriptText: string): number {
   if (typeof transcriptText !== 'string') return 0
 

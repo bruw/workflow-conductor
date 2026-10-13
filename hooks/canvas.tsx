@@ -7,19 +7,14 @@ import type { GraphPaintOptions, Span } from '../src/ui/graph-paint'
 import { FRAME_MS } from '../src/ui/tween'
 import { TEXT } from '../src/ui/theme'
 
-// The graph: a surface module. It owns only transient view state (the pan, a
-// drag in flight, the slot under the pointer, cards sliding) and has no `$`:
-// every click, drop and key is a message posted to hooks/project.tsx, which
-// answers with new props.
+// The graph, a surface module: it owns only transient view state (the pan, a drag in flight, the hover, cards sliding) and has no `$`.
+// Every click, drop and key is a message posted to hooks/project.tsx, which answers with new props.
 
 /** Past this the graph is drawn without colours: fewer spans, a smaller tree. */
 const WEIGHT_MAX = 70_000
 
-// The one shared ticker. It runs only while cards slide, a mark shows or a drag
-// held at an edge pans: started by the drawing that finds any of them, stopped
-// by the tick that finds none. The handle and the tick's body live here because
-// a drawing's closures are replaced on every call; `ticking` in the instance's
-// own state says whether this instance started it. One graph is mounted at a time.
+// The one shared ticker: started by the drawing that finds cards sliding, a mark showing or a drag panning at an edge, stopped by the tick that finds none.
+// Its handle and the tick's body are module variables because a drawing's closures are replaced on every call; one graph is mounted at a time.
 let stopTicker: (() => void) | null = null
 let onTick: (() => void) | null = null
 
@@ -38,8 +33,7 @@ const Graph: ClientModule<JsonValue, GraphState> = (raw, surface) => {
   const held = surface.state ?? initialGraph()
   let state = syncGraph(held, context)
 
-  // Set again on every call (a later listener replaces the earlier one), so it
-  // always reduces against the props and state this drawing shows.
+  // Set again on every call (a later listener replaces the earlier one), so it reduces against the props and state this drawing shows.
   const take = (input: GraphInput) => {
     const result = graphReduce(state, input, context)
     if (result.state !== state) {
@@ -51,11 +45,8 @@ const Graph: ClientModule<JsonValue, GraphState> = (raw, surface) => {
   surface.onKey(event => take({ type: 'key', ...event }))
   surface.onPointer(event => take({ type: 'pointer', event: event.type, x: event.x - pad, y: event.y }))
 
-  // Motion. Cards whose place changed since the last drawing start sliding, and
-  // the ticker starts with them. At most one setState per drawing, and none
-  // once the places are as recorded, so a drawing never chains into a loop.
-  // An edit from chat marks the blocks it touched: the same ticker counts the mark down.
-  // The wheel's rows came with the props: the pan they left is kept, or the next drawing would take them again.
+  // At most one setState per drawing, and none once the places are as recorded, so a drawing never chains into a loop.
+  // The wheel's rows come with the props: the pan they left is kept, or the next drawing would take them again.
   const moved = moveGraph(flashGraph(state, props.flash), layout)
   const start = graphTicking(moved, context) && (!moved.ticking || stopTicker === null)
   if (start) {

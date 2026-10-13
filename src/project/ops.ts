@@ -8,7 +8,6 @@ import type { BlockRef, Starter } from './teach'
 
 export type OpResult = { project: Project; error?: string }
 
-/** `id` is the id of the node that was added. */
 export type AddResult = OpResult & { id?: string }
 
 export type Place = { parentId?: string; index: number }
@@ -30,7 +29,7 @@ function locate(project: Project, id: string): Spot | undefined {
   return spot
 }
 
-// Replaces the child list of `parentId` (the top level when undefined).
+// The top level when `parentId` is undefined.
 function editList(nodes: readonly ProjectNode[], parentId: string | undefined, fn: (list: readonly ProjectNode[]) => ProjectNode[]): ProjectNode[] {
   if (parentId === undefined) return fn(nodes)
   return nodes.map(node => {
@@ -59,7 +58,6 @@ function subtreeHas(node: ProjectNode, id: string): boolean {
   return node.id === id || (node.children ?? []).some(child => subtreeHas(child, id))
 }
 
-// Why `parentId` cannot take a child, or undefined when it can.
 function parentError(project: Project, parentId: string | undefined): string | undefined {
   if (parentId === undefined) return undefined
   const parent = findNode(project, parentId)
@@ -69,10 +67,7 @@ function parentError(project: Project, parentId: string | undefined): string | u
 
 export { nextIdNumber } from './model'
 
-/**
- * Where `n` adds a block: after the selected one; inside it, as its last, when it is a container that holds
- * nothing yet or the one the view shows (beside that one is out of sight); at the end of the project with none selected.
- */
+/** Where `n` adds a block: after the selected one, or inside it when it is an empty container or the one the view shows (beside that one is out of sight). */
 export function addPlace(project: Project, selectedId: string | null, viewRootId: string | null): Place {
   const spot = selectedId === null ? undefined : locate(project, selectedId)
   if (!spot) return { index: project.nodes.length }
@@ -82,24 +77,18 @@ export function addPlace(project: Project, selectedId: string | null, viewRootId
   return parent ? { parentId: parent.id, index: index + 1 } : { index: index + 1 }
 }
 
-/** What a second `start` block is refused with. */
 function startTaken(id: string): string {
   return `the project already has its start block (${id}): every project has one, first, and no other`
 }
 
-/** What deleting the `start` block, or making it another block, is refused with. */
 export const START_KEPT = 'the start block stays: every project has it, first. Clear its args for a workflow that takes no input'
 
-/**
- * The place a block of `type` really gets when `at` is asked for: `start` goes first whatever was asked,
- * and nothing else goes before it.
- */
+/** `start` goes first whatever is asked, and nothing else goes before it. */
 export function placeFor(project: Pick<Project, 'nodes'>, type: NodeType, at: Place): Place {
   if (type === 'start') return { index: 0 }
   return at.parentId === undefined && startOf(project) ? { index: Math.max(1, Number.isFinite(at.index) ? Math.trunc(at.index) : project.nodes.length) } : at
 }
 
-/** A new block of a type and kind, with what the kind fills in (its logic, and knobs under the ones it is given). */
 function made(id: string, block: BlockRef, name: string, knobs: Knobs = {}): ProjectNode {
   const node: ProjectNode = { id, type: block.type, name }
   if (block.kind !== undefined) node.kind = block.kind
@@ -111,7 +100,6 @@ function made(id: string, block: BlockRef, name: string, knobs: Knobs = {}): Pro
   return node
 }
 
-/** The blocks a container of a kind starts with, numbered from `number` on. */
 function starters(block: BlockRef, number: number): ProjectNode[] {
   return starterOf(block).map((one: Starter, index) => {
     const read = readType(one.type, one.kind)
@@ -120,11 +108,7 @@ function starters(block: BlockRef, number: number): ProjectNode[] {
   })
 }
 
-/**
- * Inserts a new node. `at.index` is clamped to the destination list; `start` goes first, and nothing goes before it.
- * A block of a kind is given what the kind fills in, and a container of a kind that starts with blocks is given
- * them: all of it one edit. `bare` leaves the starting blocks out, for an edit that brings its own.
- */
+/** A container of a kind that starts with blocks is given them in the same edit; `bare` leaves them out, for an edit that brings its own. */
 export function addNode(project: Project, spec: { type: NodeType; kind?: Kind; name?: string; bare?: boolean }, asked: Place): AddResult {
   if (!isNodeType(spec.type)) return refuse(project, `unknown type ${String(spec.type)}`)
   const block = readType(spec.type, spec.kind)
@@ -144,7 +128,6 @@ export function addNode(project: Project, spec: { type: NodeType; kind?: Kind; n
   return { project: { ...project, nextId: number + 1 + held.length, nodes }, id }
 }
 
-/** Removes a node and everything nested in it. The `start` block is never removed. */
 export function removeNode(project: Project, id: string): OpResult {
   const node = findNode(project, id)
   if (!node) return refuse(project, `no block ${id}`)
@@ -152,14 +135,9 @@ export function removeNode(project: Project, id: string): OpResult {
   return { project: { ...project, nextId: nextIdNumber(project), nodes: without(project.nodes, id) } }
 }
 
-/** What a move of the `start` block, or of a block to before it, is refused with. */
 export const START_STAY = 'start stays first: the workflow starts at the first block of the project'
 
-/**
- * Reorders or re-nests a node. `to.index` is the position in the destination
- * list as it stands once the node has been lifted out, clamped to that list.
- * The `start` block does not move, and a block sent before it lands after it.
- */
+/** `to.index` is the position in the destination list once the node is lifted out. */
 export function moveNode(project: Project, id: string, to: Place): OpResult {
   const spot = locate(project, id)
   if (!spot) return refuse(project, `no block ${id}`)
@@ -175,11 +153,7 @@ export function moveNode(project: Project, id: string, to: Place): OpResult {
   return { project: { ...project, nodes: editList(lifted, at.parentId, list => insertAt(list, at.index, spot.node)) } }
 }
 
-/**
- * Changes name, logic, knobs and match. Knobs merge key by key; a knob set to
- * undefined or '' is cleared, and so is logic set to ''. `match` is replaced whole, and
- * cleared by an empty list. Id and type are fixed.
- */
+/** Knobs merge key by key; a knob or a logic set to '' is cleared. `match` is replaced whole, and cleared by an empty list. */
 export function updateNode(project: Project, id: string, patch: NodePatch): OpResult {
   const node = findNode(project, id)
   if (!node) return refuse(project, `no block ${id}`)
@@ -220,12 +194,7 @@ export function updateNode(project: Project, id: string, patch: NodePatch): OpRe
   return { project: { ...project, nodes: replace(project.nodes, id, next) } }
 }
 
-/**
- * Changes a node's type and kind (the plain kind where none is said). A block that holds others can only
- * become another container; the `start` block stays what it is, and no block becomes one.
- * Its knobs and its logic follow the kind and never lose what was typed: one still as the old kind filled it in goes,
- * and the new kind fills in the ones that are not set. A container left empty starts with its new kind's blocks.
- */
+/** Knobs and logic never lose what was typed: one still as the old kind filled it in goes, and the new kind fills in what is not set. */
 export function retypeNode(project: Project, id: string, type: NodeType, kind?: Kind): OpResult {
   const node = findNode(project, id)
   if (!node) return refuse(project, `no block ${id}`)
@@ -259,13 +228,11 @@ export function retypeNode(project: Project, id: string, type: NodeType, kind?: 
   return { project: { ...project, ...(held.length > 0 ? { nextId: number + held.length } : {}), nodes: replace(project.nodes, id, next) } }
 }
 
-/** The knobs a digit steps on the selected block, and the models the first one goes through. */
+/** The knobs a digit steps on the selected block. */
 export type QuickKnob = 'model' | 'effort'
 export const MODEL_STEPS: readonly string[] = ['haiku', 'sonnet', 'opus']
-/** What an unset model or effort reads as. */
 export const INHERIT = 'inherit'
 
-/** Which knob a digit steps on a block: 1 its model, 2 its effort. Undefined where its type has none. */
 export function quickKnob(node: Pick<ProjectNode, 'type' | 'kind'>, slot: number): QuickKnob | undefined {
   const has = (knob: keyof Knobs): boolean => offers(node, knob)
   if (slot === 1) return has('model') ? 'model' : undefined
@@ -273,16 +240,11 @@ export function quickKnob(node: Pick<ProjectNode, 'type' | 'kind'>, slot: number
   return undefined
 }
 
-/** A quick knob's value in a word: `inherit` for an unset model or effort. */
 export function quickValue(node: Pick<ProjectNode, 'knobs'>, knob: QuickKnob): string {
   return node.knobs?.[knob] ?? INHERIT
 }
 
-/**
- * Steps a quick knob of a block to its next value: model inherit → haiku → sonnet → opus → inherit (a model
- * of another name goes to inherit), effort inherit → low → … → max → inherit.
- * `knob` and `value` say what it is now; refused where the block's type has no such knob.
- */
+/** model: inherit → haiku → sonnet → opus → inherit (a model of another name goes to inherit); effort likewise, through `EFFORTS`. */
 export function stepKnob(project: Project, id: string, slot: number): OpResult & { knob?: QuickKnob; value?: string } {
   const node = findNode(project, id)
   if (!node) return refuse(project, `no block ${id}`)

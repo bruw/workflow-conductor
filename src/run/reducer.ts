@@ -3,19 +3,15 @@ import type { AgentRun, NodeRun, RunEvent, RunState } from './events'
 
 const NODE_ID = /^(n\d+)\b/
 
-/** Project node id carried at the start of an agent label, e.g. `n3: verify auth` → `n3`. */
 export function parseNodeId(label: string): string | undefined {
   if (typeof label !== 'string') return undefined
   return NODE_ID.exec(label)?.[1]
 }
 
-/**
- * What ties a run to a project: the ids of its blocks, and for the blocks that have one their `match`
- * (the script's own agent labels and phase titles, a prefix where one ends in `*`), in project order.
- */
+/** `match` holds a block's agent labels and phase titles from the script, in project order; one ending in `*` is a prefix. */
 export type Mapping = { ids: ReadonlySet<string>; match?: Readonly<Record<string, readonly string[]>> }
 
-/** The block whose `match` names `text`: an exact string before any prefix, the longest prefix among those, the first block in project order on a tie. */
+/** An exact string wins over any prefix, then the longest prefix, then the first block in project order. */
 export function matchNode(text: string, match: Mapping['match']): string | undefined {
   let found: string | undefined
   let length = -1
@@ -31,10 +27,7 @@ export function matchNode(text: string, match: Mapping['match']): string | undef
   return found
 }
 
-/**
- * The block an agent belongs to: the id its label opens with (any id with no project, else one the project has),
- * else the block that matches its label, else the one that matches its phase title. Undefined: unmapped.
- */
+/** The id the label opens with (with a project, only one it has), else a match on the label, else on the phase title. */
 export function nodeOf(label: string, phase: string | undefined, mapping?: Mapping): string | undefined {
   const parsed = parseNodeId(label)
   if (parsed !== undefined && (!mapping || mapping.ids.has(parsed))) return parsed
@@ -49,7 +42,6 @@ function patchBucket(buckets: Buckets, key: string | undefined, patch: (one: Nod
   return { ...buckets, [key]: patch(buckets[key] ?? emptyNodeRun()) }
 }
 
-/** Applies the same change to the node bucket and the phase bucket an agent belongs to. */
 function patchAgentBuckets(state: RunState, agent: AgentRun, patch: (one: NodeRun) => NodeRun): Pick<RunState, 'byNode' | 'byPhase'> {
   return {
     byNode: patchBucket(state.byNode, agent.nodeId, patch),
@@ -61,11 +53,7 @@ function tokenCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
-/**
- * Folds one run event into the state and returns a new state; the input is never mutated.
- * `mapping`, when given, is the loaded project: an agent no block of it claims (`nodeOf`)
- * counts as unmapped.
- */
+/** Returns the same state when the event changes nothing; the input is never mutated. */
 export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): RunState {
   switch (event.kind) {
     case 'run-start': {
@@ -86,7 +74,7 @@ export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): Run
         const phase = typeof event.phase === 'string' && event.phase.length > 0 ? event.phase : undefined
         if (known.phase !== undefined || phase === undefined) return state
 
-        // An agent no label placed may be placed by its phase title, now that it has one.
+        // An agent no label placed may be placed by its phase title.
         const nodeId = known.nodeId ?? nodeOf(known.label, phase, mapping)
         const counted = (one: NodeRun): NodeRun => ({ ...one, total: one.total + 1, [known.status]: one[known.status] + 1, tokens: one.tokens + known.tokens })
 
@@ -161,10 +149,7 @@ export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): Run
   }
 }
 
-/**
- * The state with every agent placed again under `mapping`: the project a run was given after it started.
- * Each agent's block, the per-block counts and the unmapped list are made anew; the phases stay.
- */
+/** Places every agent again under `mapping`, for a project given to a run after it started; the phases stay. */
 export function remap(state: RunState, mapping?: Mapping): RunState {
   const agents: RunState['agents'] = {}
   let byNode: Buckets = {}
@@ -178,7 +163,6 @@ export function remap(state: RunState, mapping?: Mapping): RunState {
   return { ...state, agents, byNode, unmapped }
 }
 
-/** Replays a list of events from an empty state. */
 export function reduceAll(events: readonly RunEvent[], mapping?: Mapping, from: RunState = emptyRunState()): RunState {
   return events.reduce((state, event) => reduce(state, event, mapping), from)
 }

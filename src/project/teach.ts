@@ -1,29 +1,25 @@
-// Teaching content for every block type and every kind of one, what a kind
-// fills in, and the palette the add list searches. Facts follow the Workflow
-// script reference. Pure TypeScript.
+// Teaching content for every block type and every kind of one, what a kind fills in, and the palette the add
+// list searches. Facts follow the Workflow script reference.
 
 import { EFFORTS, KINDS, kindOf, kindsOf, plainKind } from './model'
 import type { Kind, Knobs, NodeType } from './model'
 
 export type Teach = {
-  /** One character, for the plain list drawn where a surface has no `Client`. */
+  /** For the plain list drawn where a surface has no `Client`. */
   glyph: string
-  /** The type's one name, everywhere: its id. */
   name: string
-  /** One line, at most HINT_MAX characters, in plain words: what the block does. */
+  /** One line, at most HINT_MAX characters. */
   hint: string
-  /** One line, at most WHEN_MAX characters: the situation that calls for it. Shown as `use when: …`. */
+  /** One line, at most WHEN_MAX characters. Shown as `use when: …`. */
   when: string
   /** Three to six short lines: what it is, when to use it, cost or gotcha. */
   card: string[]
 }
 
-/** The add list's two groups: the blocks that do work themselves, and the ones that hold blocks. */
 export type PaletteGroup = 'work' | 'holds'
 
 export type PaletteEntry = { type: NodeType; group: PaletteGroup }
 
-/** Each group's heading in the add list, in the order the groups are listed. */
 export const PALETTE_GROUPS: readonly { group: PaletteGroup; heading: string }[] = [
   { group: 'work', heading: 'Blocks that do work' },
   { group: 'holds', heading: 'Blocks that hold blocks' },
@@ -154,25 +150,19 @@ export const TEACH: Record<NodeType, Teach> = {
   },
 }
 
-/** A block as it is named and looked up: its type, and its kind where it says one. */
 export type BlockRef = { type: NodeType; kind?: Kind }
 
-/** The free-text fields of a block: its logic and the knobs typed as text. */
 export type TextField = 'logic' | 'goal' | 'args' | 'prompt' | 'condition' | 'oncePer' | 'stopCondition' | 'output'
 
-/** A block a new container of some kind starts with. */
 export type Starter = { type: NodeType; kind?: Kind; name: string; logic?: string; knobs?: Knobs }
 
 export type KindTeach = {
-  /** One line, at most HINT_MAX characters, in plain words: what a block of this kind does. */
   hint: string
-  /** One line, at most WHEN_MAX characters: the situation that calls for it. */
   when: string
-  /** Three to five short lines: what it is, when to use it, cost or gotcha. */
   card: string[]
   /** One line in the script's terms: what the hand-off tells Claude the kind means. */
   script: string
-  /** The knobs a new block of this kind is given: what the pattern needs to be itself. */
+  /** The knobs a new block of this kind is given. */
   fill?: Knobs
   /** The logic a new block of this kind is given: a voting kind says its votes in it. */
   logic?: string
@@ -187,11 +177,7 @@ function plain(type: NodeType, script: string, hints?: KindTeach['hints']): Kind
   return { hint: TEACH[type].hint, when: TEACH[type].when, card: TEACH[type].card, script, ...(hints ? { hints } : {}) }
 }
 
-/**
- * Every kind: what it means, what it fills in and what it starts with. A kind adds no field
- * and takes none away: a block's fields are its type's (`KNOBS_BY_TYPE`). The two voting kinds
- * of agent (`VOTING_KINDS`) say their votes in their logic, which they are given filled in.
- */
+/** A kind adds no field and takes none away: a block's fields are its type's (`KNOBS_BY_TYPE`). */
 export const KIND_TEACH: Record<Kind, KindTeach> = {
   // agent: what is its job?
   task: plain('agent', 'one agent() call'),
@@ -426,41 +412,36 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
   },
 }
 
-/** What a block says of itself: its kind's words, or its type's for a type that has no kinds. */
 export function teachOf(block: BlockRef): Pick<KindTeach, 'hint' | 'when' | 'card'> {
   const kind = kindOf(block)
   return kind === undefined ? TEACH[block.type] : KIND_TEACH[kind]
 }
 
-/** `use when: a step needs reading or judgment…`: the line under a block's hint, in the detail pane and the add list. */
+/** The line under a block's hint, in the detail pane and the add list. */
 export function useWhen(block: BlockRef): string {
   return `use when: ${teachOf(block).when}`
 }
 
-/** The knobs a new block of this type and kind is given. */
 export function fillOf(block: BlockRef): Knobs {
   const kind = kindOf(block)
   return kind === undefined ? {} : (KIND_TEACH[kind].fill ?? {})
 }
 
-/** The logic a new block of this type and kind is given; undefined where its kind gives none. */
 export function logicOf(block: BlockRef): string | undefined {
   const kind = kindOf(block)
   return kind === undefined ? undefined : KIND_TEACH[kind].logic
 }
 
-/** The blocks a new, empty container of this type and kind starts with. */
 export function starterOf(block: BlockRef): readonly Starter[] {
   const kind = kindOf(block)
   return kind === undefined ? [] : (KIND_TEACH[kind].starter ?? [])
 }
 
-/** The name a new block gets: its kind's, or its type's for a plain block. */
 export function defaultName(block: BlockRef): string {
   return block.kind === undefined || block.kind === plainKind(block.type) ? block.type : block.kind
 }
 
-/** What each knob says, in a phrase: the one place the knobs are explained in words (Claude reads it; see chat.ts). */
+/** The one place the knobs are explained in words: Claude reads it (chat.ts). */
 export const KNOB_HELP: Record<keyof Knobs, string> = {
   goal: 'on the start block only: the goal of the workflow, in a sentence',
   args: 'on the start block only: the input the script reads from `args`, in words or as a shape, "{ target? }: a branch, a pull request or a path"; unset, it takes none',
@@ -476,17 +457,8 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
 }
 
 /**
- * Which knobs a type has: the one place that says so, and the same for every kind of the
- * type. The detail pane offers a field for each one typed as text, the card a chip for model
- * and effort; a knob a block carries anyway (set from chat, by hand in the file, or
- * before the fields were made the same) is offered after them. `isolation` and `agentType` have no control:
- * Claude sets them, and the detail pane only says where one is set.
- *
- * Reasoning: a block that does work says what it is told (`prompt`) and what it hands on
- * (`output`); a block that holds blocks says its one rule: what it runs once per (`oncePer`)
- * or when it stops (`stopCondition`). A branch's rule is on its arms (`condition`). A container hands on
- * what its last block makes, so it has no `output` of its own. The start block says the two
- * things the whole project is for: its goal and its args; it has no name to set and no logic.
+ * The same for every kind of the type. `isolation` and `agentType` have no control: Claude sets them, and the detail pane only says where one is set.
+ * A container hands on what its last block makes, so it has no `output`; a branch's rule is on its arms (`condition`).
  */
 export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
   agent: ['prompt', 'output', 'model', 'effort', 'isolation', 'agentType'],
@@ -506,26 +478,22 @@ export const SELF_BRIEFED: readonly Kind[] = ['verify', 'judge', 'critic']
 /** The kinds of agent that vote: how many is said in their logic, as plain words nothing reads. */
 export const VOTING_KINDS: readonly Kind[] = ['verify', 'judge']
 
-/** Whether a block has a knob by its type, whatever it carries. */
+/** By its type, whatever the block carries. */
 export function offers(block: BlockRef, knob: keyof Knobs): boolean {
   return KNOBS_BY_TYPE[block.type].includes(knob)
 }
 
-/** Whether the detail pane offers a block's logic: a phase is its name and no more, and the start block its goal and args, so only logic it already carries is shown. */
+/** A phase is its name and no more, and the start block its goal and args: only logic it already carries is shown. */
 export function hasLogic(node: { type: NodeType; logic?: string }): boolean {
   return (node.type !== 'phase' && node.type !== 'start') || (node.logic ?? '').trim() !== ''
 }
 
-/** Whether the detail pane offers a block's name: the start block is named for what it is. */
+/** The start block is named for what it is. */
 export function hasName(node: { type: NodeType }): boolean {
   return node.type !== 'start'
 }
 
-/**
- * The knobs of a block: its type's, then any other it has set.
- * `condition` belongs to no type: it is offered (after the prompt) to a block that stands
- * directly in a `branch`, which `parentType` says.
- */
+/** `condition` belongs to no type: it is offered, after the prompt, to a block that stands directly in a `branch`. */
 export function knobsOf(node: BlockRef & { knobs?: Knobs }, parentType?: NodeType): (keyof Knobs)[] {
   const own = KNOBS_BY_TYPE[node.type]
   const listed: readonly (keyof Knobs)[] = parentType !== 'branch' ? own : own[0] === 'prompt' ? ['prompt', 'condition', ...own.slice(1)] : ['condition', ...own]
@@ -533,11 +501,7 @@ export function knobsOf(node: BlockRef & { knobs?: Knobs }, parentType?: NodeTyp
   return [...listed, ...extra]
 }
 
-/**
- * How a field is named beside it, in the pane's words and in every message: a block has a
- * name and its logic; the knobs typed as text are named for what they say. The file's keys
- * are the same words (`oncePer`, `stopCondition`).
- */
+/** How a field is named in the pane and in every message. */
 export const FIELD_LABEL = {
   name: 'name',
   logic: 'logic',
@@ -550,7 +514,6 @@ export const FIELD_LABEL = {
   output: 'output',
 } as const
 
-/** A field's name as a message says it: the label where it has one (`logic`, `stop condition`), else the knob's own name (`model`). */
 export function fieldWord(field: string): string {
   return (FIELD_LABEL as Readonly<Record<string, string>>)[field] ?? field
 }
@@ -571,17 +534,14 @@ const TYPE_HINTS: Partial<Record<NodeType, Partial<Record<TextField, string>>>> 
   code: { logic: 'what it computes, e.g. dedup by ref · keep unrefuted · top 5 by score · merge lists' },
 }
 
-/**
- * What an empty field of a block says it is for: its kind's hint, else its type's, else the
- * field's own. An arm's `condition` is hinted by the branch it stands in (`parent`).
- */
+/** Its kind's hint, else its type's, else the field's own. An arm's `condition` is hinted by the branch it stands in (`parent`). */
 export function placeholderOf(block: BlockRef, field: TextField, parent?: BlockRef): string {
   const from = field === 'condition' ? parent : block
   const kind = from === undefined ? undefined : kindOf(from)
   return (kind === undefined ? undefined : KIND_TEACH[kind].hints?.[field]) ?? TYPE_HINTS[block.type]?.[field] ?? FIELD_PLACEHOLDER[field]
 }
 
-/** The add list's order: the blocks that do work, then the ones that hold blocks. `start` is not in it: every project has that block, and no second. */
+/** `start` is not in it: every project has that block, and no second. */
 export const PALETTE: PaletteEntry[] = [
   { type: 'agent', group: 'work' },
   { type: 'code', group: 'work' },
@@ -593,18 +553,16 @@ export const PALETTE: PaletteEntry[] = [
   { type: 'phase', group: 'holds' },
 ]
 
-/** The group a type is listed in. */
 export function groupOf(type: NodeType): PaletteGroup {
   return PALETTE.find(entry => entry.type === type)?.group ?? 'work'
 }
 
-/** A block in the add list, named in full: `agent verify`, `loop custom`, and the bare type for a type that has no kinds. */
+/** `agent verify`, `loop custom`; the bare type for a type that has no kinds. */
 export function pickName(block: BlockRef): string {
   const kind = kindOf(block)
   return kind === undefined ? block.type : `${block.type} ${kind}`
 }
 
-/** Every block the add list can add, in its order: each type with each of its kinds, the plain one first. */
 export function allBlocks(): BlockRef[] {
   return PALETTE.flatMap((entry): BlockRef[] => {
     const kinds = kindsOf(entry.type)
@@ -613,11 +571,8 @@ export function allBlocks(): BlockRef[] {
 }
 
 /**
- * The blocks whose name holds what was typed, at the block's level or the kind's: `ver` finds
- * `agent verify` and `loop converged`, `loop` every kind of loop. A name that starts with it
- * comes first (the kind's, then the block's), then the rest, each in the list's own order.
- * Names only: nothing else about a block is searched. An empty query matches nothing here:
- * the list then shows the blocks, not their kinds.
+ * `ver` finds `agent verify` and `loop converged`, `loop` every kind of loop; a name that starts with it comes first.
+ * An empty query matches nothing: the list then shows the blocks, not their kinds.
  */
 export function searchBlocks(query: string): BlockRef[] {
   const wanted = query.trim().toLowerCase().replace(/\s+/g, ' ')
