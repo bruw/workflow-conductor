@@ -500,6 +500,10 @@ Probe: `/probe-wrap` in `spikes/probe/hooks/register.tsx`, a 135-cell docked pan
     in the field. So the ring is kept on Inputs.
   - A `ui.focus` raised by the person for a stop that names no element cannot be given one with
     `next({ ...e, element })`: the engine refuses it. The mod lets the move land and then moves the ring itself.
+  - A `ui.focus` hook may answer `{ deny }` without `next`: the ring stays where it was, nothing is said to the
+    person, and no stop is lit. A move that lands and is then moved back lights the stop it landed on for a frame
+    (a list's first row drawn inverse, 50 to 70 ms). The lists' arrows are refused this way; a click on a row is a
+    `ui.press`, not a `ui.focus`, and still reaches its `onPress`.
   - A `Select` the ring opens lists its options under itself, so its row must not have a fixed height.
 - Redesign v1, the wheel: `ui.scroll` is raised for the wheel even when the tree is exactly as tall as the
   body, with the pointer's cell (`e.pointer.row`, `.column`). Answering `{}` without `next` keeps the pane

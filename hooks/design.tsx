@@ -114,6 +114,8 @@ const TYPE_KEY = 'design-type'
 const REST_KEY = 'design-rest:'
 /** A row of the start screen: `start:saved:demo`, `start:template:review`. */
 const START_KEY = 'start:'
+/** Why a list's arrow is refused its move: the ring stays where it is, and the mark moves. */
+const ARROWS_CHOOSE = 'the arrows choose a row'
 /** Saved designs the start screen lists at once where it is short of rows: a window around the marked one. */
 const SAVED_ROWS = 8
 /** Design files read for a listing, at most. */
@@ -1686,27 +1688,32 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
   // Where the ring is. The person's arrows (Up, Down) and Tab walk it over every stop: a move that lands on anything
   // that is not a field (the block picker's row, the engine's own stop on the pane's close mark, where Enter would close
   // the pane) is followed at once by the mod's own move back to the catcher. A move cannot be sent elsewhere in the
-  // chain: the engine refuses an element where the person's move named none. The ring on a field is "editing". The
-  // mod's own moves do not come here (they are settled where they are made).
+  // chain: the engine refuses an element where the person's move named none. In a list (the start screen, the add
+  // list) the move is refused instead: the ring stays where it is, so no row is lit by it, and the mark moves. The
+  // ring on a field is "editing". The mod's own moves do not come here (they are settled where they are made).
   on('ui.focus', { requestId: DESIGN_PANE_ID }, async ($, e, next) => {
     const person = e.origin.kind === 'person'
     const before = await read($, uiAtom)
     // The add list is open and the ring left its filter: the arrows choose. A step that lands on a row of the list
     // was Down; any other (the stop before the filter) was Up. The ring goes back to the filter: letters stay its text.
     if (person && before.status === 'ready' && before.picker !== null && !isPickerField(e.element)) {
-      const moved = await next(e)
-      if (moved.deny !== undefined) return moved
       const design = await read($, designAtom)
       await update($, uiAtom, held => movePick(design, held, (e.element ?? '').startsWith('pick:') ? 1 : -1))
-      await $.ui.focus({ requestId: DESIGN_PANE_ID, key: pickerKey() }).catch(() => settleRing($))
       $.ui.invalidate('ui.render')
 
-      return moved
+      return { deny: ARROWS_CHOOSE }
     }
     const door = person && isDoor(e.element)
     // On the door with the fields open, the person stepped back from the first field: the way to the graph.
     const leaves = door && before.editing
     const stray = person && (before.status === 'ready' || before.status === 'pick') && drawnCatcher !== '' && !isCatcher(e.element) && !isDetailStop(e.element) && !door
+    // On the start screen the arrows choose, as in the add list: a step onto a row was Down, any other Up.
+    if (stray && before.status === 'pick') {
+      await update($, uiAtom, held => ({ ...moveStartMark(held, (e.element ?? '').startsWith(START_KEY) ? 1 : -1), help: 0 }))
+      $.ui.invalidate('ui.render')
+
+      return { deny: ARROWS_CHOOSE }
+    }
     const was = ringOn
     // Said before the move is answered: a letter typed on its heels finds the ring known to be there.
     ringOn = stray || leaves ? drawnCatcher : e.element
@@ -1717,8 +1724,6 @@ export const registerDesign = (on: On, tracker: Tracker): void => {
       return moved
     }
     if (stray || leaves) await $.ui.focus({ requestId: DESIGN_PANE_ID, key: drawnCatcher }).catch(() => settleRing($))
-    // On the start screen the arrows choose, as in the add list: a step onto a row was Down, any other Up.
-    if (stray && before.status === 'pick') await update($, uiAtom, held => ({ ...moveStartMark(held, (e.element ?? '').startsWith(START_KEY) ? 1 : -1), help: 0 }))
     // The ring left where it was: what was typed there is saved (an arrow to the next field, a click on the block).
     const flushed = person ? await flushDrafts($) : null
     // In the detail pane: on a field, or on the way to one (the door, a field at rest).
