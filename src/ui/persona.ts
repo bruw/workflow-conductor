@@ -17,6 +17,8 @@ type Sprite = readonly string[]
 
 /** The theme keys nearest the source's own colours (`#d46944`, `#f1ebe1`, `#f9855e`) in the dark theme. */
 const INK: Record<string, string> = { '#': 'clawd_body', o: 'text', h: 'rainbow_orange' }
+/** The same inks where a picture is drawn: an SVG's paint is a CSS colour, and no theme key is one. The source's own. */
+const SVG_INK: Record<string, string> = { '#': '#d46944', o: '#f1ebe1', h: '#f9855e' }
 
 export type PersonaSpan = { text: string; color?: string; ground?: string }
 
@@ -302,7 +304,7 @@ export function smallPersonaSvg(pose: Pose): string {
       const ink = row[x] ?? ' '
       let end = x + 1
       while (row[end] === ink) end++
-      const fill = INK[ink]
+      const fill = SVG_INK[ink]
       if (fill !== undefined) rects.push(`<rect x="${x}" y="${y}" width="${end - x}" height="1" fill="${fill}"/>`)
       x = end
     }

@@ -1,28 +1,43 @@
 {
   "version": 1,
   "name": "e2e",
-  "description": "Smoke test. Must spawn exactly 3 agents in total (one for n1, two for n3). No verification, review or synthesis stages.",
-  "nextId": 4,
+  "nextId": 5,
   "nodes": [
+    {
+      "id": "n4",
+      "type": "start",
+      "name": "start",
+      "knobs": {
+        "goal": "Smoke test. Must spawn exactly 3 agents in total (one for n1, two for n3). No verification, review or synthesis stages."
+      }
+    },
     {
       "id": "n1",
       "type": "agent",
-      "title": "greet",
-      "notes": "One agent. Prompt: reply with the single word ok.",
-      "knobs": { "model": "haiku", "effort": "low" }
+      "name": "greet",
+      "logic": "One agent. Prompt: reply with the single word ok.",
+      "knobs": {
+        "model": "haiku",
+        "effort": "low"
+      }
     },
     {
       "id": "n2",
       "type": "pipeline",
-      "title": "echo ×2",
-      "knobs": { "fanout": "the two words alpha and beta" },
+      "name": "echo ×2",
+      "knobs": {
+        "oncePer": "the two words alpha and beta"
+      },
       "children": [
         {
           "id": "n3",
           "type": "agent",
-          "title": "echo",
-          "notes": "One agent per word. Prompt: reply with that word only.",
-          "knobs": { "model": "haiku", "effort": "low" }
+          "name": "echo",
+          "logic": "One agent per word. Prompt: reply with that word only.",
+          "knobs": {
+            "model": "haiku",
+            "effort": "low"
+          }
         }
       ]
     }

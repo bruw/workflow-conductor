@@ -94,7 +94,7 @@ import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
 import { FAILED, fmtTokens } from '../src/ui/rail'
 import { BEAT_MS, GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, draftPose, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene, waitScene } from '../src/ui/persona'
 import type { PersonaSpan, Pose } from '../src/ui/persona'
-import { clip, firstLines, wrapText } from '../src/ui/text'
+import { cellWidth, clip, cutCells, firstLines, oneLine, padCells, sanitize, wrapText } from '../src/ui/text'
 import { ACCENT, FADED, GLYPH, PANE_ID, PANE_TITLE, RULE, TEXT } from '../src/ui/theme'
 import { wordmark } from '../src/ui/wordmark'
 
@@ -376,6 +376,8 @@ const CATCH_FULL = 40
 let doored = { element: '', taken: 0 }
 /** The saved projects as last read, by name, for the start screen's preview: null for a file that is no project. */
 const previews: Record<string, Project | null> = {}
+/** How many saved projects the last listing left out: those past `SAVED_MAX`. */
+let savedPast = 0
 /** The project the list of projects was opened from, as it stood: one no file holds yet comes back from here. */
 let behind: { project: Project; ui: ProjectUi } | null = null
 /**
@@ -428,7 +430,7 @@ const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initia
 /** The tracked run's script file (run.tsx writes it), and the project an `attach` drew of that run. */
 const runScriptAtom = atom({ plugin: 'conductor', key: 'runScript' } as const, null)
 
-const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 160)
+const reason = (error: unknown): string => cutCells(sanitize(error instanceof Error ? error.message : String(error)), 160)
 
 /** A project's script, when it has one: the file beside it (`scriptFile`). */
 const scriptOf = async ($: EngineInterface, root: string, name: string): Promise<string | null> => {
@@ -808,7 +810,10 @@ const commit = async ($: EngineInterface, make: (project: Project | null, held: 
   return { ...step, ui: nextUi }
 }
 
-/** A request (`r`, `q`) waits in the prompt box under a line that says so: the line goes once the box is empty again. */
+/**
+ * A request (`r`, `q`) waits in the prompt box under a line that says so, or the keys are off while the box holds text
+ * (`handed`): the line goes, and the keys are keys again, once the box is empty.
+ */
 const watchBox = ($: EngineInterface): void => {
   if (boxWatched) return
   boxWatched = true
@@ -816,11 +821,11 @@ const watchBox = ($: EngineInterface): void => {
     $.clock.after(BOX_POLL_MS, () => {
       void (async (): Promise<void> => {
         const ui = await read($, uiAtom)
-        const waits = ui.notice !== null && /^(run|ask|draft): /.test(ui.notice)
+        const waits = ui.handed || (ui.notice !== null && /^(run|ask|draft): /.test(ui.notice))
         const box = waits ? await $.prompt.read().catch(() => ({ text: '', cursor: 0 })) : null
         if (box !== null && box.text.trim() !== '') return look()
         boxWatched = false
-        if (waits) await update($, uiAtom, held => ({ ...held, handed: false, notice: held.notice !== null && /^(run|ask|draft): /.test(held.notice) ? null : held.notice === HANDED_NOTICE ? null : held.notice }))
+        if (waits) await update($, uiAtom, held => ({ ...held, handed: false, notice: held.notice !== null && (/^(run|ask|draft): /.test(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice }))
       })()
     })
   }
@@ -904,6 +909,8 @@ const request = async ($: EngineInterface, kind: 'run' | 'ask' | 'draft'): Promi
       .focus({ requestId: PROJECT_PANE_ID, key: drawnCatcher })
       .catch(() => ({ deny: 'no' }))
       .then(moved => (moved.deny === undefined ? update($, uiAtom, held => ({ ...held, handed: true, notice: HANDED_NOTICE })) : undefined))
+      // Watched until the box is empty, also where the watch above ended before this was known.
+      .then(() => watchBox($))
   })
 }
 
@@ -1010,7 +1017,11 @@ const pick = async ($: EngineInterface, choice: Partial<PickRow>): Promise<void>
 
 /** Starts the project the start screen was opened for, from a template (or blank). */
 const startFrom = async ($: EngineInterface, templateId: string): Promise<void> => {
-  const step = startProject(await read($, uiAtom), templateId)
+  const held = await read($, uiAtom)
+  const root = await $.session.root()
+  // The name was chosen when the list opened: a project saved under it since (a rename) is never written over.
+  const taken = isSaved(held.name) && (await $.fs.exists(projectFile(root, held.name)).catch(() => false))
+  const step = startProject(taken ? { ...held, name: freeName(await savedNames($, root)) } : held, templateId)
   if (!step.project) return
   // Not written yet: the first edit (or handing it off) saves it. A project looked at and left leaves no file.
   delete histories[step.ui.name]
@@ -1020,15 +1031,22 @@ const startFrom = async ($: EngineInterface, templateId: string): Promise<void> 
   settleRing($)
 }
 
-/** The saved projects under `root`, each read: its line for a list, and its project kept for the start screen's graph. */
-const readSaved = async ($: EngineInterface, root: string): Promise<SavedProject[]> => {
-  const dir = `${root.replace(/\/+$/, '')}/${PROJECT_DIR}`
-  const entries = await $.fs.list(dir).catch(() => [])
-  const names = entries
+/** The name of every saved project under `root`, in order: all of them, also those a list leaves out. */
+const savedNames = async ($: EngineInterface, root: string): Promise<string[]> => {
+  const entries = await $.fs.list(`${root.replace(/\/+$/, '')}/${PROJECT_DIR}`).catch(() => [])
+
+  return entries
     .filter(entry => entry.kind === 'file' && entry.name.endsWith('.json'))
     .map(entry => entry.name.slice(0, -'.json'.length))
     .filter(isSaved)
     .sort()
+}
+
+/** The saved projects under `root`, each read: its line for a list, and its project kept for the start screen's graph. */
+const readSaved = async ($: EngineInterface, root: string): Promise<SavedProject[]> => {
+  const dir = `${root.replace(/\/+$/, '')}/${PROJECT_DIR}`
+  const names = await savedNames($, root)
+  savedPast = Math.max(0, names.length - SAVED_MAX)
   const saved: SavedProject[] = []
   for (const one of names.slice(0, SAVED_MAX)) {
     const text = await $.fs.read(`${dir}/${one}.json`).catch(() => '')
@@ -1046,10 +1064,11 @@ const openProjectList = async ($: EngineInterface): Promise<void> => {
   const held = await read($, uiAtom)
   if (held.status !== 'ready' && held.status !== 'error') return
   const project = await read($, projectAtom)
-  const saved = await readSaved($, await $.session.root())
+  const root = await $.session.root()
+  const saved = await readSaved($, root)
   behind = project !== null && held.status === 'ready' ? { project, ui: { ...held, editing: false, freshId: null, picker: null, confirmId: null, help: 0, notice: null } } : null
   // A template picked there starts a new project, under a name no saved one has.
-  const started = openProject(freeName(saved.map(one => one.name)), undefined, held)
+  const started = openProject(freeName(await savedNames($, root)), undefined, held)
   await update($, projectAtom, () => null)
   await update($, uiAtom, () => ({ ...started.ui, saved, startMark: Math.max(0, saved.findIndex(one => one.name === held.name)), back: held.name }))
   settleRing($)
@@ -1103,10 +1122,19 @@ const openSaved = async ($: EngineInterface, name: string): Promise<void> => {
 /** The recorded runs, by the name the start screen lists them under (`RECORDINGS`). */
 const FIXTURES: Record<string, ReplayFixture> = { 'review-41': review41, 'partial-29': partial29 }
 
+/** Why no replay may start now: it would take the place of a real run, whose agents would then be counted nowhere. Null when one may. */
+const replayRefusal = (): string | null => {
+  if (runTracker === undefined || !runTracker.busy()) return null
+
+  return runTracker.awaitsRun() ? 'a project handed to Claude waits for its run: a replay can start once that run ends' : 'a workflow is running: a replay can start once the run ends'
+}
+
 /** A made-up run replayed over a template's project, which is named `replay-<template>` and lives in the session only: no file is written, and none is listed. */
 const replayOver = async ($: EngineInterface, templateId: string): Promise<void> => {
   const template = TEMPLATES.find(one => one.id === templateId)
   if (!template || runTracker === undefined) return
+  const refusal = replayRefusal()
+  if (refusal !== null) return say($, refusal)
   const name = projectName(`replay-${template.id}`)
   const made: Project = { ...template.make(), name }
   // Another project under the same name: what could be undone in the one before is not its history.
@@ -1117,14 +1145,18 @@ const replayOver = async ($: EngineInterface, templateId: string): Promise<void>
   settleRing($)
   // A replay reuses its run id: the clock of the one before must not time this one.
   await update($, timesAtom, () => initialTimes())
-  runTracker.handoff(handoffOf(name, made))
-  runTracker.replay(replayProjectEvents(made, name), 'fast')
+  if (runTracker.replay(replayProjectEvents(made, name), 'fast', handoffOf(name, made))) return
+  // A run began while the board was put up: the tracker kept it.
+  const late = replayRefusal()
+  if (late !== null) await say($, late)
 }
 
 /** A recorded run replayed in the run view, which is opened for it: it belongs to no project. */
 const replayRecording = async ($: EngineInterface, id: string): Promise<void> => {
   const fixture = FIXTURES[id]
   if (!fixture || runTracker === undefined) return
+  const refusal = replayRefusal()
+  if (refusal !== null) return say($, refusal)
   runTracker.replay(replayEvents(id, fixture), 'fast')
   const opened = await $.ui.open({ id: PANE_ID, title: PANE_TITLE }).catch(() => undefined)
   if (opened?.isPlaced) runTracker.paneOpened()
@@ -1166,12 +1198,15 @@ const books = (): Record<string, unknown>[] => [histories, revisions, seenByClau
 
 /** The start screen's list is read again (a project was renamed or deleted), the mark on `name` where it is listed. */
 const relist = async ($: EngineInterface, name: string | null, notice: string): Promise<void> => {
-  const saved = await readSaved($, await $.session.root())
+  const root = await $.session.root()
+  const saved = await readSaved($, root)
+  const names = await savedNames($, root)
   await update($, uiAtom, held => {
     const at = name === null ? -1 : saved.findIndex(one => one.name === name)
     const last = startEntries(saved).length - 1
 
-    return { ...held, saved, startMark: Math.max(0, Math.min(last, at >= 0 ? at : (held.startMark ?? 0))), renaming: null, deleteAsk: null, notice }
+    // The name a new project would get is one no saved project has now.
+    return { ...held, name: held.status === 'pick' && names.includes(held.name) ? freeName(names) : held.name, saved, startMark: Math.max(0, Math.min(last, at >= 0 ? at : (held.startMark ?? 0))), renaming: null, deleteAsk: null, notice }
   })
 }
 
@@ -1182,7 +1217,7 @@ const deleteSaved = async ($: EngineInterface, name: string): Promise<string> =>
   if (!isSaved(name) || !(await $.fs.exists(path))) return `${name} is gone already: nothing to delete`
   if ((await read($, runProjectAtom)) === name && (await read($, runAtom)).status === 'running') return `${name} is being run: it can be deleted once the run ends`
   const removed = await $.process.run(['rm', '--', path]).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: reason(error) }))
-  if (removed.exitCode !== 0) return `${name} could not be deleted: ${removed.stderr.trim().slice(0, 120) || 'rm failed'}`
+  if (removed.exitCode !== 0) return `${name} could not be deleted: ${cutCells(oneLine(removed.stderr), 120) || 'rm failed'}`
   // Its script goes with it. One that stays behind is said: the project is gone all the same.
   const script = await scriptOf($, root, name)
   const scriptGone = script === null || (await $.process.run(['rm', '--', script]).catch(() => ({ exitCode: 1 }))).exitCode === 0
@@ -1546,7 +1581,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const saved = await readSaved($, root)
     // Nothing was opened yet in this session: the saved projects first. A template starts a new project under a name none of them has.
     if (!bare.live && name === DEFAULT_PROJECT_NAME && previous.status === 'closed' && saved.length > 0) {
-      const started = openProject(freeName(saved.map(one => one.name)), undefined, previous)
+      const started = openProject(freeName(await savedNames($, root)), undefined, previous)
       await update($, projectAtom, () => null)
       await update($, uiAtom, () => ({ ...started.ui, saved, startMark: 0 }))
       await $.ui.open(paneArgs(true))
@@ -1567,7 +1602,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       }
     }
     // No such project (yet): the start screen. The saved ones are listed; the mark starts on the first template.
-    if (step.ui.status === 'pick') step = { ...step, ui: { ...step.ui, name: saved.some(one => one.name === name) ? freeName(saved.map(one => one.name)) : name, saved, startMark: saved.length } }
+    if (step.ui.status === 'pick') step = { ...step, ui: { ...step.ui, name: saved.some(one => one.name === name) ? freeName(await savedNames($, root)) : name, saved, startMark: saved.length } }
     await update($, projectAtom, () => step.project)
     await update($, uiAtom, () => step.ui)
     // With the keyboard, the keys work at once: no click on the graph.
@@ -1819,7 +1854,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     if (answer.deny !== undefined || answer.isError === true || ui.name !== name || ui.status === 'closed') return answer
     const parsed = parseProject(await $.fs.read(projectFile(root, name)).catch(() => ''))
     if (!parsed.ok) {
-      $.ui.toast(`conductor: ${name}.json is not a valid project (${parsed.error.slice(0, 80)}); the board keeps the last good one`)
+      $.ui.toast(`conductor: ${name}.json is not a valid project (${cutCells(oneLine(parsed.error), 80)}); the board keeps the last good one`)
 
       return answer
     }
@@ -2020,7 +2055,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
               ? { text: 'project', color: FADED }
               : { text: `EDITING · ${!isSaved(ui.name) ? 'replay, not saved' : !ui.unsaved ? 'saved' : isBlank(project) ? 'not saved yet' : 'unsaved template'}`, color: FADED }
     // On the start screen the name is the one the marked row opens: the saved project's, or the one a new project gets.
-    const shownName = starting && marked?.kind === 'saved' ? marked.id : ui.name
+    const shownName = oneLine(starting && marked?.kind === 'saved' ? marked.id : ui.name)
     // The name is pressed for the list of projects, and there for the way back: the mark after it says which.
     const pressable = listing || !starting
     const nameMark = !pressable ? '' : listing ? ' ▴' : ' ▾'
@@ -2038,10 +2073,10 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     // Row 2 is the legend: one row, and what does not fit is left to the help pages.
     const headOf = (facts: string | null, keys: readonly LegendItem[] = []) => {
       const room = headColumns - COMMAND.length - 3 - nameMark.length
-      const said = room - state.text.length - 3 >= 8 ? state : null
-      const left = room - (said === null ? 0 : said.text.length + 3)
-      const count = said !== null && facts !== null && left - facts.length - 3 >= 8 ? facts : null
-      const name = <Text bold color={TEXT}>{clip(shownName, Math.max(8, left - (count === null ? 0 : count.length + 3)))}</Text>
+      const said = room - cellWidth(state.text) - 3 >= 8 ? state : null
+      const left = room - (said === null ? 0 : cellWidth(said.text) + 3)
+      const count = said !== null && facts !== null && left - cellWidth(facts) - 3 >= 8 ? facts : null
+      const name = <Text bold color={TEXT}>{clip(shownName, Math.max(8, left - (count === null ? 0 : cellWidth(count) + 3)))}</Text>
       return [
         <Box flexDirection="row" height={1} flexShrink={0}>
           <Text bold color="claude">{COMMAND}</Text>
@@ -2078,7 +2113,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       return (
         <Box flexDirection="column" paddingLeft={1}>
           {headOf(null, [{ keys: 'p', word: 'Projects', core: true }])}
-          <Text color="error">{`${file} could not be used: ${ui.error ?? 'unknown reason'}`}</Text>
+          <Text color="error">{oneLine(`${file} could not be used: ${ui.error ?? 'unknown reason'}`)}</Text>
           <Text color={FADED}>{`The file was left as it is. Fix or remove it, then run /${COMMAND} again.`}</Text>
         </Box>
       )
@@ -2170,7 +2205,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     type Said = { text: string; color: 'warning' | typeof FADED | undefined } | null
     const saidW = Math.max(1, columns - (dock ? 2 * (SAID_RULE_W + 1) : 0))
     const saidRow = (said: Said) => {
-      const text = said === null ? '' : clip(said.text, saidW)
+      // What is said may name a block: its name is the project file's.
+      const text = said === null ? '' : clip(oneLine(said.text), saidW)
       if (!dock) {
         return (
           <Box key="project-message" flexDirection="column" alignItems="center" height={1}>
@@ -2179,12 +2215,13 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         )
       }
       if (text === '') return rule()
-      const left = Math.max(0, Math.floor((columns - text.length - 2) / 2))
+      const wide = cellWidth(text)
+      const left = Math.max(0, Math.floor((columns - wide - 2) / 2))
       return (
         <Text key="project-message" wrap="truncate-end">
           <Text color={RULE}>{'─'.repeat(left)}</Text>
           <Text color={said?.color ?? TEXT}>{` ${text} `}</Text>
-          <Text color={RULE}>{'─'.repeat(Math.max(0, columns - text.length - 2 - left))}</Text>
+          <Text color={RULE}>{'─'.repeat(Math.max(0, columns - wide - 2 - left))}</Text>
         </Text>
       )
     }
@@ -2274,7 +2311,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
                 rows: 1,
                 el: (
                   <Text wrap="truncate-end">
-                    <Text color={page === 3 ? 'claude' : TEXT} bold={page === 3 ? undefined : true}>{row.key.padEnd(column)}</Text>
+                    <Text color={page === 3 ? 'claude' : TEXT} bold={page === 3 ? undefined : true}>{padCells(row.key, column)}</Text>
                     <Text color={TEXT}>{row.text}</Text>
                   </Text>
                 ),
@@ -2349,13 +2386,13 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       const message = focused ? ui.notice : KEYS_CUE
 
       // The list: the saved projects, then the templates, one row each, the marked one said in `claude`.
-      const nameW = Math.min(Math.max(...entries.map(one => one.title.length)), Math.max(8, Math.floor(detailW / 2) - 4))
+      const nameW = Math.min(Math.max(...entries.map(one => cellWidth(oneLine(one.title)))), Math.max(8, Math.floor(detailW / 2) - 4))
       const countW = Math.max(...entries.map(one => (isProjectEntry(one) ? blocksWord(one.blocks).length : 0)))
       const entryRow = (entry: (typeof entries)[number], at: number): Item => {
         const lit = at === mark
         // The project the list was opened from says so, and the one a run is on.
         const tags = entry.kind !== 'saved' ? [] : [...(entry.id === ui.back ? ['open'] : []), ...(entry.id === runProject && run.status === 'running' ? ['running'] : [])]
-        const note = clip([...tags, ...(entry.note === '' ? [] : [entry.note])].join(' · '), Math.max(0, detailW - 2 - nameW - 2 - countW - 2))
+        const note = clip([...tags, ...(entry.note === '' ? [] : [oneLine(entry.note)])].join(' · '), Math.max(0, detailW - 2 - nameW - 2 - countW - 2))
         // Its name is being typed: a field in the row's place, holding the name as it is. Enter renames.
         if (Input !== null && entry.kind === 'saved' && entry.id === renaming) {
           return {
@@ -2376,7 +2413,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
             <Box flexDirection="row" height={1}>
               <Button key={`${START_KEY}${entry.kind}:${entry.id}`} plain onPress={() => openEntry($, at)}>
                 <Text color="claude" bold>{lit ? '▸ ' : '  '}</Text>
-                <Text color={lit ? 'claude' : TEXT} bold>{clip(entry.title, nameW).padEnd(nameW)}</Text>
+                <Text color={lit ? 'claude' : TEXT} bold>{padCells(clip(oneLine(entry.title), nameW), nameW)}</Text>
                 <Text color={FADED}>{`  ${(isProjectEntry(entry) ? blocksWord(entry.blocks) : '').padEnd(countW)}`}</Text>
                 <Text color={FADED}>{note === '' ? '' : `  ${note}`}</Text>
               </Button>
@@ -2407,8 +2444,10 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         const room = level < 3 ? saved.length : Math.max(1, Math.min(SAVED_ROWS, contentRows - (entries.length - saved.length) - 5))
         const from = room >= saved.length ? 0 : listWindow(saved.length, room, Math.min(mark, saved.length - 1))
         const more = saved.length - Math.min(room, saved.length)
+        // Past the cap none is listed: said where the list is cut.
+        const cut = savedPast > 0 ? `${savedPast} more not listed: the list holds ${SAVED_MAX}` : ''
         return [
-          ...(saved.length > 0 ? [label('Saved projects'), ...entries.slice(from, from + Math.min(room, saved.length)).map((entry, index) => entryRow(entry, from + index)), ...(more > 0 ? [line(`… ${more} more: w and s reach them`, FADED)] : []), ...gaps] : []),
+          ...(saved.length > 0 ? [label('Saved projects'), ...entries.slice(from, from + Math.min(room, saved.length)).map((entry, index) => entryRow(entry, from + index)), ...(more > 0 ? [line(`… ${more} more: w and s reach them${cut === '' ? '' : ` · ${cut}`}`, FADED)] : cut === '' ? [] : [line(`… ${cut}`, FADED)]), ...gaps] : []),
           label('New from a template'),
           ...entries.slice(saved.length, extras).map((entry, index) => entryRow(entry, saved.length + index)),
           ...ways,
@@ -2627,7 +2666,6 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const thin: Item = { rows: 1, el: <Text color={RULE}>{'─'.repeat(detailW)}</Text> }
     /** A wrapped text cut to `most` rows, `…` on the last. */
     const capped = (rows: readonly string[], most: number): string[] => (rows.length <= most ? [...rows] : rows.slice(0, most).map((row, index) => (index === most - 1 ? `${clip(row, detailW - 1)}…` : row)))
-    const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
     // The ring's field, or the one it is on its way to: the one drawn at full width, wrapped.
     const ringAt = ringTo !== '' ? ringTo : ringOn
     const activeBase = fielding && isField(ringAt) ? baseOf(ringAt ?? '') : null
@@ -2744,7 +2782,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const setItems: Item[] = node
       ? [
           ...(node.knobs?.isolation === 'worktree' ? [line(`${'Isolation'.padEnd(PICKER_LABEL_W)}worktree`, FADED)] : []),
-          ...((node.knobs?.agentType ?? '') !== '' ? [line(clip(`${'Agent type'.padEnd(PICKER_LABEL_W)}${node.knobs?.agentType ?? ''}`, detailW), FADED)] : []),
+          ...((node.knobs?.agentType ?? '') !== '' ? [line(clip(`${'Agent type'.padEnd(PICKER_LABEL_W)}${oneLine(node.knobs?.agentType ?? '')}`, detailW), FADED)] : []),
         ]
       : []
     // The selected block's agents, while a run is laid over the project.
@@ -2758,7 +2796,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           rows: 1,
           el: (
             <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : TEXT}>
-              {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${agent.title}  ${agent.status} · ${fmtTokens(agent.tokens)}`}
+              {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${oneLine(agent.title)}  ${agent.status} · ${fmtTokens(agent.tokens)}`}
             </Text>
           ),
         })),
@@ -2822,7 +2860,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       const opened = level < 3
       const groups = grouped ? PALETTE_GROUPS.map(one => ({ heading: one.heading, types: matches.filter(row => groupOf(row.type) === one.group) })).filter(one => one.types.length > 0) : [{ heading: '', types: matches }]
       return [
-        ...firstLines(addHeading(project, ui.picker), detailW, 2).map(row => line(row, undefined, true)),
+        ...firstLines(sanitize(addHeading(project, ui.picker)), detailW, 2).map(row => line(row, undefined, true)),
         thin,
         {
           rows: 1,
@@ -2835,7 +2873,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
                   {ui.picker.lead ?? ''}
                 </Text>
               </Box>
-              <Box width={Math.max(8, detailW - 7 - (ui.picker.lead ?? '').length)}>
+              <Box width={Math.max(8, detailW - 7 - cellWidth(ui.picker.lead ?? ''))}>
                 {Input && (
                   <Input
                     key={pickerKey()}
@@ -2859,7 +2897,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const goal = goalOf(project)
     const idle = (): Item[] => [
       label('Goal'),
-      ...lines(wrapText(goal === '' ? 'Not said yet.' : goal, detailW).slice(0, 6), goal === '' ? FADED : undefined),
+      ...lines(wrapText(goal === '' ? 'Not said yet.' : sanitize(goal), detailW).slice(0, 6), goal === '' ? FADED : undefined),
       // While Claude drafts, the graph says so, once.
       ...(drafting
         ? []
@@ -2920,7 +2958,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         .slice(0, graphRows)
         .map(row => (
           <Text color={row.node.id === ui.selectedId ? 'claude' : TEXT} bold={row.node.id === ui.selectedId ? true : undefined} wrap="truncate-end">
-            {`${row.node.id === ui.selectedId ? GLYPH.diamond : ' '} ${'  '.repeat(row.depth)}${TEACH[row.node.type].glyph} ${row.node.id}  ${row.node.name}`}
+            {`${row.node.id === ui.selectedId ? GLYPH.diamond : ' '} ${'  '.repeat(row.depth)}${TEACH[row.node.type].glyph} ${row.node.id}  ${oneLine(row.node.name)}`}
           </Text>
         )),
     )

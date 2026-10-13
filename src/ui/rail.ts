@@ -1,5 +1,6 @@
 import type { AgentRun, RunState } from '../run/events'
 
+import { cellWidth, clip, oneLine } from './text'
 import { FADED, GLYPH, RULE } from './theme'
 
 // The run pane as plain rows: no `$`, no elements. hooks/run.tsx maps rows to elements.
@@ -102,28 +103,19 @@ export function spinnerFrame(now: number = 0): string {
   return SPINNER[frame] ?? SPINNER[0]
 }
 
-const cells = (text: string): number => [...text].length
-
-function clip(text: string, room: number): string {
-  if (cells(text) <= room) return text
-  if (room <= 1) return room === 1 ? '…' : ''
-
-  return `${[...text].slice(0, room - 1).join('')}…`
-}
-
 /** Left parts, a gap, right parts: `width` cells in all, the left side clipped to fit. */
 function line(left: Part[], right: Part[], width: number): Part[] {
-  const rightCells = right.reduce((sum, part) => sum + cells(part.text), 0)
+  const rightCells = right.reduce((sum, part) => sum + cellWidth(part.text), 0)
   let room = Math.max(0, width - rightCells - (rightCells > 0 ? 1 : 0))
   const fitted: Part[] = []
 
   for (const part of left) {
     const text = clip(part.text, room)
     if (text.length > 0) fitted.push({ ...part, text })
-    room -= cells(text)
+    room -= cellWidth(text)
   }
 
-  const used = fitted.reduce((sum, part) => sum + cells(part.text), 0)
+  const used = fitted.reduce((sum, part) => sum + cellWidth(part.text), 0)
   const gap = Math.max(0, width - used - rightCells)
 
   return [...fitted, ...(gap > 0 && rightCells > 0 ? [{ text: ' '.repeat(gap) }] : []), ...right]
@@ -151,7 +143,7 @@ function stateColor(counts: Counts): ColorKey {
 function tally(counts: Counts & { tokens: number }): Part[] {
   const settled = `${counts.done + counts.failed}/${counts.total}`
   const failed = counts.failed > 0 ? `${counts.failed}${FAILED} ` : ''
-  const pad = ' '.repeat(Math.max(1, COUNT_COLUMN - cells(settled) - cells(failed)))
+  const pad = ' '.repeat(Math.max(1, COUNT_COLUMN - cellWidth(settled) - cellWidth(failed)))
 
   return [
     { text: pad },
@@ -197,6 +189,8 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
   const all = countOf(agents)
   const statusColor: ColorKey = state.status === 'running' ? 'claude' : state.status === 'failed' ? 'error' : 'success'
   const rows: Row[] = []
+  // A run's name, a phase's title and an agent's label are not this mod's words: each is shown cleaned, on one line.
+  const name = oneLine(state.name ?? state.runId ?? '') || 'workflow'
 
   rows.push(
     row({
@@ -208,7 +202,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
         [
           { text: `${GLYPH.dot} `, color: statusColor },
           { text: 'wf: ', color: FADED },
-          { text: state.name ?? state.runId ?? 'workflow', bold: true },
+          { text: name, bold: true },
         ],
         [{ text: state.status, color: statusColor }, ...tally(all)],
         width,
@@ -236,7 +230,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
         parts: line(
           [
             { text: `${glyph}  `, color },
-            { text: phase, color: phase === NO_PHASE ? FADED : undefined },
+            { text: oneLine(phase), color: phase === NO_PHASE ? FADED : undefined },
             { text: `  ×${counts.total}`, color: FADED },
           ],
           [{ text: `▕${progress}▏`, color: counts.running > 0 ? 'claude' : RULE }, ...tally(counts)],
@@ -268,7 +262,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
             [
               { text: `${GLYPH.rail}  ${branch} `, color: RULE },
               { text: `${agentGlyph} `, color: agentColor },
-              { text: agent.label || agent.agentId },
+              { text: oneLine(agent.label) || oneLine(agent.agentId) },
             ],
             [
               { text: took, color: FADED },
@@ -322,11 +316,11 @@ export function statusText(state: RunState, titles?: Readonly<Record<string, str
   const head = `wf ${all.done + all.failed}/${all.total}`
   if (titles !== undefined) {
     const busy = Object.keys(titles).filter(id => (state.byNode[id]?.running ?? 0) > 0).at(-1)
-    return busy === undefined ? head : `${head} ▸ ${busy} ${titles[busy] ?? ''}`.trimEnd()
+    return busy === undefined ? head : `${head} ▸ ${busy} ${oneLine(titles[busy] ?? '')}`.trimEnd()
   }
   const phase = currentPhase(state)
 
-  return `${head}${phase === undefined || phase === NO_PHASE ? '' : ` ▸ ${phase}`}`
+  return `${head}${phase === undefined || phase === NO_PHASE ? '' : ` ▸ ${oneLine(phase)}`}`
 }
 
 /** The one toast at run end. */
@@ -334,7 +328,7 @@ export function endText(state: RunState): string {
   const all = countOf(Object.values(state.agents))
   const failed = all.failed > 0 ? ` · ${all.failed} failed` : ''
 
-  return `wf ${state.name ?? state.runId ?? 'workflow'} ${state.status}: ${all.done}/${all.total} agents${failed} · ${fmtTokens(all.tokens)} tokens`
+  return `wf ${oneLine(state.name ?? state.runId ?? '') || 'workflow'} ${state.status}: ${all.done}/${all.total} agents${failed} · ${fmtTokens(all.tokens)} tokens`
 }
 
 /** Flips one phase, from what the person sees (`open`) to its opposite. */

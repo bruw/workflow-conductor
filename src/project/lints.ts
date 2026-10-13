@@ -50,7 +50,8 @@ const CHAINS: readonly string[] = ['pipeline', 'loop', 'phase']
  * Whether anything reaches `node` to work on. It does when a block stands before
  * it in a chain (its own, or any chain around it), when a container around it
  * fans out over items, or when it sits in a loop beside other blocks (the round
- * before feeds it). The top level is a chain.
+ * before feeds it). The top level is a chain. The `start` block is not a block
+ * before it: it says the goal and the args, and makes no result to check.
  */
 function hasInput(project: Project, id: string): boolean {
   const rows = flatten(project)
@@ -58,7 +59,8 @@ function hasInput(project: Project, id: string): boolean {
   while (row) {
     const parent = row.parentId === undefined ? undefined : rows.find(one => one.node.id === row?.parentId)
     const chained = parent === undefined || CHAINS.includes(parent.node.type)
-    if (chained && row.index > 0) return true
+    const before = (parent === undefined ? project.nodes : (parent.node.children ?? [])).slice(0, row.index)
+    if (chained && before.some(one => one.type !== 'start')) return true
     if (parent === undefined) return false
     if (!blank(parent.node.knobs?.oncePer)) return true
     if (parent.node.type === 'loop' && (parent.node.children?.length ?? 0) > 1) return true

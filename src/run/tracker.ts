@@ -18,6 +18,8 @@ export const QUIET_MS = 8000
 export const HANDOFF_MS = 180_000
 /** A slow replay spreads its events over this long. */
 export const REPLAY_MS = 10_000
+/** An agent neither heard from (a spawn, a usage count) nor ended for this long is held failed, so its run can end. */
+export const STALE_MS = 30 * 60_000
 
 // In ticks. A full state write may go out every tick (~10/s); the rest are slower.
 const USAGE_EVERY = 5
@@ -25,6 +27,7 @@ const JOURNAL_EVERY = 5
 const PANE_EVERY = 10
 /** Journal reads an agent may miss before its phase is given up on. */
 const JOURNAL_TRIES = 8
+const STALE_TICKS = Math.ceil(STALE_MS / TICK_MS)
 
 export type Timer = { cancel: () => void }
 
@@ -82,12 +85,16 @@ export function createTracker() {
   let expiry: Timer | undefined
   /** The project whose handoff is being worked on: from the handoff until the person's next prompt after its claim is spent. A run of it meanwhile (the first, a retry) comes out of the handoff. */
   let handed: string | undefined
+  /** Whether the tracked run is a replay: no workflow is behind it. */
+  let replayed = false
 
   const dirs = new Map<string, string>()
   /** Agents of the tracked run still running, with their token total so far. */
   const totals = new Map<string, number>()
   /** Agents waiting for a phase, with the journal reads that missed them. */
   const noPhase = new Map<string, number>()
+  /** The tick each agent was last heard from: its spawn, or a usage count. */
+  const heard = new Map<string, number>()
   /** Runs a newer one replaced: their late agents are not this run's. */
   const superseded = new Set<string>()
 
@@ -139,7 +146,10 @@ export function createTracker() {
     quiet = host.after(QUIET_MS, () => {
       quiet = undefined
       if (state.status !== 'running' || state.runId === undefined || hasRunning(state)) return
-      apply([{ kind: 'run-end', runId: state.runId, ok: true }])
+      // Failed only when no agent succeeded and one failed; else the failures show as counts.
+      const agents = Object.values(state.agents)
+      const ok = agents.some(agent => agent.status === 'done') || !agents.some(agent => agent.status === 'failed')
+      apply([{ kind: 'run-end', runId: state.runId, ok }])
     })
   }
 
@@ -186,10 +196,20 @@ export function createTracker() {
     ticker = undefined
   }
 
+  /** Holds failed every agent not heard from for STALE_MS: its end was missed, or will never come. */
+  const closeStale = (): void => {
+    const stale = Object.values(state.agents).filter(agent => agent.status === 'running' && ticks - (heard.get(agent.agentId) ?? 0) >= STALE_TICKS)
+    for (const agent of stale) totals.delete(agent.agentId)
+    apply(stale.map(agent => ({ kind: 'agent-end', agentId: agent.agentId, ok: false })))
+  }
+
   const tick = (): void => {
     ticks++
+    if (ticks % PANE_EVERY === 0) {
+      pollPane()
+      closeStale()
+    }
     const running = hasRunning(state)
-    if (ticks % PANE_EVERY === 0) pollPane()
 
     let wrote = false
     if (dirty === 2 || (dirty === 1 && ticks % USAGE_EVERY === 0)) {
@@ -223,6 +243,7 @@ export function createTracker() {
       if (next === state) continue
       state = next
       wasRunning ||= state.status === 'running'
+      if (event.kind === 'agent-start' || event.kind === 'agent-usage') heard.set(event.agentId, ticks)
       if (event.kind !== 'agent-usage') dirty = 2
       else if (dirty === 0) dirty = 1
     }
@@ -252,8 +273,10 @@ export function createTracker() {
     replaying?.cancel()
     replaying = undefined
     cancelQuiet()
+    replayed = false
     totals.clear()
     noPhase.clear()
+    heard.clear()
     if (own !== undefined) {
       // Named as a saved project: that project's run, whatever waits. A handoff of another project goes on waiting for its own.
       active = claimOf(own)
@@ -281,6 +304,9 @@ export function createTracker() {
     flush()
   }
 
+  /** Whether a real run holds the tracker: one running now, or the one a handoff waits for. A replay would take its place. */
+  const busy = (): boolean => pending !== undefined || (state.status === 'running' && !replayed)
+
   return {
     /** The state as of every event so far (the stored copy may lag by a tick). */
     state: (): RunState => state,
@@ -296,7 +322,9 @@ export function createTracker() {
         state = stored
         if (claim && state.status !== 'idle') active = claimOf(claim)
         for (const agent of Object.values(state.agents)) {
-          if (agent.status === 'running') totals.set(agent.agentId, agent.tokens)
+          if (agent.status !== 'running') continue
+          totals.set(agent.agentId, agent.tokens)
+          heard.set(agent.agentId, ticks)
         }
       }
       if (state.status !== 'running') return
@@ -338,6 +366,8 @@ export function createTracker() {
 
     /** Whether a project was handed off and its run has not started yet: Claude is writing the script for it. */
     awaitsRun: (): boolean => pending !== undefined,
+
+    busy,
 
     /** The project the tracked run was started from, if any. */
     project: (): string | undefined => active?.name,
@@ -387,10 +417,15 @@ export function createTracker() {
       apply([{ kind: 'agent-end', agentId, ok: end.ok, durationMs: end.durationMs, tokens: end.tokens ?? total }])
     },
 
-    /** Feeds a recorded run through: at once, or spread over REPLAY_MS. */
-    replay(events: readonly RunEvent[], mode: 'fast' | 'slow'): void {
+    /**
+     * Feeds a recorded run through: at once, or spread over REPLAY_MS. `own` is the project it is replayed over.
+     * Refused (false) while `busy`: the real run's agents would be dropped as a superseded run's.
+     */
+    replay(events: readonly RunEvent[], mode: 'fast' | 'slow', own?: Handoff): boolean {
+      if (busy()) return false
       const first = events.find(event => event.kind === 'run-start')
-      begin(first?.kind === 'run-start' ? first.runId : '')
+      begin(first?.kind === 'run-start' ? first.runId : '', own)
+      replayed = true
       state = emptyRunState()
       dirty = 2
 
@@ -398,7 +433,7 @@ export function createTracker() {
         apply(events)
         if (isDirty()) flush()
 
-        return
+        return true
       }
 
       const steps = Math.ceil(REPLAY_MS / TICK_MS)
@@ -417,14 +452,8 @@ export function createTracker() {
       })
       replaying = timer
       startTicker()
-    },
 
-    /** Back to no run at all. */
-    clear(): void {
-      handed = undefined
-      begin('')
-      state = emptyRunState()
-      flush()
+      return true
     },
   }
 }

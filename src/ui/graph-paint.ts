@@ -1,4 +1,4 @@
-// The graph's paint: a layout as rows of styled spans, one character per cell,
+// The graph's paint: a layout as rows of styled spans, one grapheme per cell (two for a wide one),
 // windowed by `panY` (the graph never pans sideways). Pure TypeScript: no `$`,
 // no engine imports. The layout says the words and where they go; here each
 // role of a word gets its look, and what is laid over the cards is drawn: the
@@ -7,10 +7,10 @@
 import type { NodeType } from '../project/model'
 import type { Place } from '../project/ops'
 import type { NodeRun, RunStatus } from '../run/events'
-import { CRUMB_PAD, CRUMB_SEP, EMPTY_KEYS, EMPTY_NOTE, UNMAPPED_ID, edgeMarks, graphRows, samePlace, stickyCards } from './graph-layout'
+import { CRUMB_PAD, CRUMB_SEP, EMPTY_KEYS, EMPTY_NOTE, UNMAPPED_ID, edgeMarks, graphRows, samePlace, segsWidth, stickyCards } from './graph-layout'
 import type { GraphCard, GraphDrop, GraphLayout, Seg } from './graph-layout'
 import { FAILED, fmtTokens, spinnerFrame } from './rail'
-import { clip } from './text'
+import { cellWidth, clip, glyphs, plainCells } from './text'
 import { ACCENT, ACTIVE, FADED, GLYPH, PHASE_GROUND, RULE } from './theme'
 
 /** How a run of cells is drawn while the pointer is on it, or on any other of its `scope`. */
@@ -188,20 +188,38 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     known.set(key, table.length - 1)
     return table.length - 1
   }
-  /** Writes at a cell of the window. */
-  const write = (x: number, row: number, text: string, style: number): void => {
-    if (row < 0 || row >= height) return
+  /**
+   * Writes at a cell of the window, inside the columns `from` … `to`. A wide grapheme takes two cells: its glyph, then
+   * a cell that holds '' and draws nothing, so a row is always `width` cells. One that would stand across an edge
+   * is a space in the cell it has.
+   */
+  const write = (x: number, row: number, text: string, style: number, from: number = 0, to: number = width): void => {
+    const line = chars[row]
+    const tone = looks[row]
+    if (!line || !tone) return
+    const first = Math.max(0, from)
+    const end = Math.min(width, to)
+    const set = (column: number, glyph: string): void => {
+      if (column < first || column >= end) return
+      // Half of a wide grapheme written over: its other half is a space.
+      if (line[column] === '' && column > 0) line[column - 1] = ' '
+      if (line[column + 1] === '') line[column + 1] = ' '
+      line[column] = glyph
+      tone[column] = style
+    }
+    if (plainCells(text)) {
+      for (let i = 0; i < text.length; i++) set(x + i, text[i] ?? ' ')
+      return
+    }
     let column = x
-    for (const char of text) {
-      if (column >= 0 && column < width) {
-        const line = chars[row]
-        const tone = looks[row]
-        if (line && tone) {
-          line[column] = char
-          tone[column] = style
-        }
+    for (const glyph of glyphs(text)) {
+      if (glyph.width === 1) set(column, glyph.text)
+      else if (glyph.width === 2) {
+        const whole = column >= first && column + 1 < end
+        set(column, whole ? glyph.text : ' ')
+        set(column + 1, whole ? '' : ' ')
       }
-      column++
+      column += glyph.width
     }
   }
   /** The cells of the graph a card may be drawn in: the inside of the container it is in. Null for no bound. */
@@ -212,9 +230,7 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     if (row < 0 || row >= room) return
     if (bound === null) return write(x, row + top, text, style)
     if (y < bound.y || y >= bound.y + bound.h) return
-    const from = Math.max(0, bound.x - x)
-    const cells = [...text].slice(from, Math.max(from, bound.x + bound.w - x))
-    if (cells.length > 0) write(x + from, row + top, cells.join(''), style)
+    write(x, row + top, text, style, bound.x, bound.x + bound.w)
   }
   /** Puts cells of the graph on a phase's ground, or back on the pane's own: clipped as `put` clips. */
   const shade = (x: number, y: number, w: number, h: number, on: boolean): void => {
@@ -287,11 +303,9 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     for (const seg of segs) {
       if (seg.role !== 'rule') put(at, y, seg.text, look(segLook(seg, tone)))
       else if (border && seg.text.trim() === '') put(at, y, seg.text, tone.edge)
-      at += seg.text.length
+      at += cellWidth(seg.text)
     }
   }
-
-  const segsWidth = (segs: readonly Seg[]): number => segs.reduce((sum, seg) => sum + seg.text.length, 0)
 
   /** A card's top border and what is written on it. */
   const drawTop = (card: GraphCard, x: number, y: number, tone: Tone): void => {
@@ -392,9 +406,10 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     if (card) {
       const chip = ` ${card.id} ${clip(card.title, 16)}${drag.hint ? ` · ${drag.hint}` : ''} `
       // Kept inside the window: the words say what a release does. Over any card, on the pane's own ground.
-      const at = Math.max(0, Math.min(drag.x + 2, width - chip.length))
+      const wide = cellWidth(chip)
+      const at = Math.max(0, Math.min(drag.x + 2, width - wide))
       write(at, drag.y, chip, look({ color: 'claude', bold: true, inverse: true }))
-      grounds[drag.y]?.fill(false, at, at + chip.length)
+      grounds[drag.y]?.fill(false, at, at + wide)
     }
   }
 
@@ -447,7 +462,8 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     const spans: Span[] = []
     let start = 0
     for (let at = 1; at <= end; at++) {
-      if (at < end && tone[at] === tone[start] && ground[at] === ground[start]) continue
+      // The second cell of a wide grapheme goes with its first, whatever ground it stands on.
+      if (at < end && ((tone[at] === tone[start] && ground[at] === ground[start]) || line[at] === '')) continue
       spans.push({ text: line.slice(start, at).join(''), ...table[tone[start] ?? 0], ...(ground[start] ? { ground: PHASE_GROUND } : {}) })
       start = at
     }

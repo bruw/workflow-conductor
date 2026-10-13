@@ -20,7 +20,8 @@ export function replayTokens(agentId: string): number {
 
 /**
  * The events of a replayed run: a named `run-start`, the journal's events with made-up
- * token counts on each `agent-end`, and a `run-end` when every started agent ended.
+ * token counts on each `agent-end`, and a `run-end`. A recording that stops with agents open
+ * is an interrupted run: those agents end failed, and so does the run.
  */
 export function replayEvents(name: string, fixture: ReplayFixture): RunEvent[] {
   const runId = `replay:${name}`
@@ -38,7 +39,8 @@ export function replayEvents(name: string, fixture: ReplayFixture): RunEvent[] {
     events.push(event)
   }
 
-  if (open.size === 0) events.push({ kind: 'run-end', runId, ok: true })
+  for (const agentId of open) events.push({ kind: 'agent-end', agentId, ok: false })
+  events.push({ kind: 'run-end', runId, ok: open.size === 0 })
 
   return events
 }

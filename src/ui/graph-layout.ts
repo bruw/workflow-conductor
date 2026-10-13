@@ -18,7 +18,7 @@ import type { Project, ProjectNode, NodeType, Row } from '../project/model'
 import { defaultName } from '../project/teach'
 import { START_STAY, addPlace, quickKnob } from '../project/ops'
 import type { Place, QuickKnob } from '../project/ops'
-import { cappedLines, clip, moreLines } from './text'
+import { cappedLines, cellWidth, clip, moreLines, oneLine, sanitize } from './text'
 
 export type Rect = { x: number; y: number; w: number; h: number }
 /** `stream`: each result is handed on as it arrives. `barrier`: the next block waits for all of them. */
@@ -217,12 +217,12 @@ export type GraphOptions = {
   locked?: boolean
 }
 
-function clean(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
-}
+/** A text of the project on one line, as it can be shown: a project file is not trusted text. */
+const clean = oneLine
 
-function segsWidth(segs: readonly Seg[]): number {
-  return segs.reduce((sum, seg) => sum + seg.text.length, 0)
+/** The cells a run of segments takes. */
+export function segsWidth(segs: readonly Seg[]): number {
+  return segs.reduce((sum, seg) => sum + cellWidth(seg.text), 0)
 }
 
 export function samePlace(a: Place | null | undefined, b: Place | null | undefined): boolean {
@@ -350,7 +350,7 @@ function armSegs(arm: Arm, room: number): Seg[] {
 }
 
 function armWidth(arm: Arm): number {
-  return arm.word === 'ELSE' ? 4 : 3 + (arm.when === '' ? NOT_SET.length : arm.when.length)
+  return arm.word === 'ELSE' ? 4 : 3 + (arm.when === '' ? NOT_SET.length : cellWidth(arm.when))
 }
 
 /** The problem mark: on a card's top border, left of its id. The detail pane says what the problem is. */
@@ -370,14 +370,14 @@ function unnamed(block: Pick<ProjectNode, 'type' | 'kind'>, title: string): bool
 function nameSegs(block: Pick<ProjectNode, 'type' | 'kind'>, title: string, room: number, prefix: string = ''): Seg[] {
   const segs: Seg[] = []
   let left = room
-  if (prefix !== '' && left > prefix.length + 2) {
+  if (prefix !== '' && left > cellWidth(prefix) + 2) {
     segs.push({ text: prefix, role: 'sep' })
-    left -= prefix.length
+    left -= cellWidth(prefix)
   }
   const word = clip(typeLabel(block), left)
   if (word === '') return segs
   segs.push({ text: word, role: 'type' })
-  left -= word.length
+  left -= cellWidth(word)
   const named = !unnamed(block, title)
   if (named && left >= 5) {
     segs.push({ text: ' / ', role: 'sep' }, { text: clip(title, left - 3), role: 'title' })
@@ -434,8 +434,8 @@ function topRow(node: ProjectNode, w: number, arm: Arm | null, problems: number,
   // Corners, one cell of border at each end, one between the two sides.
   const span = w - 5
   const id = ` ${node.id} `
-  if (problems > 0 && BADGE.length + id.length <= span) right.push({ text: BADGE, role: 'badge' }, { text: id, role: 'id' })
-  else if (id.length <= span) right.push({ text: id, role: 'id' })
+  if (problems > 0 && BADGE.length + cellWidth(id) <= span) right.push({ text: BADGE, role: 'badge' }, { text: id, role: 'id' })
+  else if (cellWidth(id) <= span) right.push({ text: id, role: 'id' })
   // A selected container's chips stand before them, when its name and they both fit.
   if (chips.length > 0 && segsWidth(right) + segsWidth(chips) + 3 + headKeep + 4 <= span) right.unshift({ text: ' ', role: 'rule' }, ...chips, { text: ' ', role: 'rule' }, { text: '─', role: 'rule' })
   // The words stand between two spaces.
@@ -466,7 +466,7 @@ function clipSegs(segs: readonly Seg[], room: number): Seg[] {
     if (left <= 0) break
     const text = clip(seg.text, left)
     out.push({ ...seg, text })
-    left -= text.length
+    left -= cellWidth(text)
   }
   return out
 }
@@ -486,11 +486,11 @@ function leafBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
   // Row 1: `TYPE / Title`, and at the right what is set of the model and effort, or (selected) the chips.
   const chips = selected && !ctx.locked ? chipsOf(node) : []
   const meta = [knobs.model, knobs.effort].filter(one => one !== undefined && one !== '').map(one => clip(clean(one ?? ''), KNOB_MAX)).join(' ')
-  const nameMin = typeLabel(node).length + (unnamed(node, title) ? 0 : 3 + Math.min(title.length, 8))
+  const nameMin = cellWidth(typeLabel(node)) + (unnamed(node, title) ? 0 : 3 + Math.min(cellWidth(title), 8))
   let right: Seg[] = chips.length > 0 ? chips : meta === '' ? [] : [{ text: meta, role: 'meta' }]
   // Chips that do not fit beside the whole name get the next row (the selected card says its title in full);
   // a model and effort that do not fit beside a name cut short are left to the detail pane.
-  const nameAll = typeLabel(node).length + (unnamed(node, title) ? 0 : 3 + title.length)
+  const nameAll = cellWidth(typeLabel(node)) + (unnamed(node, title) ? 0 : 3 + cellWidth(title))
   const beside = right.length === 0 || (chips.length > 0 ? nameAll : nameMin) + 2 + segsWidth(right) <= inner
   if (!beside) right = []
   const room = inner - (right.length > 0 ? segsWidth(right) + 2 : 0)
@@ -510,7 +510,7 @@ function leafBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
   // Row 2: what it does (the start block: the goal; its args are the detail pane's). What it hands on is the detail pane's.
   const lacks = missingOf(node)
   const said: Seg[] = lacks !== '' ? [{ text: `${lacks} `, role: 'note' }, { text: NOT_SET, role: 'error' }] : firstLine(node) === '' ? [] : [{ text: firstLine(node), role: 'note' }]
-  const capped = selected && lacks === '' ? cappedLines(cardText(node), inner, ctx.noteRows) : { lines: [], more: 0 }
+  const capped = selected && lacks === '' ? cappedLines(sanitize(cardText(node)), inner, ctx.noteRows) : { lines: [], more: 0 }
   if (!selected || lacks !== '' || capped.lines.length === 0 || (capped.lines.length === 1 && capped.more === 0)) {
     // A card at rest, and a selected one whose notes are one line: one row.
     const text: Seg[] = selected ? said.map(seg => (seg.role === 'note' && lacks === '' ? { ...seg, role: 'text' as const } : seg)) : said
@@ -531,7 +531,7 @@ function collapsedBox(node: ProjectNode, w: number, depth: number, parent: Proje
   const kin = node.children ?? []
   const inside = insideOf(node)
   const count = `${inside} ${inside === 1 ? 'block' : 'blocks'}`
-  const fits = typeLabel(node).length + 4 + count.length <= inner
+  const fits = cellWidth(typeLabel(node)) + 4 + count.length <= inner
   const rows: CardRow[] = [{ left: nameSegs(node, clean(node.name), inner - (fits ? count.length + 2 : 0), '▸ '), right: fits ? [{ text: count, role: 'fact' }] : [] }]
   const titles = kin.length === 0 ? EMPTY : kin.map(child => clean(child.name) || child.type).join(childFlow(node.type) === 'chain' ? ' → ' : ' | ')
   const hint = OPEN_HINT.length + 6 <= inner
@@ -544,14 +544,14 @@ function collapsedBox(node: ProjectNode, w: number, depth: number, parent: Proje
 function headSegs(node: ProjectNode, room: number, range: string): Seg[] {
   const title = clean(node.name)
   // The carousel's window is said before any knob: it is the one fact found nowhere else.
-  const kept = range !== '' && room - (range.length + 3) >= typeLabel(node).length + Math.min(title.length + 3, 9) ? range.length + 3 : 0
+  const kept = range !== '' && room - (range.length + 3) >= cellWidth(typeLabel(node)) + Math.min(cellWidth(title) + 3, 9) ? range.length + 3 : 0
   const segs = nameSegs(node, title, room - kept)
   let left = room - kept - segsWidth(segs)
   const fact = (label: string, text: string, whole: boolean = false): void => {
-    if (text === '' || left < label.length + 3 + (whole ? text.length : Math.min(text.length, 6))) return
+    if (text === '' || left < label.length + 3 + (whole ? cellWidth(text) : Math.min(cellWidth(text), 6))) return
     const words = ` · ${label}${clip(text, left - 3 - label.length)}`
     segs.push({ text: words, role: 'fact' })
-    left -= words.length
+    left -= cellWidth(words)
   }
   // Its fields as they were typed: nothing is read out of them.
   fact('once per: ', clean(node.knobs?.oncePer ?? ''))
@@ -602,7 +602,7 @@ function openBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
     // Tops aligned. Bottoms too where an arm is within ARM_GROW_MAX rows of the tallest: a shorter one keeps its own height, not stretched hollow.
     for (const kid of kids) if (body - kid.h <= ARM_GROW_MAX) kid.h = body
   }
-  const headMin = typeLabel(node).length + Math.min(clean(node.name).length + 3, 9)
+  const headMin = cellWidth(typeLabel(node)) + Math.min(cellWidth(clean(node.name)) + 3, 9)
   const top = topRow(node, w, armOf(node, parent, index), ctx.problems[node.id] ?? 0, room => headSegs(node, room, range), headMin, node.id === ctx.selectedId && !ctx.locked ? chipsOf(node) : [], headMin + (range === '' ? 0 : range.length + 3))
   return { node, kind: 'open', w, h: 2 + rows.length + lead + body, depth, index, parentId: parent?.id, top, rows, inside: insideOf(node), kids, first, lead, gap }
 }
@@ -632,21 +632,22 @@ function crumbsFor(project: Project, trail: readonly ProjectNode[], columns: num
   // The level stands one cell in, two cells before the first crumb.
   const lead = level === '' ? 0 : 1 + level.length + 2
   const room = columns - lead
-  let parts: { id: string | null | undefined; text: string }[] = [{ id: null, text: project.name }, ...trail.map(node => ({ id: node.id, text: `${node.id} ${clean(node.name)}`.trim() }))]
-  const width = (): number => parts.reduce((sum, part) => sum + part.text.length + CRUMB_PAD * 2, 0) + CRUMB_SEP.length * (parts.length - 1)
+  let parts: { id: string | null | undefined; text: string }[] = [{ id: null, text: clean(project.name) }, ...trail.map(node => ({ id: node.id, text: `${node.id} ${clean(node.name)}`.trim() }))]
+  const width = (): number => parts.reduce((sum, part) => sum + cellWidth(part.text) + CRUMB_PAD * 2, 0) + CRUMB_SEP.length * (parts.length - 1)
   // Too long: the crumbs in the middle go first, then the names are cut.
   while (width() > room && parts.length > 3) parts = [...parts.slice(0, 1), { id: undefined, text: '…' }, ...parts.slice(parts[1]?.id === undefined ? 3 : 2)]
   for (const at of [0, parts.length - 1]) {
     const part = parts[at]
     const over = width() - room
-    if (part && over > 0) parts[at] = { ...part, text: clip(part.text, Math.max(part.id === null ? 2 : 4, part.text.length - over)) }
+    if (part && over > 0) parts[at] = { ...part, text: clip(part.text, Math.max(part.id === null ? 2 : 4, cellWidth(part.text) - over)) }
   }
   const crumbs: GraphCrumb[] = []
   let x = lead
   for (const [i, part] of parts.entries()) {
     const text = clip(part.text, Math.max(1, columns - x - CRUMB_PAD * 2))
-    if (x + CRUMB_PAD < columns) crumbs.push({ id: part.id, text, x, w: text.length + CRUMB_PAD * 2, last: i === parts.length - 1 })
-    x += text.length + CRUMB_PAD * 2 + CRUMB_SEP.length
+    const w = cellWidth(text) + CRUMB_PAD * 2
+    if (x + CRUMB_PAD < columns) crumbs.push({ id: part.id, text, x, w, last: i === parts.length - 1 })
+    x += w + CRUMB_SEP.length
   }
   return { crumbs, level }
 }
@@ -720,9 +721,10 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
         if (side === row.right) at = x + box.w - 2 - segsWidth(side)
         for (const seg of side) {
           const last = chips.at(-1)
-          if (seg.chip && last && last.knob === seg.chip && last.y === y + i && last.x + last.w === at) last.w += seg.text.length
-          else if (seg.chip) chips.push({ x: at, y: y + i, w: seg.text.length, h: 1, id: card.id, knob: seg.chip, key: seg.text.replace(/[^0-9]/g, '') })
-          at += seg.text.length
+          const w = cellWidth(seg.text)
+          if (seg.chip && last && last.knob === seg.chip && last.y === y + i && last.x + last.w === at) last.w += w
+          else if (seg.chip) chips.push({ x: at, y: y + i, w, h: 1, id: card.id, knob: seg.chip, key: seg.text.replace(/[^0-9]/g, '') })
+          at += w
         }
       }
     }
@@ -846,7 +848,7 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
     const parent = root.parentId === undefined ? undefined : index.byId.get(root.parentId)?.node
     const frame = openBox(root.node, columns, 0, parent, root.index, ctx)
     // The frame says nothing of the arm it is in the view above: there is no arm beside it here.
-    frame.top = topRow(root.node, columns, null, ctx.problems[root.node.id] ?? 0, room => headSegs(root.node, room, rangeOf(ctx.carousels[root.node.id])), typeLabel(root.node).length, root.node.id === selectedId && !ctx.locked ? chipsOf(root.node) : [], root.node.type.length + 12 + rangeOf(ctx.carousels[root.node.id]).length)
+    frame.top = topRow(root.node, columns, null, ctx.problems[root.node.id] ?? 0, room => headSegs(root.node, room, rangeOf(ctx.carousels[root.node.id])), cellWidth(typeLabel(root.node)), root.node.id === selectedId && !ctx.locked ? chipsOf(root.node) : [], root.node.type.length + 12 + rangeOf(ctx.carousels[root.node.id]).length)
     put(frame, 0, 0)
     height = frame.h
     ;({ crumbs, level } = crumbsFor(project, [...ancestors(index, root.node.id), root.node], columns))

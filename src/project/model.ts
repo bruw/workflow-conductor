@@ -187,6 +187,8 @@ export function withStart(project: Project): Project {
 
 const KNOB_KEYS = ['goal', 'args', 'prompt', 'output', 'model', 'effort', 'isolation', 'agentType', 'oncePer', 'stopCondition', 'condition'] as const
 const TEXT_KNOBS: readonly string[] = ['goal', 'args', 'prompt', 'output', 'model', 'agentType', 'oncePer', 'stopCondition', 'condition']
+const PROJECT_KEYS: readonly string[] = ['version', 'name', 'nextId', 'nodes']
+const NODE_KEYS: readonly string[] = ['id', 'type', 'kind', 'name', 'logic', 'knobs', 'match', 'children']
 const ID_PATTERN = /^n(\d+)$/
 
 export function isNodeType(value: unknown): value is NodeType {
@@ -257,19 +259,23 @@ export function matchError(value: unknown): string | undefined {
   return Array.isArray(value) && value.every(one => typeof one === 'string' && one !== '') ? undefined : 'match must be a list of non-empty strings'
 }
 
-// Unknown knob keys are dropped; known keys with a wrong value are refused.
+// A key that is no knob is refused, and so is a known key with a wrong value: nothing is dropped on the way in.
 function readKnobs(raw: unknown, where: string): Knobs | undefined {
   if (raw === undefined) return undefined
   if (!isRecord(raw)) fail(`${where}: knobs must be an object`)
   const knobs: Record<string, unknown> = {}
-  for (const key of KNOB_KEYS) {
-    const value = raw[key]
+  for (const [key, value] of Object.entries(raw)) {
     if (value === undefined) continue
     const error = knobError(key, value)
     if (error) fail(`${where}: ${error}`)
     knobs[key] = value
   }
   return Object.keys(knobs).length > 0 ? (knobs as Knobs) : undefined
+}
+
+// A key the file does not have is refused: one that was read and dropped would be erased by the next save.
+function strayKey(raw: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  return Object.keys(raw).find(key => !keys.includes(key))
 }
 
 function readNodes(raw: unknown, where: string, seen: Set<string>): ProjectNode[] {
@@ -283,6 +289,8 @@ function readNode(raw: unknown, where: string, seen: Set<string>): ProjectNode {
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) fail(`${where}: id must look like "n1"`)
   if (seen.has(id)) fail(`duplicate id ${id}`)
   seen.add(id)
+  const stray = strayKey(raw, NODE_KEYS)
+  if (stray !== undefined) fail(`${id}: unknown key ${stray}`)
   const read = readType(raw.type, raw.kind)
   if ('error' in read) fail(`${id}: ${read.error}`)
   const { type, kind } = read
@@ -308,7 +316,7 @@ function readNode(raw: unknown, where: string, seen: Set<string>): ProjectNode {
 }
 
 /**
- * Validates shape, version, unique ids, known types and kinds, where `start` stands and that only it
+ * Validates shape, version, unique ids, known keys, types and kinds, where `start` stands and that only it
  * says a goal and args. Never throws. A project read with no start block is given an empty one.
  */
 export function parseProject(json: string): ParseResult {
@@ -316,6 +324,8 @@ export function parseProject(json: string): ParseResult {
     const raw: unknown = JSON.parse(json)
     if (!isRecord(raw)) fail('project must be an object')
     if (raw.version !== 1) fail(`unsupported version ${JSON.stringify(raw.version)}; expected 1`)
+    const stray = strayKey(raw, PROJECT_KEYS)
+    if (stray !== undefined) fail(`project: unknown key ${stray}`)
     const { name, nextId } = raw
     if (typeof name !== 'string' || name === '') fail('name must be a non-empty string')
     if (nextId !== undefined && !(typeof nextId === 'number' && Number.isInteger(nextId) && nextId >= 1)) {
@@ -326,8 +336,8 @@ export function parseProject(json: string): ParseResult {
     if (typeof nextId === 'number') project.nextId = nextId
     walk(project, (node, info) => {
       if (node.type === 'start' && (info.parent !== undefined || info.index !== 0)) fail(`${node.id}: ${START_PLACE}`)
-      const stray = startOnly(node)
-      if (stray) fail(`${node.id}: ${stray}`)
+      const misplaced = startOnly(node)
+      if (misplaced) fail(`${node.id}: ${misplaced}`)
     })
     return { ok: true, project: withStart(project) }
   } catch (error) {

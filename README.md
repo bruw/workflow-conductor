@@ -395,7 +395,8 @@ Progress is derived from hooks, not from the workflow engine's own state:
 
 Known limits:
 
-- There is no run-end signal. A run is held finished after 8 seconds with no agent running and no new spawn; a later spawn for the same run reopens it.
+- There is no run-end signal. A run is held finished after 8 seconds with no agent running and no new spawn; a later spawn for the same run reopens it. It is held failed only when an agent failed and none succeeded. An agent not heard from for 30 minutes is held failed, so its run can end.
+- A replay does not start while a workflow is running or a handed-off project waits for its run: the message row says so.
 - Phases rely on the journal file, an internal format that may change.
 - A run belongs to the saved project its workflow is named as. A handoff also claims the first run under any other name that starts within 3 minutes of it, or of your last prompt while it waits. A run neither rule takes is shown in the phase view only, unless you have it visualized.
 - One run is tracked at a time, and one graph is mounted at a time.
