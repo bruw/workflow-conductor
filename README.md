@@ -1,16 +1,16 @@
-# Conductor
+![Conductor in Claude Code: open the board, build a workflow, watch the run on the graph, minimize it](docs/demo.gif)
 
 There's a thing that happens when you ask Claude for a workflow. It writes two hundred lines of orchestration, tells you it'll start nine agents, and asks if that's all right. You say yes. Most everybody says yes. Nobody reads the script.
 
 Then the agents go off somewhere you can't see, and you sit watching a counter, hoping that what's burning your tokens is the thing you meant.
 
-Conductor is a Claude Code mod for people who got tired of hoping. The workflow is a graph, in a pane beside your transcript. You draw it, or you tell Claude to and fix what it got wrong. One key hands it over. The run comes back onto the same graph, block by block, so you know which agent failed, where, and what it cost you.
+Conductor is a Claude Code mod for people who got tired of hoping. The workflow is a graph, in a pane beside your transcript. You draw it, or you tell Claude to and fix what it got wrong. When the plan is good, hand it over for build and run. The run comes back onto the same graph, block by block, so you know which agent failed, where, and what it cost you.
 
 ```
 /plugin install conductor --marketplace bruw/workflow-conductor
 ```
 
-![Conductor in Claude Code: open the board, build a workflow, watch the run on the graph, minimize it](docs/demo.gif)
+
 
 ## What you get
 
