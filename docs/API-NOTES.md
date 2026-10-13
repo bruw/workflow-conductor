@@ -476,6 +476,20 @@ Probe: `/probe-wrap` in `spikes/probe/hooks/register.tsx`, a 135-cell docked pan
 - With no label the text starts at the box's first cell: a full-width Input cannot be indented by one cell (the least
   a label takes is its `: `).
 
+## S17. Does a prompt the mod submits come by the mod's own `prompt.submit` hook, and can it carry `context`? No to both.
+
+```
+$.prompt.submit (conductor): "Implement and run the \"readme-typo-check\" workflow project."
+hooks module conductor@inline prompt.submit skipped: re-entry (the plugin's own code raised it; origin conductor)
+hooks module cc-plugin-agents-md@builtin (native): prompt.submit nested in conductor
+```
+
+- `$.prompt.submit` goes through every other plugin's hooks; the whole calling module is skipped, not only the calling hook.
+- `PromptSubmitArgs` omits `context` (and `origin`, `turnId`, `wait`): hidden text cannot go with it. `asUser: true` drops the "plugin sent a message" frame.
+- Consequence: `r` cannot attach the hand-off as the prompt hook does for a typed prompt. The request names the `before_workflow` tool ("call it first") and that tool's answer is the hand-off (`handedResult`). Seen live: Claude called it, then confirmed the design and asked its questions.
+- A `command.run` answer's `context` still works for a draft (`/conductor <description>`): the brief is read on the turn the submitted prompt starts (S4).
+- `$.prompt.submit` from a `$.clock.after` callback out of a key's handler is accepted (S4's option 1, now tested).
+
 ## Other findings
 
 - Hot reload of a `--plugin-dir` mod is not immediate when the session is idle (the watch drops to a 30 s

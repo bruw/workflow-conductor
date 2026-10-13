@@ -4,9 +4,6 @@ import { offerBrief } from '../src/project/chat'
 import { buildHandoff } from '../src/project/handoff'
 import { isBlank, parseProject } from '../src/project/model'
 import {
-  ASK_PREFIX,
-  ASK_USAGE,
-  ASK_VERB,
   DISMISSED_RESULT,
   OFFER_HEADER,
   OFFER_KEY,
@@ -15,9 +12,9 @@ import {
   OFFER_TOOL_DESCRIPTION,
   OFFER_TOOL_FULL_NAME,
   OFFER_TOOL_NAME,
+  handedResult,
   keptToast,
   offerChoice,
-  resetText,
   standardResult,
   storedChoice,
   typedResult,
@@ -45,9 +42,28 @@ let waiting: string | null = null
 /** The tool already answered in this turn that a project waits: a second call is for another workflow, and asks. */
 let answered = false
 
+/**
+ * What this file asks of the board once "Conductor" is answered. `$` does not cross files, so project.tsx's
+ * session.start hook gives this its own, as it gives run.tsx its `RunBoard`.
+ */
+export type OfferBoard = { drafting: () => Promise<void> }
+let offerBoard: OfferBoard | undefined
+export const setOfferBoard = (board: OfferBoard): void => {
+  offerBoard = board
+}
+
 /** The draft a "Conductor" answer asked for has landed, as project `name`. */
 export const offerDrafted = (name: string): void => {
   waiting = name
+}
+
+/** The project handed off on the board (`r`) whose hand-off Claude has not been given yet: the tool's next answer is it. */
+let handing: string | null = null
+
+/** Project `name` was handed off on the board: it waits for no approval, and the tool's next answer is its hand-off. */
+export const offerHanded = (name: string): void => {
+  handing = name
+  if (waiting === name) waiting = null
 }
 
 /** Project `name` was handed off, or a run of it started: it waits for no approval. */
@@ -59,6 +75,7 @@ export const offerSettled = (name: string): void => {
 export const offerPrompted = (): void => {
   offered = false
   answered = false
+  handing = null
 }
 
 export const registerOffer = (on: On, tracker: Tracker): void => {
@@ -70,25 +87,31 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
     return next(e)
   })
 
-  on('command.run', { command: 'conductor', args: ASK_VERB }, async ($, e) => {
-    if (e.args.trim().split(/\s+/)[1] !== 'reset') return { text: ASK_USAGE }
-    // Every stored answer goes, whichever question it was given to.
-    const keys = (await $.store.keys().catch(() => [])).filter(key => key.startsWith(ASK_PREFIX))
-    for (const key of keys) await $.store.delete(key).catch(() => undefined)
-
-    return { text: resetText(keys.length) }
-  })
-
   // The question. Whatever happens here Claude gets a result to act on, never a throw and never a deny (it does
   // not take instructions from a refusal).
   on('tool.call', { tool: OFFER_TOOL_FULL_NAME }, async ($, e) => {
-    const conductor = (asked: boolean): { result: string } => {
+    const conductor = async (asked: boolean): Promise<{ result: string }> => {
       offered = true
+      // The board says so while Claude drafts: project.tsx shows the splash until the project lands.
+      await offerBoard?.drafting().catch(() => undefined)
 
       return { result: offerBrief(asked) }
     }
     // A workflow's own agents, and any subagent: the person is asked by the conversation, once.
     if (e.agentId !== undefined) return { result: standardResult('subagent') }
+    // The project the person just handed off on the board: its hand-off, once.
+    if (handing !== null) {
+      const name = handing
+      handing = null
+      const root = await $.session.root()
+      const path = projectFile(root, name)
+      const parsed = parseProject(await $.fs.read(path).catch(() => ''))
+      if (parsed.ok && !isBlank(parsed.project)) {
+        const script = scriptFile(root, name)
+
+        return { result: handedResult(buildHandoff(parsed.project, path, (await $.fs.exists(script).catch(() => false)) ? script : null).context.join('\n')) }
+      }
+    }
     // The script being written is the project the person approved on the board: that was their answer.
     if (tracker.awaitsRun()) return { result: standardResult('handoff') }
     // A `-p` run draws nowhere: nobody reads a question, and nobody would review a project.

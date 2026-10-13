@@ -1,4 +1,4 @@
-// The handoff: what `/conductor run <name>` tells Claude. It is short on purpose: the project
+// The handoff: what `r` on the board tells Claude. It is short on purpose: the project
 // file says what the workflow does, and Claude is told to ask about what is unclear in it.
 // The one thing said here and not in the project is how a run is tied back to it (label,
 // phase, meta.name). Pure TypeScript.
@@ -40,9 +40,12 @@ export function outline(project: Project): string[] {
   return lines.length > 0 ? lines : ['  (no blocks)']
 }
 
-/** What `r` puts in the prompt box, and what a hand-off submits: the person adds what to run it on. The sentence also tells the mod which project a prompt hands off. */
+/**
+ * What `r` sends as the person's prompt. The sentence also tells the mod which project a prompt hands off, and it
+ * names the tool whose answer is the hand-off: a prompt the mod sends carries no hidden context.
+ */
 export function handoffPrompt(name: string): string {
-  return `Implement and run the "${name}" workflow project on: `
+  return `Implement and run the "${name}" workflow project (Conductor hands it off: call ${OFFER_TOOL_FULL_NAME} first).`
 }
 
 /** The project a prompt hands off, when it opens with the hand-off sentence; null for any other prompt. */
@@ -68,6 +71,7 @@ export function buildHandoff(project: Project, projectPath: string, scriptPath: 
   // The label's example names a block that spawns agents itself, where the project has one; with a script, one the label rule is for.
   const first = flatten(project).find(row => !canHoldChildren(row.node.type) && row.node.type !== 'start' && row.node.type !== 'code' && (scriptPath === null || !row.node.match))?.node ?? stages[0]
   const goal = goalOf(project)
+  const args = (project.nodes.find(node => node.type === 'start')?.knobs?.args ?? '').replace(/\s+/g, ' ').trim()
   const example = first ? `${first.id}: ${first.name}` : 'n1: scout diff'
 
   const lines = [
@@ -83,10 +87,12 @@ export function buildHandoff(project: Project, projectPath: string, scriptPath: 
           "Update THAT file to match the project as it is now, changing only what the project changed, and run it with the",
           "Workflow tool's `scriptPath`. If it already matches, run it unchanged. Do not write another script.",
         ]),
-    `The user approved it on the board: do not call ${OFFER_TOOL_FULL_NAME} for it.`,
+    `The user approved it on the board: do not call ${OFFER_TOOL_FULL_NAME} for it again.`,
     '',
-    'Before you write anything, ask the user about every flow in the project that is ambiguous or looks unintended,',
-    'and wait for the answers. Where nothing is, go on without asking.',
+    'Before you write anything, in one message: confirm the design with the user (two or three lines on what the workflow',
+    'will do, and a question about every flow in the project that is ambiguous or looks unintended) and, unless they',
+    `have already said it, ask what to run it on${args === '' ? " (the start block has no `args`: where the workflow needs no input, say so and do not ask)" : ` (the start block's \`args\`: ${clip(args, WHEN_MAX)})`}.`,
+    'Wait for their answer, then go on.',
     '',
     'So the run shows on the board:',
     ...(scriptPath === null

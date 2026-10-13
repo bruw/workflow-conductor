@@ -75,8 +75,14 @@ export type ProjectUi = {
   flash: { ids: string[]; seq: number } | null
   /** During a run the selection goes to the block that is running, until the person moves it themselves. */
   follow: boolean
-  /** Claude was asked to draft this project and nothing has arrived yet: the empty graph says so. */
-  drafting: boolean
+  /**
+   * Claude is drafting a project. `wait`: nothing has arrived yet and the project has no name, the splash is shown.
+   * `show`: the draft has landed and is laid out on the graph block by block; the detail pane is hidden and editing
+   * is locked until Claude's turn ends.
+   */
+  drafting: 'wait' | 'show' | null
+  /** While a draft is laid out: how many of its blocks the graph shows so far, in reading order. Null: all of them. */
+  reveal: number | null
   /** The block just added: its title field opens empty (the default title shown dim), ready to be typed over. */
   freshId: string | null
   /** The block last selected in each project opened this session, by project name: reopening one goes back to it. */
@@ -89,11 +95,15 @@ export type ProjectUi = {
   handed: boolean
   /** The start screen's marked entry, from 0, over `startEntries`: the saved projects, the templates, Blank. */
   startMark: number
-  /** The start screen was opened from this project (`p`, a press on the header's name): it lists the projects, and `x` goes back to this one. */
+  /** The start screen was opened from this project (`p`, a press on the header's name): it lists the projects, and `p` goes back to this one. */
   back: string | null
+  /** The saved project whose name is being typed on the start screen (`e`). */
+  renaming: string | null
+  /** The saved project a first `x` on the start screen asked about; a second one on it deletes it. */
+  deleteAsk: string | null
 }
 
-/** A saved project as the start screen and `/conductor list` name it. */
+/** A saved project as the start screen names it. */
 export type SavedProject = { name: string; blocks: number; goal: string }
 
 /** Names kept for replays: such a project lives in the session only, is never saved and never listed. */
@@ -108,11 +118,6 @@ export function isSaved(name: string): boolean {
 export function savedProject(name: string, text: string): SavedProject {
   const parsed = parseProject(text)
   return parsed.ok ? { name, blocks: blockCount(parsed.project), goal: goalOf(parsed.project) } : { name, blocks: -1, goal: 'not a valid project file' }
-}
-
-/** `demo · 9 blocks · Review the current diff…`: one line of `/conductor list`. */
-export function savedLine(one: SavedProject): string {
-  return `${one.name} · ${blocksWord(one.blocks)}${one.goal === '' ? '' : ` · ${one.goal}`}`
 }
 
 /** The name a new project gets when none was given: `untitled`, or the first `untitled-N` no saved project has. */
@@ -143,8 +148,10 @@ export const GRAPH_BOX: GraphBox = { columns: 100, rows: 40 }
 
 /** What stands in the way of an edit, and what a key that walks the graph needs to know. */
 export type RunContext = {
-  /** A run of this project is in progress: every edit is refused. */
+  /** A run of this project is in progress, or Claude is drafting it: every edit is refused. */
   locked?: boolean
+  /** The lock is a draft's, not a run's: said so. */
+  drafting?: boolean
   /** The run laid over this project, when there is one. */
   run?: RunState
   /** The graph's region as last drawn. */
@@ -152,6 +159,12 @@ export type RunContext = {
 }
 
 export const LOCK_NOTICE = 'run in progress · editing locked'
+/** The same while Claude drafts the project. */
+export const DRAFT_LOCK_NOTICE = 'Claude is drafting · editing opens when it is done'
+/** What a refused edit says: whose lock it is. */
+export function lockNotice(context: Pick<RunContext, 'drafting'>): string {
+  return context.drafting ? DRAFT_LOCK_NOTICE : LOCK_NOTICE
+}
 
 /** Which side of the block it was opened on the add list's place is. */
 export type AddWhere = 'after' | 'inside' | 'before'
@@ -199,7 +212,8 @@ export function initialUi(): ProjectUi {
     editing: false,
     flash: null,
     follow: true,
-    drafting: false,
+    drafting: null,
+    reveal: null,
     freshId: null,
     picks: {},
     runCleared: false,
@@ -207,6 +221,8 @@ export function initialUi(): ProjectUi {
     handed: false,
     startMark: 0,
     back: null,
+    renaming: null,
+    deleteAsk: null,
   }
 }
 
@@ -309,23 +325,62 @@ export function startProject(ui: ProjectUi, templateId: string): Step {
   }
 }
 
-/** One row of the start screen: a saved project, a template, or Blank (last). */
-export type StartEntry = { kind: 'saved' | 'template' | 'blank'; id: string; title: string; blocks: number; note: string }
+/**
+ * The project's first `count` blocks in reading order (a container before what it holds): what the graph shows of a
+ * draft while it is laid out block by block. The project itself where `count` holds all of it.
+ */
+export function firstBlocks(project: Project, count: number): Project {
+  if (count >= flatten(project).length) return project
+  let left = Math.max(0, count)
+  const take = (nodes: readonly ProjectNode[]): ProjectNode[] => {
+    const out: ProjectNode[] = []
+    for (const node of nodes) {
+      if (left <= 0) break
+      left--
+      out.push(node.children ? { ...node, children: take(node.children) } : node)
+    }
+    return out
+  }
+  return { ...project, nodes: take(project.nodes) }
+}
 
-/** The start screen's rows, in the order `w` / `s` walk them: the saved projects, the templates, Blank. */
+/** A draft is laid out a beat a step, more blocks to a step where it is large: all of it is on the graph within this many steps. */
+export const REVEAL_STEPS = 12
+
+/** One row of the start screen: a saved project, a template, or Blank (last). */
+export type StartEntry = { kind: 'saved' | 'template' | 'blank' | 'replay' | 'recording' | 'reset'; id: string; title: string; blocks: number; note: string }
+
+/** The recorded runs the start screen replays in the run view, by the name of their fixture. */
+export const RECORDINGS = ['review-41', 'partial-29'] as const
+/** The id of the start screen's last row: the stored answers to Conductor's questions are forgotten. */
+export const RESET_ID = 'ask-again'
+
+/**
+ * The start screen's rows, in the order `w` / `s` walk them: the saved projects, the templates, Blank; then, under
+ * all of those, what is not a project to open: a made-up run replayed over each template, each recorded run
+ * replayed in the run view, and the row that forgets every stored "Always" and "Never" answer.
+ */
 export function startEntries(saved: readonly SavedProject[], templates: readonly Template[] = TEMPLATES): StartEntry[] {
   return [
     ...saved.map(one => ({ kind: 'saved' as const, id: one.name, title: one.name, blocks: one.blocks, note: one.goal })),
     ...templates.map(one => ({ kind: 'template' as const, id: one.id, title: one.title, blocks: blockCount(one.make()), note: one.blurb })),
     { kind: 'blank' as const, id: BLANK_TEMPLATE_ID, title: 'Blank', blocks: 0, note: 'An empty project' },
+    ...templates.map(one => ({ kind: 'replay' as const, id: one.id, title: one.title, blocks: blockCount(one.make()), note: 'A made-up run over the template, nothing saved' })),
+    ...RECORDINGS.map(one => ({ kind: 'recording' as const, id: one, title: one, blocks: 0, note: 'A recorded run, in the run view' })),
+    { kind: 'reset' as const, id: RESET_ID, title: 'Ask again', blocks: 0, note: 'Forget every "Always" and "Never" answer' },
   ]
+}
+
+/** The start screen's rows that open or start a project: the ones a block count is said of. */
+export function isProjectEntry(entry: Pick<StartEntry, 'kind'>): boolean {
+  return entry.kind === 'saved' || entry.kind === 'template' || entry.kind === 'replay'
 }
 
 /** The start screen's mark moved by `by` rows; it stops at the ends. Returns `ui` itself where it stays. */
 export function moveStartMark(ui: ProjectUi, by: number): ProjectUi {
   const last = startEntries(ui.saved ?? []).length - 1
   const startMark = Math.max(0, Math.min(last, (ui.startMark ?? 0) + by))
-  return startMark === (ui.startMark ?? 0) ? ui : { ...ui, startMark, notice: null }
+  return startMark === (ui.startMark ?? 0) ? ui : { ...ui, startMark, notice: null, renaming: null, deleteAsk: null }
 }
 
 /** `count` rows of a list of `total` around the marked one: the first row shown. */
@@ -391,7 +446,7 @@ export function viewRootOf(project: Project | null, ui: Pick<ProjectUi, 'viewRoo
 
 /** What the graph gets as props, but for the wheel's rows (the hooks module counts them): the project, what is chosen on it, and the room. */
 export function graphProps(project: Project, ui: ProjectUi, box: GraphBox = GRAPH_BOX, run?: RunOverlay): GraphProps {
-  const locked = run?.status === 'running'
+  const locked = run?.status === 'running' || ui.drafting === 'show'
   const problems: Record<string, number> = {}
   for (const one of lint(project)) problems[one.nodeId] = (problems[one.nodeId] ?? 0) + 1
   const props: GraphProps = {
@@ -449,7 +504,7 @@ export function blockName(node: { id: string; name: string }): string {
  */
 export function restoreProject(project: Project | null, ui: ProjectUi, target: Project, way: 'undo' | 'redo', what: string, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready') return { project, ui, changed: false }
-  if (context.locked) return { project, ui: { ...ui, notice: LOCK_NOTICE }, changed: false }
+  if (context.locked) return { project, ui: { ...ui, notice: lockNotice(context) }, changed: false }
   const had = new Set(flatten(project).map(row => row.node.id))
   const back = flatten(target).find(row => !had.has(row.node.id))?.node.id
   const selectedId = back ?? (ui.selectedId !== null && findNode(target, ui.selectedId) ? ui.selectedId : (target.nodes[0]?.id ?? null))
@@ -515,7 +570,7 @@ export function applyMessage(project: Project | null, ui: ProjectUi, message: Gr
     const slid: ProjectUi = { ...ui, carousels: { ...(ui.carousels ?? {}), [stack.id]: first } }
     return { project, ui: leaves ? shown(project, { ...slid, ...calm, carousels: slid.carousels, selectedId: stack.id, follow: false, notice: null }, context) : slid, changed: false }
   }
-  if (context.locked) return { project, ui: { ...calm, notice: LOCK_NOTICE }, changed: false }
+  if (context.locked) return { project, ui: { ...calm, notice: lockNotice(context) }, changed: false }
   switch (message.kind) {
     case 'move':
       return settle(project, { ...ui, confirmId: null }, moveNode(project, message.id, message.to), message.id, after => movedWords(project, after, message.id), context)
@@ -536,7 +591,7 @@ export function applyMessage(project: Project | null, ui: ProjectUi, message: Gr
 /** An edit of one node made in the detail pane. */
 export function patchNode(project: Project | null, ui: ProjectUi, id: string, patch: NodePatch, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready') return { project, ui, changed: false }
-  if (context.locked) return { project, ui: { ...ui, notice: LOCK_NOTICE, editing: false, freshId: null }, changed: false }
+  if (context.locked) return { project, ui: { ...ui, notice: lockNotice(context), editing: false, freshId: null }, changed: false }
   // A field was sent: the typing is over.
   const fields = [...(patch.name !== undefined ? ['name'] : []), ...('logic' in patch ? ['logic'] : []), ...Object.keys(patch.knobs ?? {})].map(fieldWord)
   return settle(project, { ...ui, editing: false, freshId: null }, updateNode(project, id, patch), ui.selectedId, `${id} changed${fields.length > 0 && fields.length <= 3 ? `: ${fields.join(', ')}` : ''}`, context)
@@ -548,7 +603,7 @@ export function patchNode(project: Project | null, ui: ProjectUi, id: string, pa
  */
 export function retypeBlock(project: Project | null, ui: ProjectUi, id: string, to: BlockRef, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready') return { project, ui, changed: false }
-  if (context.locked) return { project, ui: { ...ui, notice: LOCK_NOTICE, editing: false, freshId: null }, changed: false }
+  if (context.locked) return { project, ui: { ...ui, notice: lockNotice(context), editing: false, freshId: null }, changed: false }
   const node = findNode(project, id)
   const retyped = retypeNode(project, id, to.type, to.kind)
   // A block still called after its old type or kind (the name it was added with) takes the new one's.
@@ -655,7 +710,7 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
   if (ui.handed) return { project, ui: ui.notice === HANDED_NOTICE ? ui : { ...ui, notice: HANDED_NOTICE }, changed: false }
   const calm: ProjectUi = { ...ui, confirmId: null, notice: null, editing: false, freshId: null, picker: null, viewRootId: viewRootOf(project, ui, context.graph?.columns) }
   const node = ui.selectedId === null ? undefined : findNode(project, ui.selectedId)
-  if (context.locked && !LOCKED_OPS.includes(op)) return { project, ui: { ...calm, notice: LOCK_NOTICE }, changed: false }
+  if (context.locked && !LOCKED_OPS.includes(op)) return { project, ui: { ...calm, notice: lockNotice(context) }, changed: false }
   switch (op) {
     case 'left':
     case 'right':
@@ -733,7 +788,7 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
       return { project, ui: calm, changed: false }
     case 'clearRun':
       // The results of a run that is over are put away; while it runs they stay.
-      return { project, ui: context.locked ? { ...calm, notice: LOCK_NOTICE } : { ...calm, runCleared: true }, changed: false }
+      return { project, ui: context.locked ? { ...calm, notice: lockNotice(context) } : { ...calm, runCleared: true }, changed: false }
     case 'cancel':
       return { project, ui: calm, changed: false }
   }
@@ -742,7 +797,7 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
 /** Opens the add list on a block's type: the same list as adding, narrowed to what the block may become. */
 export function openRetype(project: Project | null, ui: ProjectUi, id: string, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready' || !findNode(project, id)) return { project, ui, changed: false }
-  if (context.locked) return { project, ui: { ...ui, notice: LOCK_NOTICE }, changed: false }
+  if (context.locked) return { project, ui: { ...ui, notice: lockNotice(context) }, changed: false }
   return { project, ui: { ...ui, notice: null, confirmId: null, editing: false, freshId: null, help: 0, picker: { at: { index: 0 }, query: '', retypeId: id } }, changed: false }
 }
 
@@ -850,7 +905,7 @@ export function filterText(ui: ProjectUi, field: string): string {
  */
 export function pickBlock(project: Project | null, ui: ProjectUi, choice: Partial<PickRow> = {}, context: RunContext = {}): Step {
   if (!project || ui.status !== 'ready' || !ui.picker) return { project, ui, changed: false }
-  if (context.locked) return { project, ui: { ...ui, picker: null, notice: LOCK_NOTICE }, changed: false }
+  if (context.locked) return { project, ui: { ...ui, picker: null, notice: lockNotice(context) }, changed: false }
   const picker = ui.picker
   const row: PickRow | undefined = choice.type !== undefined ? { ...choice, type: choice.type } : pickerMatches(project, picker)[picker.pick ?? 0]
   if (row === undefined) return { project, ui: { ...ui, notice: 'no block matches that' }, changed: false }
@@ -862,7 +917,7 @@ export function pickBlock(project: Project | null, ui: ProjectUi, choice: Partia
   const at = placeFor(project, block.type, picker.at)
   const step = settle(project, ui, result, result.id ?? ui.selectedId, after => `added ${result.id ?? ''} ${typeName(block)} ${placeLabel(after, at).replace(/ \(at the end\)$/, '')}`, context)
   // The new block is selected and its title is the next thing typed.
-  return step.changed ? { ...step, ui: { ...step.ui, picker: null, editing: true, freshId: result.id ?? null, drafting: false } } : step
+  return step.changed ? { ...step, ui: { ...step.ui, picker: null, editing: true, freshId: result.id ?? null, drafting: null } } : step
 }
 
 /** The knobs typed as text, each in a field of its own in the detail pane; model and effort are stepped on the card. */
@@ -871,6 +926,8 @@ export type TextKnob = (typeof TEXT_KNOBS)[number]
 
 /** What an empty graph says while Claude drafts the project. */
 export const DRAFTING_NOTE = 'Claude is drafting this project: blocks appear here as they are written'
+/** Under the splash while a draft is awaited. */
+export const DRAFT_WAIT_NOTE = 'Claude is drafting your workflow · answer its questions in the prompt'
 
 // ---------------------------------------------------------------------------
 // The screen's shape
@@ -914,9 +971,9 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['i', 'hide or show this pane'],
   ['u  y', 'undo / redo'],
   ['q', 'Claude review: asks Claude to review the project (fills the prompt)'],
-  ['r', 'run: puts the request in the prompt; add what to run it on, then Enter'],
+  ['r', 'implement and run: hands the project to Claude at once; Claude confirms the design and asks what to run it on'],
   ['c', 'put away the results of a run that is over (the first edit does too)'],
-  ['p', 'the projects: the saved ones and the templates, to open another or start one; x comes back'],
+  ['p', 'the projects: the saved ones and the templates, to open another or start one (there: e renames, x deletes); p comes back'],
   ['?  h', 'these pages, one after the other'],
 ]
 
@@ -948,8 +1005,9 @@ export function helpColumn(page: number): number {
 export const START_HELP: readonly string[] = [
   'A project is a workflow drawn as a graph of blocks: agents, the code between them, and the containers that run them in a row, at once or in a loop.',
   'The Up and Down arrows choose a row (w and s too), Enter opens it. A saved project opens as it was left; a template starts a new project, and Blank an empty one.',
-  'Nothing is written until the first edit. /conductor project <name> names a new project first, /conductor rename <old> <new> names it later.',
-  '/conductor draft <name> <what you want> has Claude draft a project on the board; in an open project, a plain message to Claude changes it.',
+  'Nothing is written until the first edit. On a saved project, e renames it and x deletes it (x again to confirm).',
+  '/conductor <what you want> has Claude draft a new project on the board and name it; in an open project, a plain message to Claude changes it.',
+  'Under the templates: a replay shows a run without running one (made up over a template, or recorded), and Ask again forgets every "Always" and "Never" answer given to Conductor\'s questions.',
 ]
 
 /** One help page as rows no wider than `columns`: its title, then paragraphs or a table. `page` counts from 1; `start` is the start screen's first page. */

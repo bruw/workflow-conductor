@@ -1,6 +1,6 @@
 // The keys: the one table that says what each character typed into the key
 // catcher does, and the legend drawn from it: the graph's keys in the header,
-// the run and the review as buttons on the last row, the detail pane's on its
+// the hand-off and the review as buttons on the last row, the detail pane's on its
 // last rows. Case matters: `w` moves the selection,
 // `W` the block. Pure TypeScript: no `$`, no engine imports.
 
@@ -124,8 +124,12 @@ export type LegendState = {
   redo: boolean
   /** The detail pane is hidden: it has no rows to name its keys on, and the header names the one that shows it. */
   hidden: boolean
-  /** The start screen was opened from a project (`p`): `x` goes back to it. */
+  /** The start screen was opened from a project (`p`): `p` goes back to it. */
   back?: boolean
+  /** The start screen's marked row is a saved project: it can be renamed and deleted there. */
+  saved?: boolean
+  /** A saved project's name is being typed on the start screen. */
+  renaming?: boolean
 }
 
 /** One entry: the key as drawn in brackets, its word, and whether it is among the ones kept when the room is short. */
@@ -149,16 +153,20 @@ export function legendItems(state: LegendState): Legend {
   const help: LegendItem = { keys: '?', word: 'Help', core: true }
   if (state.ring === 'start') {
     const choose: LegendItem[] = [{ keys: '↑ ↓', word: 'Choose', core: true }, { keys: 'Enter', word: 'Open', core: true }]
-    const back: LegendItem[] = state.back ? [{ keys: 'x', word: 'Back', core: true }] : []
+    const back: LegendItem[] = state.back ? [{ keys: 'p', word: 'Back', core: true }] : []
+    // The name's field has the letters: the one way out, and what Enter does.
+    if (state.renaming) return { header: [out], actions: [], detail: [{ keys: 'Enter', word: 'Rename', core: true }, { keys: '↑ ↓', word: 'Cancel', core: true }] }
+    // A saved project is renamed and deleted where it is listed.
+    const row: LegendItem[] = state.saved ? [{ keys: 'e', word: 'Rename', core: true }, { keys: 'x', word: 'Delete', core: true }] : []
     // A help page has the detail pane in place of the list: the keys that walk the list still act, and are the header's.
-    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, help], actions: [], detail: choose }
+    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, help], actions: [], detail: [...choose, ...row] }
   }
   const edits = !state.locked
   // The run and the review are asked of Claude, not done to the project: they are pressed on the last row. In a field
   // and in the add list the letters are text, and they wait.
   const ready = edits && !state.empty && state.ring === 'graph'
   const actions: LegendAction[] = [
-    { key: 'r', word: 'Run', on: ready },
+    { key: 'r', word: 'Implement and Run', on: ready },
     { key: 'q', word: 'Claude Review', on: ready },
     ...(state.results && edits ? [{ key: 'c', word: 'Clear results', on: state.ring === 'graph' }] : []),
   ]

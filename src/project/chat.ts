@@ -108,15 +108,22 @@ const DRAFT_RULES = [
   'Pick the structure the task needs and no more: a few blocks with clear logic beat many. Give a block its kind where one fits, and use knobs where they say something (oncePer, stopCondition, output).',
 ]
 
-/** What Claude is told, unseen, when the person asks for a draft. It names the tool in full: the tool is deferred, and the name is what Claude loads it by. */
-export function draftBrief(name: string, description: string): string[] {
+/** How every brief for a draft ends: what Claude says once the project is on the board. */
+const DRAFT_AFTER = 'Afterwards stop: the user takes it from there. Say in two or three lines what the blocks do, name any lint you chose to leave, and tell the user to review and edit the project on the board and to approve it there with r (Implement and Run).'
+
+/**
+ * What Claude is told, unseen, when the person asks for a draft (`/conductor <description>`): a new project, which
+ * Claude names. It names the tool in full: the tool is deferred, and the name is what Claude loads it by.
+ */
+export function draftBrief(description: string): string[] {
   return [
     [
-      `Conductor draft: the user wants a workflow project named "${name}" for: ${description}`,
+      `Conductor draft: the user wants a new workflow project for: ${description}`,
       '',
-      `Make it with the ${TOOL_FULL_NAME} tool: one call with action "write", name "${name}" and the nodes, the start block first with the goal in a sentence in its \`goal\` knob.`,
+      'Where what they want is too unclear to pick a structure for, ask them first, briefly, and wait for the answer. Otherwise do not ask.',
+      `Make it with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "write", a short kebab-case name of your choosing that no project has, and the nodes, the start block first with the goal in a sentence in its \`goal\` knob. It is always a new project, unless the user's own words name an existing one to change.`,
       ...DRAFT_RULES,
-      `Afterwards say in two or three lines what the blocks do, name any lint you chose to leave, and say that /conductor run ${name} runs it.`,
+      DRAFT_AFTER,
     ].join('\n'),
   ]
 }
@@ -131,7 +138,7 @@ export function offerBrief(asked: boolean): string {
     '',
     `Make it with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "write", a short kebab-case name of your choosing and the nodes, the start block first with the goal of the workflow in its \`goal\` knob.`,
     ...DRAFT_RULES,
-    'Afterwards stop: the user takes it from there. Say in two or three lines what the blocks do, name any lint you chose to leave, and tell the user to review and edit the project on the board and to approve it there with r (or with /conductor run <name>).',
+    DRAFT_AFTER,
     `If they then tell you in chat to run it, call ${OFFER_TOOL_FULL_NAME} again before anything else: its answer says how this project is run.`,
   ].join('\n')
 }
@@ -181,7 +188,7 @@ export function attachNote(project: Project, unplaced: readonly string[]): strin
 
 /** Added to an edit's answer when the board could not be put on screen (an open nobody typed waits under 144 columns: API-NOTES S12). */
 export function unplacedNote(name: string): string {
-  return `The board is not on screen (the terminal is too narrow for it to open by itself): tell the user that /conductor project ${name} opens it.`
+  return `The board is not on screen (the terminal is too narrow for it to open by itself): tell the user that /conductor opens it (project ${name}).`
 }
 
 // ---------------------------------------------------------------------------
@@ -630,9 +637,9 @@ export const FLASH_CLEAR_MS = FLASH_MS + 400
  */
 export function showEdit(ui: ProjectUi, name: string, project: Project, change: Change): ProjectUi {
   const same = ui.name === name && ui.status === 'ready'
-  // The draft has landed (or the file changed): the graph no longer says Claude is drafting.
+  // A draft being laid out stays so under a later edit of Claude's turn (a lint fixed): the turn's end is what ends it.
   // An edit never lands under the results of a run that is over: they are put away.
-  const base: ProjectUi = same ? { ...ui, picker: null, confirmId: null, editing: false, freshId: null, drafting: false, notice: null, runCleared: true, unsaved: false } : { ...carryUi(ui, initialUi()), name, status: 'ready' }
+  const base: ProjectUi = same ? { ...ui, picker: null, confirmId: null, editing: false, freshId: null, drafting: ui.drafting === 'show' ? 'show' : null, notice: null, runCleared: true, unsaved: false } : { ...carryUi(ui, initialUi()), name, status: 'ready' }
   const still = same && ui.selectedId !== null && findNode(project, ui.selectedId) ? ui.selectedId : null
   const selectedId = change.added[0] ?? still ?? change.changed[0] ?? project.nodes[0]?.id ?? null
   // Said on the message row, with the way back: an edit from chat is undone like any other.

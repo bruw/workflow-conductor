@@ -1,8 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import * as partial29 from '../fixtures/partial-29'
-import * as review41 from '../fixtures/review-41'
 import { visualizeBrief } from '../src/project/chat'
 import { parseProject } from '../src/project/model'
 import { VISUALIZE_HEADER, VISUALIZE_KEY, VISUALIZE_OPTIONS, VISUALIZE_QUESTION, reusedToast, storedVisualize, visualizeChoice, visualizeToast, visualizeTyped } from '../src/project/offer'
@@ -10,8 +8,6 @@ import { PROJECT_PANE_ID, bareTarget, projectFile, projectName, endRun, followRu
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
 import { USAGE_KEYS } from '../src/run/journal'
-import { replayEvents } from '../src/run/replay'
-import type { ReplayFixture } from '../src/run/replay'
 import type { Handoff, Tracker } from '../src/run/tracker'
 import { buildRunRows, togglePhase } from '../src/ui/rail'
 import type { Part, Row } from '../src/ui/rail'
@@ -23,22 +19,6 @@ import { offerSettled } from './offer'
 const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
 const MAX_ROWS = 400
-const HELP = [
-  'Usage: /conductor [project [name] | draft <name> <description> | run <name> | list | rename <old> <new> | delete <name> | ask reset | replay <fixture>]',
-  '  /conductor                  open the run (on its project, when it came from one); with no run, the project last opened',
-  '  /conductor project [name]    open a project; with no name, pick a saved project or start one from a template',
-  '  /conductor draft <name> <description>   have Claude draft a project for the description, on the board',
-  '  /conductor run <name>       hand the saved project to Claude to implement and run',
-  '  /conductor list             the saved projects, each with its block count and what it is for',
-  '  /conductor rename <old> <new>   give a saved project another name',
-  '  /conductor delete <name>    delete a saved project (asks once more before it does)',
-  '  /conductor ask reset        forget every "Always" and "Never" answer, so Conductor asks again',
-  '  /conductor replay <fixture|clear> [fast|slow]   replay a recorded run (dev)',
-  '  /conductor replay project <template> [fast|slow]   replay a made-up run over a project (dev)',
-].join('\n')
-
-const FIXTURES: Record<string, ReplayFixture> = { 'review-41': review41, 'partial-29': partial29 }
-
 // The run's state. Both hooks modules declare these (an atom must be spelled in the
 // file that reads it): run.tsx writes them through the tracker, project.tsx reads them.
 const runAtom = atom({ plugin: 'conductor', key: 'run' } as const, emptyRunState())
@@ -73,8 +53,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'conductor',
-      description: 'Workflow designer and run view: no argument opens the run view; project [name], draft <name> <description>, run <name>, list, rename <old> <new>, delete <name>, ask reset, replay <fixture>',
-      argumentHint: '[project [name] | draft <name> <description> | run <name> | list | rename <old> <new> | delete <name> | ask reset | replay <fixture>]',
+      description: 'Workflow designer and run view: no argument opens the board (a run in progress, the project last opened, or the start screen to pick one); with a description, Claude drafts a new project for it',
+      argumentHint: '[what the workflow should do]',
     })
 
     // A run a previous load of the module was following: when it came from a project, its
@@ -134,33 +114,15 @@ export const registerRun = (on: On, tracker: Tracker): void => {
   })
 
   on('command.run', { command: 'conductor' }, async ($, e, next) => {
-    const [verb, name, speed] = e.args.trim().split(/\s+/)
+    // With words it is a draft, and project.tsx's, whichever of the hooks the engine asks first.
+    if (e.args.trim() !== '') return next(e)
+    // One place to look: a run that came from a project is shown on that project, by project.tsx.
+    // With no run at all there is nothing to show here: project.tsx opens the project last worked on, or the start screen.
+    if (bareTarget((await read($, runAtom)).status, await read($, runProjectAtom), await read($, projectUiAtom)).view === 'project') return next(e)
+    const opened = await $.ui.open({ id: PANE_ID, title: PANE_TITLE })
+    if (opened.isPlaced) tracker.paneOpened()
 
-    if (!verb) {
-      // One place to look: a run that came from a project is shown on that project, by project.tsx.
-      // With no run at all there is nothing to show here: project.tsx opens the project last worked on, or the picker.
-      if (bareTarget((await read($, runAtom)).status, await read($, runProjectAtom), await read($, projectUiAtom)).view === 'project') return next(e)
-      const opened = await $.ui.open({ id: PANE_ID, title: PANE_TITLE })
-      if (opened.isPlaced) tracker.paneOpened()
-
-      return { text: 'Conductor pane opened.' }
-    }
-    // project.tsx answers these (offer.tsx `ask`), whichever of the hooks the engine asks first.
-    if (verb === 'ask' || verb === 'project' || verb === 'draft' || verb === 'run' || verb === 'list' || verb === 'delete' || verb === 'rename' || (verb === 'replay' && name === 'project')) return next(e)
-    if (verb !== 'replay') return { text: HELP }
-
-    if (name === 'clear') {
-      tracker.clear()
-
-      return { text: 'Run view cleared.' }
-    }
-    const fixture = name === undefined ? undefined : FIXTURES[name]
-    if (name === undefined || !fixture || (speed !== undefined && speed !== 'fast' && speed !== 'slow')) {
-      return { text: `Usage: /conductor replay <${Object.keys(FIXTURES).join('|')}|clear> [fast|slow]` }
-    }
-    tracker.replay(replayEvents(name, fixture), speed ?? 'fast')
-
-    return { text: `Replaying ${name} (${speed ?? 'fast'}); token counts are made up.` }
+    return { text: 'Conductor pane opened.' }
   })
 
   // The run starts here. One named as a saved project is that project's, handed off or not, and is shown on it; one a

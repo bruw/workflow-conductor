@@ -1,13 +1,15 @@
 import type { ClientModule, JsonValue } from 'claude-code'
 
-import { BEAT_MS, SPLASH_BEATS, splashScene } from '../src/ui/persona'
+import { BEAT_MS, SPLASH_BEATS, splashScene, waitScene } from '../src/ui/persona'
 import { TEXT } from '../src/ui/theme'
 
 // The splash's scene: a surface module, so that its beats are counted where
 // they are drawn. It has no `$` and posts nothing: hooks/project.tsx shows it
-// for the splash's time and then draws the designer in its place.
+// for the splash's time and then draws the designer in its place. While a draft
+// is awaited the beat comes with the props (`beat`): hooks/project.tsx counts
+// it for as long as the wait lasts, and no ticker runs here.
 
-type SplashProps = { rows: number }
+type SplashProps = { rows: number; beat?: number }
 type SplashState = { beat: number }
 
 // The one ticker, as in ./canvas.tsx: the handle and the beat's body live here
@@ -21,9 +23,10 @@ const Splash: ClientModule<JsonValue, SplashState> = (raw, surface) => {
   const props: Partial<SplashProps> = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Partial<SplashProps>) : {}
   const rows = typeof props.rows === 'number' ? props.rows : 0
   const { Box, Text } = surface.elements
+  const waiting = typeof props.beat === 'number'
   const beat = surface.state?.beat ?? 0
 
-  if (stopTicker === null && beat < SPLASH_BEATS - 1) stopTicker = surface.every(BEAT_MS, () => onBeat?.())
+  if (!waiting && stopTicker === null && beat < SPLASH_BEATS - 1) stopTicker = surface.every(BEAT_MS, () => onBeat?.())
   onBeat = () => {
     if (beat + 1 >= SPLASH_BEATS - 1) {
       stopTicker?.()
@@ -32,7 +35,8 @@ const Splash: ClientModule<JsonValue, SplashState> = (raw, surface) => {
     surface.setState({ beat: beat + 1 })
   }
 
-  const scene = splashScene(beat, surface.columns > 0 ? surface.columns : 80, rows)
+  const columns = surface.columns > 0 ? surface.columns : 80
+  const scene = typeof props.beat === 'number' ? waitScene(props.beat, columns, rows) : splashScene(beat, columns, rows)
   const pad = Math.max(0, Math.floor((surface.columns - scene.width) / 2))
 
   return (

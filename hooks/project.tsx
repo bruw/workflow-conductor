@@ -5,14 +5,21 @@ import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, attac
 import { UNDO_HINT, remember, travel } from '../src/project/history'
 import type { History } from '../src/project/history'
 import { lint, preflightLine, problemFields } from '../src/project/lints'
-import { buildHandoff, handoffPrompt, handoffTarget, reviewPrompt } from '../src/project/handoff'
-import { emptyProject, findNode, flatten, goalOf, isBlank, kindsOf, parseProject, serializeProject, typeName, withGoal } from '../src/project/model'
+import * as partial29 from '../fixtures/partial-29'
+import * as review41 from '../fixtures/review-41'
+import { handoffPrompt, handoffTarget, reviewPrompt } from '../src/project/handoff'
+import { ASK_PREFIX, resetText } from '../src/project/offer'
+import { replayEvents } from '../src/run/replay'
+import type { ReplayFixture } from '../src/run/replay'
+import { emptyProject, findNode, flatten, goalOf, isBlank, kindsOf, parseProject, serializeProject, typeName } from '../src/project/model'
 import type { Project, ProjectNode, NodeType } from '../src/project/model'
 import { nextIdNumber, quickKnob } from '../src/project/ops'
 import type { NodePatch } from '../src/project/ops'
 import {
   AGENT_ROWS_MAX,
   DEFAULT_PROJECT_NAME,
+  DRAFT_LOCK_NOTICE,
+  DRAFT_WAIT_NOTE,
   PROJECT_DIR,
   PROJECT_PANE_ID,
   PROJECT_PANE_TITLE,
@@ -20,6 +27,7 @@ import {
   HELP_PAGES,
   KEYS_CUE,
   LOCK_NOTICE,
+  REVEAL_STEPS,
   SCRATCH_PREFIX,
   TEXT_KNOBS,
   WIDE_MIN_COLUMNS,
@@ -28,6 +36,8 @@ import {
   applyMessage,
   applyOp,
   bareTarget,
+  firstBlocks,
+  isProjectEntry,
   blocksWord,
   carryUi,
   projectFile,
@@ -63,7 +73,6 @@ import {
   runOverlay,
   runSummary,
   savedProject,
-  savedLine,
   startProject,
   startEntries,
   filterText,
@@ -83,12 +92,13 @@ import { parseGraphMessage } from '../src/ui/graph-model'
 import { ENTER, KEY_OPS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
 import { FAILED, fmtTokens } from '../src/ui/rail'
-import { GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene } from '../src/ui/persona'
+import { BEAT_MS, GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, draftPose, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene, waitScene } from '../src/ui/persona'
 import type { PersonaSpan, Pose } from '../src/ui/persona'
 import { clip, firstLines, wrapText } from '../src/ui/text'
-import { ACCENT, FADED, GLYPH, PANE_TITLE, RULE, TEXT } from '../src/ui/theme'
+import { ACCENT, FADED, GLYPH, PANE_ID, PANE_TITLE, RULE, TEXT } from '../src/ui/theme'
+import { wordmark } from '../src/ui/wordmark'
 
-import { offerDrafted, offerPrompted, offerSettled, takeOffered } from './offer'
+import { offerDrafted, offerHanded, offerPrompted, setOfferBoard, takeOffered } from './offer'
 
 // The designer: the hooks module owns the Project and everything chosen on it
 // (selection, view, add list), applies ops, saves the file and draws the screen:
@@ -171,6 +181,11 @@ let drawnCatcher = ''
 let pickGen = 0
 const pickerKey = (): string => `${PICKER_KEY}:${LOAD}.${pickGen}`
 const isPickerField = (element: string | undefined): boolean => (element ?? '').startsWith(`${PICKER_KEY}:`)
+/** The start screen's field for a saved project's new name: `rename:<load>.<n>`, drawn under a new `n` each time it opens. */
+const RENAME_KEY = 'rename'
+let renameGen = 0
+const renameKey = (): string => `${RENAME_KEY}:${LOAD}.${renameGen}`
+const isRenameField = (element: string | undefined): boolean => (element ?? '').startsWith(`${RENAME_KEY}:`)
 /** The field a resting field's address stands for (`project-notes`); null for any other element. */
 const restBase = (element: string | undefined): string | null => (element !== undefined && element.startsWith(REST_KEY) ? baseOf(element.slice(REST_KEY.length)) : null)
 /**
@@ -184,7 +199,7 @@ let doorGen = 0
 const doorKey = (): string => `${DOOR_KEY}:${LOAD}.${doorGen}`
 const isDoor = (element: string | undefined): boolean => (element ?? '').startsWith(`${DOOR_KEY}:`)
 /** Whether an element is a field of the detail pane or the add list's filter: where the ring may rest besides the catcher. */
-const isDetailStop = (element: string | undefined): boolean => element !== undefined && (isField(element) || isPickerField(element) || restBase(element) !== null)
+const isDetailStop = (element: string | undefined): boolean => element !== undefined && (isField(element) || isPickerField(element) || isRenameField(element) || restBase(element) !== null)
 /** How long after the command's answer the handoff prompt is submitted. */
 export const SUBMIT_DELAY_MS = 64
 /** How many times the ring is sent to an element before the field is given up. */
@@ -193,8 +208,6 @@ const LAND_TRIES = 5
 export const FOCUS_DELAY_MS = 48
 /** How often the prompt box is read while a request waits in it. */
 export const BOX_POLL_MS = 600
-/** What /conductor this module answers: its verbs, `replay project`, and no argument at all (a run shown on its project); run.tsx answers the rest. */
-export const PROJECT_VERBS = /^\s*((project|run|list|draft|delete|rename)(\s|$)|replay\s+project(\s|$)|$)/
 /** The header's rows: the persona's two, the name on the first. */
 const HEAD_ROWS = 2
 const EDIT_HINT = 'click a field of the block, or press the Down arrow to reach the name'
@@ -231,12 +244,11 @@ export const paneArgs = (focus: boolean): { id: string; title: string; rows: num
 
   return { id: PROJECT_PANE_ID, title: PROJECT_PANE_TITLE, rows: PANE_ROWS, ...(columns === undefined ? {} : { columns }), ...(focus ? { focus: true as const } : {}) }
 }
-/** What `r` leaves on the message row: what the project implies, then what to do with the request now in the prompt box. */
-const runNotice = (project: Project | null, line: string, isFilled: boolean): string =>
-  `run: ${project ? `${preflightLine(project)} · ` : ''}${isFilled ? 'finish the prompt, then Enter' : `type in the prompt: ${line.trim()} …`}`
+/** What `r` leaves on the message row where its request could not be sent and waits in the prompt box instead. */
+const runNotice = (line: string, isFilled: boolean): string => `run: ${isFilled ? 'the request is in the prompt · Enter sends it' : `type in the prompt: ${line.trim()}`}`
 const askNotice = (line: string, isFilled: boolean): string => (isFilled ? 'ask: the question is in the prompt · change it as you like, then Enter' : `ask: type in the prompt: ${line.trim()}`)
 /** What the start screen's draft button puts in the prompt box: the person adds what the workflow should do. */
-const draftLine = (name: string): string => `/${COMMAND} draft ${name} `
+const draftLine = (): string => `/${COMMAND} `
 const draftNotice = (line: string, isFilled: boolean): string => (isFilled ? 'draft: say in the prompt what the workflow should do, then Enter' : `draft: type in the prompt: ${line.trim()} <what you want>`)
 
 /**
@@ -392,8 +404,10 @@ let keyChain: Promise<void> = Promise.resolve()
 let flushAsked = false
 /** A poll of the prompt box is running, for a request (`r`, `q`) that waits there. */
 let boxWatched = false
-/** The project whose hand-off context a `/conductor run` already recorded: the prompt hook must not attach it a second time. */
-let delivered: string | null = null
+/** The run tracker, as `registerProject` was given it: a key that hands a project off tells it. */
+let runTracker: Tracker | undefined
+/** The ticker of a draft: the splash's beats while it is awaited, the laying out of its blocks once it has landed. */
+let draftTicker: { cancel: () => void } | null = null
 
 // The run's state. Both hooks modules declare these (an atom must be spelled in the
 // file that reads it): run.tsx writes them through the tracker, project.tsx reads them.
@@ -406,6 +420,8 @@ const uiAtom = atom({ plugin: 'conductor', key: 'projectUi' } as const, initialU
 /** When the run began and ended: run.tsx stamps it. */
 /** Whether this session has seen the splash: the pane's first drawing shows it, once. */
 const splashedAtom = atom({ plugin: 'conductor', key: 'splashed' } as const, false)
+/** The beats counted since a draft was asked for: the splash that waits for it and the header's persona move on them. */
+const draftBeatAtom = atom({ plugin: 'conductor', key: 'draftBeat' } as const, 0)
 /** The gesture the header's persona holds; at rest it is `idle`. */
 const personaAtom = atom({ plugin: 'conductor', key: 'persona' } as const, 'idle')
 const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initialTimes())
@@ -482,10 +498,11 @@ let runBoard: RunBoard | undefined
 /** Undefined until the session has started. */
 export const runBoardOf = (): RunBoard | undefined => runBoard
 
-/** Whether a run of the project shown locks it now. */
+/** Whether a run of the project shown locks it now, or Claude's draft of it does. */
 const lockedNow = async ($: EngineInterface): Promise<boolean> => {
   const run = await read($, runAtom)
-  return run.status === 'running' && overlaysProject(run, await read($, runProjectAtom), await read($, uiAtom))
+  const ui = await read($, uiAtom)
+  return ui.drafting === 'show' || (run.status === 'running' && overlaysProject(run, await read($, runProjectAtom), ui))
 }
 
 let flushing: Promise<string | null> = Promise.resolve(null)
@@ -513,7 +530,7 @@ const flushDrafts = ($: EngineInterface): Promise<string | null> => {
       return null
     }
     if (await lockedNow($)) {
-      await update($, uiAtom, held => ({ ...held, notice: `${lost} · ${LOCK_NOTICE}` }))
+      await update($, uiAtom, held => ({ ...held, notice: `${lost} · ${held.drafting === 'show' ? DRAFT_LOCK_NOTICE : LOCK_NOTICE}` }))
 
       return null
     }
@@ -571,7 +588,8 @@ const settleRing = ($: EngineInterface, tries = 1): void => {
   $.clock.after(FOCUS_DELAY_MS, () => {
     void (async (): Promise<void> => {
       const ui = await read($, uiAtom)
-      if ((ui.status !== 'ready' && ui.status !== 'pick') || ui.editing) return
+      // A name is being typed on the start screen: the ring is that field's.
+      if ((ui.status !== 'ready' && ui.status !== 'pick') || ui.editing || (ui.renaming ?? null) !== null) return
       const key = ui.status === 'ready' && ui.picker !== null && !(await lockedNow($)) ? pickerKey() : drawnCatcher
       const moved = await $.ui.focus({ requestId: PROJECT_PANE_ID, key }).catch(() => ({ deny: 'no' }))
       if (moved.deny === undefined) ringOn = key
@@ -617,7 +635,7 @@ const landOn = ($: EngineInterface, target: () => string, hint: string): void =>
     const left = key === last ? tries - 1 : LAND_TRIES
     if (left > 0) return void $.clock.after(left > LAND_TRIES - 2 ? FOCUS_DELAY_MS : FOCUS_DELAY_MS * 2, () => void land(left, key))
     if (ringTo === key) ringTo = ''
-    await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, notice: hint }))
+    await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, renaming: null, notice: hint }))
   }
   void land(LAND_TRIES, '')
 }
@@ -724,9 +742,12 @@ const tidySoon = ($: EngineInterface): void => {
 /** The run laid over the project shown, as the steps need it. */
 const runContext = async ($: EngineInterface): Promise<RunContext> => {
   const now = await read($, runAtom)
-  const held = overlaysProject(now, await read($, runProjectAtom), await read($, uiAtom))
+  const ui = await read($, uiAtom)
+  const held = overlaysProject(now, await read($, runProjectAtom), ui)
+  // A draft being laid out locks the project as a run does.
+  const laying = ui.drafting === 'show'
 
-  return { ...(held ? { run: now, locked: now.status === 'running' } : {}), ...(graphBox ? { graph: graphBox } : {}) }
+  return { ...(held ? { run: now, locked: now.status === 'running' || laying } : laying ? { locked: true } : {}), ...(laying ? { drafting: true } : {}), ...(graphBox ? { graph: graphBox } : {}) }
 }
 
 /** A change is kept for `u`, counted as a revision, and saved. */
@@ -812,19 +833,69 @@ const say = async ($: EngineInterface, notice: string): Promise<void> => {
 }
 
 /**
- * `r`, `q` and the start screen's draft button put a request in the prompt box, for the person to finish and send: from then on what they type
- * is for the prompt. No call hands the keyboard from a pane to the prompt, so the pane is closed and shown again
- * without it. Where that did not take the keys away, no key is acted on until the person does (`handed`).
+ * Project `name` is handed to Claude (`r`, or its sentence sent as a prompt): saved where only the board held it, the
+ * next run to start counted against it, and its hand-off left with the offer tool, which the sentence tells Claude to
+ * call first. False where there is nothing to hand off (no such project, or an empty one).
+ */
+const handOff = async ($: EngineInterface, name: string): Promise<boolean> => {
+  const shown = await read($, uiAtom)
+  const path = projectFile(await $.session.root(), name)
+  // A template nobody edited yet is on the board only: handing it off is what saves it.
+  const onBoard = shown.name === name && shown.status === 'ready' ? await read($, projectAtom) : null
+  if (onBoard !== null && !(await $.fs.exists(path))) await $.fs.write(path, serializeProject(onBoard)).catch(() => undefined)
+  if (!(await $.fs.exists(path))) return false
+  if (onBoard !== null && shown.unsaved) await update($, uiAtom, held => ({ ...held, unsaved: false }))
+  const parsed = parseProject(await $.fs.read(path).catch(() => ''))
+  if (!parsed.ok || isBlank(parsed.project)) return false
+  runTracker?.handoff(handoffOf(name, parsed.project))
+  offerHanded(name)
+  // The selection follows the run that starts.
+  await update($, uiAtom, held => ({ ...held, follow: true, runCleared: false, notice: held.notice?.startsWith('run: ') ? null : held.notice }))
+
+  return true
+}
+
+/**
+ * `q` and the start screen's draft button put a request in the prompt box, for the person to finish and send; `r`
+ * (Implement and Run) sends its own at once, and Claude's turn starts: it confirms the design and asks what to run
+ * it on, in chat. Either way what the person types next is for the prompt. No call hands the keyboard from a pane to
+ * the prompt, so the pane is closed and shown again without it. Where that did not take the keys away, no key is
+ * acted on until the person does (`handed`).
  */
 const request = async ($: EngineInterface, kind: 'run' | 'ask' | 'draft'): Promise<void> => {
   const ui = await read($, uiAtom)
   const now = await read($, projectAtom)
   if (kind === 'run' && !isSaved(ui.name)) return say($, 'run: a replay is not a saved project, there is nothing to hand off')
-  const line = kind === 'run' ? handoffPrompt(ui.name) : kind === 'ask' ? reviewPrompt(ui.name) : draftLine(ui.name)
-  const filled = await $.prompt.fill({ text: line }).catch(() => ({ isFilled: false }))
-  await say($, kind === 'run' ? runNotice(now, line, filled.isFilled) : kind === 'ask' ? askNotice(line, filled.isFilled) : draftNotice(line, filled.isFilled))
-  if (!filled.isFilled) return
-  watchBox($)
+  if (kind === 'run' && (now === null || isBlank(now))) return say($, 'run: the project is empty, add a block first')
+  const line = kind === 'run' ? handoffPrompt(ui.name) : kind === 'ask' ? reviewPrompt(ui.name) : draftLine()
+  /** The request waits in the prompt box, under a line that says so. False where it could not be put there. */
+  const fill = async (): Promise<boolean> => {
+    const filled = await $.prompt.fill({ text: line }).catch(() => ({ isFilled: false }))
+    await say($, kind === 'run' ? runNotice(line, filled.isFilled) : kind === 'ask' ? askNotice(line, filled.isFilled) : draftNotice(line, filled.isFilled))
+    if (filled.isFilled) watchBox($)
+
+    return filled.isFilled
+  }
+  if (kind === 'run') {
+    // The mod's own prompt does not come by its `prompt.submit` hook: the hand-off is made here.
+    if (!(await handOff($, ui.name))) return say($, `run: ${ui.name} could not be handed off`)
+    // Said before the handoff, never a gate: how much the project implies.
+    if (now !== null) $.ui.toast(`conductor: ${ui.name} handed to Claude · ${preflightLine(now)}`)
+    // Sent as the person's own words (they pressed the key), from a clock callback, as a command's is: never from
+    // inside the chain of keys, which it would hold for the turn. Refused (the prompt box holds text): the request
+    // is left there for the person to send.
+    $.clock.after(SUBMIT_DELAY_MS, () => {
+      void $.prompt
+        .submit({ text: line, asUser: true })
+        .then(entered => (entered.drop === undefined ? undefined : fill()))
+        .catch(() => fill())
+    })
+    await $.ui.close({ id: PROJECT_PANE_ID }).catch(() => undefined)
+    await $.ui.open(paneArgs(false)).catch(() => undefined)
+
+    return
+  }
+  if (!(await fill())) return
   await $.ui.close({ id: PROJECT_PANE_ID }).catch(() => undefined)
   await $.ui.open(paneArgs(false)).catch(() => undefined)
   // The ring can be moved only in a site that holds the keyboard: if it still can, the keys did not go.
@@ -834,6 +905,81 @@ const request = async ($: EngineInterface, kind: 'run' | 'ask' | 'draft'): Promi
       .catch(() => ({ deny: 'no' }))
       .then(moved => (moved.deny === undefined ? update($, uiAtom, held => ({ ...held, handed: true, notice: HANDED_NOTICE })) : undefined))
   })
+}
+
+/** The draft's ticker stops. */
+const stopDraftTicker = (): void => {
+  draftTicker?.cancel()
+  draftTicker = null
+}
+
+/**
+ * One beat while Claude drafts. Awaited (`wait`), the splash moves on it. Landed (`show`), the graph shows more of
+ * the project with each: the new blocks marked, the selection on the last of them so the graph scrolls there. Once
+ * all of it is shown the selection goes back to the start block, and only the header's persona keeps the beat until
+ * Claude's turn ends.
+ */
+const draftBeat = async ($: EngineInterface): Promise<void> => {
+  const ui = await read($, uiAtom)
+  if ((ui.drafting ?? null) === null) return stopDraftTicker()
+  await update($, draftBeatAtom, beat => beat + 1)
+  const project = await read($, projectAtom)
+  const shownSoFar = ui.reveal ?? null
+  if (ui.drafting !== 'show' || shownSoFar === null || project === null) return
+  const rows = flatten(project)
+  const upTo = shownSoFar + Math.max(1, Math.ceil(rows.length / REVEAL_STEPS))
+  const fresh = rows.slice(shownSoFar, upTo).map(row => row.node.id)
+  const done = upTo >= rows.length
+  let seq = 0
+  await update($, uiAtom, held => {
+    if (held.drafting !== 'show' || held.reveal !== shownSoFar) return held
+    seq = (held.flash?.seq ?? 0) + 1
+    return { ...held, reveal: done ? null : upTo, selectedId: done ? (project.nodes[0]?.id ?? null) : (fresh.at(-1) ?? held.selectedId), flash: { ids: fresh, seq } }
+  })
+  if (done && seq > 0) {
+    $.clock.after(FLASH_CLEAR_MS, () => {
+      void update($, uiAtom, held => clearFlash(held, seq))
+    })
+  }
+}
+
+const startDraftTicker = ($: EngineInterface): void => {
+  if (draftTicker !== null) return
+  draftTicker = $.clock.every(BEAT_MS, () => {
+    void draftBeat($).catch(() => undefined)
+  })
+}
+
+/**
+ * Claude was asked for a draft (`/conductor <description>`, or "Conductor" answered before a workflow): the splash
+ * is shown until the project lands, whatever the pane showed, which is kept under it. The keyboard stays in the
+ * prompt, where Claude's questions are answered.
+ */
+const beginDraft = async ($: EngineInterface): Promise<void> => {
+  await flushDrafts($)
+  await update($, draftBeatAtom, () => 0)
+  await update($, uiAtom, held => ({ ...held, drafting: 'wait' as const, reveal: null, editing: false, freshId: null, picker: null, confirmId: null, renaming: null, deleteAsk: null, handed: false, notice: null }))
+  await $.ui.open(paneArgs(false)).catch(() => undefined)
+  startDraftTicker($)
+}
+
+/**
+ * The draft is over: Claude's turn ended, or the wait was given up. A project that landed is whole on the graph and
+ * can be edited; with `keys` its board takes the keyboard, where nothing is being typed in the prompt. With none
+ * landed the pane shows what it showed before.
+ */
+const endDraft = async ($: EngineInterface, keys: boolean): Promise<void> => {
+  const ui = await read($, uiAtom)
+  if ((ui.drafting ?? null) === null) return
+  stopDraftTicker()
+  const landed = ui.drafting === 'show'
+  await update($, uiAtom, held => ({ ...held, drafting: null, reveal: null, flash: held.flash ? { ids: [], seq: held.flash.seq } : null }))
+  $.ui.invalidate('ui.render')
+  if (!landed || !keys) return
+  const box = await $.prompt.read().catch(() => ({ text: '?', cursor: 0 }))
+  if (box.text.trim() !== '') return
+  await $.ui.open(paneArgs(true)).catch(() => undefined)
+  settleRing($)
 }
 
 /**
@@ -870,7 +1016,7 @@ const startFrom = async ($: EngineInterface, templateId: string): Promise<void> 
   delete histories[step.ui.name]
   await update($, projectAtom, () => step.project)
   // A project nobody named says once how it gets a name (the line goes with the next thing said).
-  await update($, uiAtom, () => ({ ...step.ui, help: 0, notice: isDefaultName(step.ui.name) ? `named ${step.ui.name} for now · /${COMMAND} rename ${step.ui.name} <name> names it` : null }))
+  await update($, uiAtom, () => ({ ...step.ui, help: 0, notice: isDefaultName(step.ui.name) ? `named ${step.ui.name} for now · once it is saved, p lists it and e renames it there` : null }))
   settleRing($)
 }
 
@@ -954,12 +1100,54 @@ const openSaved = async ($: EngineInterface, name: string): Promise<void> => {
   settleRing($)
 }
 
+/** The recorded runs, by the name the start screen lists them under (`RECORDINGS`). */
+const FIXTURES: Record<string, ReplayFixture> = { 'review-41': review41, 'partial-29': partial29 }
+
+/** A made-up run replayed over a template's project, which is named `replay-<template>` and lives in the session only: no file is written, and none is listed. */
+const replayOver = async ($: EngineInterface, templateId: string): Promise<void> => {
+  const template = TEMPLATES.find(one => one.id === templateId)
+  if (!template || runTracker === undefined) return
+  const name = projectName(`replay-${template.id}`)
+  const made: Project = { ...template.make(), name }
+  // Another project under the same name: what could be undone in the one before is not its history.
+  delete histories[name]
+  behind = null
+  await update($, projectAtom, () => made)
+  await update($, uiAtom, held => ({ ...carryUi(held, initialUi()), name, status: 'ready' as const, selectedId: made.nodes[0]?.id ?? null, notice: 'replaying a made-up run: token counts are made up, nothing is saved' }))
+  settleRing($)
+  // A replay reuses its run id: the clock of the one before must not time this one.
+  await update($, timesAtom, () => initialTimes())
+  runTracker.handoff(handoffOf(name, made))
+  runTracker.replay(replayProjectEvents(made, name), 'fast')
+}
+
+/** A recorded run replayed in the run view, which is opened for it: it belongs to no project. */
+const replayRecording = async ($: EngineInterface, id: string): Promise<void> => {
+  const fixture = FIXTURES[id]
+  if (!fixture || runTracker === undefined) return
+  runTracker.replay(replayEvents(id, fixture), 'fast')
+  const opened = await $.ui.open({ id: PANE_ID, title: PANE_TITLE }).catch(() => undefined)
+  if (opened?.isPlaced) runTracker.paneOpened()
+  await say($, `replaying ${id} in the run view: token counts are made up`)
+}
+
+/** Every stored "Always" and "Never" answer goes, whichever of Conductor's questions it was given to: both are asked again. */
+const forgetAnswers = async ($: EngineInterface): Promise<void> => {
+  const keys = (await $.store.keys().catch(() => [])).filter(key => key.startsWith(ASK_PREFIX))
+  for (const key of keys) await $.store.delete(key).catch(() => undefined)
+  await say($, resetText(keys.length))
+}
+
 /** A row of the start screen is opened: by Enter on the marked one, or by a click on any. */
 const openEntry = async ($: EngineInterface, at?: number): Promise<void> => {
   const ui = await read($, uiAtom)
   if (ui.status !== 'pick') return
   const entry = startEntries(ui.saved ?? [])[at ?? ui.startMark ?? 0]
   if (!entry) return
+  // The rows under the projects open none: a replay, or the stored answers forgotten.
+  if (entry.kind === 'replay') return replayOver($, entry.id)
+  if (entry.kind === 'recording') return replayRecording($, entry.id)
+  if (entry.kind === 'reset') return forgetAnswers($)
   const back = ui.back ?? null
   // The project the list was opened from: back to it, as it stood.
   if (entry.kind === 'saved' && entry.id === back) return closeProjectList($)
@@ -973,21 +1161,138 @@ const openEntry = async ($: EngineInterface, at?: number): Promise<void> => {
   if (dropped !== null && now.notice === null) await say($, `${dropped} was not saved: nothing of it was kept`)
 }
 
-/** One key on the start screen: `w` / `s` move the mark (the arrows do too: the `ui.focus` hook), Enter opens the marked row, `?` turns the help pages and `x` closes them; opened from a project, `x` and `p` go back to it. */
+/** What this session knows of a project, by its name: its undo history, its revisions, what Claude saw of it. */
+const books = (): Record<string, unknown>[] => [histories, revisions, seenByClaude, seenProjects, warnedAt] as Record<string, unknown>[]
+
+/** The start screen's list is read again (a project was renamed or deleted), the mark on `name` where it is listed. */
+const relist = async ($: EngineInterface, name: string | null, notice: string): Promise<void> => {
+  const saved = await readSaved($, await $.session.root())
+  await update($, uiAtom, held => {
+    const at = name === null ? -1 : saved.findIndex(one => one.name === name)
+    const last = startEntries(saved).length - 1
+
+    return { ...held, saved, startMark: Math.max(0, Math.min(last, at >= 0 ? at : (held.startMark ?? 0))), renaming: null, deleteAsk: null, notice }
+  })
+}
+
+/** Deletes a saved project, its script with it. What is said of it; nothing is deleted where it says a refusal. */
+const deleteSaved = async ($: EngineInterface, name: string): Promise<string> => {
+  const root = await $.session.root()
+  const path = projectFile(root, name)
+  if (!isSaved(name) || !(await $.fs.exists(path))) return `${name} is gone already: nothing to delete`
+  if ((await read($, runProjectAtom)) === name && (await read($, runAtom)).status === 'running') return `${name} is being run: it can be deleted once the run ends`
+  const removed = await $.process.run(['rm', '--', path]).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: reason(error) }))
+  if (removed.exitCode !== 0) return `${name} could not be deleted: ${removed.stderr.trim().slice(0, 120) || 'rm failed'}`
+  // Its script goes with it. One that stays behind is said: the project is gone all the same.
+  const script = await scriptOf($, root, name)
+  const scriptGone = script === null || (await $.process.run(['rm', '--', script]).catch(() => ({ exitCode: 1 }))).exitCode === 0
+  for (const book of books()) delete book[name]
+  delete previews[name]
+  // The list was opened from it: there is no way back to it.
+  if (behind !== null && behind.ui.name === name) behind = null
+  await update($, uiAtom, held => ({ ...held, back: held.back === name ? null : (held.back ?? null), picks: Object.fromEntries(Object.entries(held.picks ?? {}).filter(([key]) => key !== name)) }))
+
+  return scriptGone ? `deleted ${name}${script === null ? '' : ' and its script'}` : `deleted ${name}, but its script ${PROJECT_DIR}/${name}.workflow.js could not be removed`
+}
+
+/** Renames a saved project: the file, its script, and what this session knows of it. `done` is the new name; a refusal renames nothing. */
+const renameSaved = async ($: EngineInterface, oldName: string, typed: string): Promise<{ done: string | null; text: string }> => {
+  if (typed.trim() === '') return { done: null, text: 'rename: no name was typed' }
+  const newName = projectName(typed)
+  if (oldName === newName) return { done: null, text: `${oldName} keeps its name` }
+  if (!isSaved(newName)) return { done: null, text: `rename: names starting with ${SCRATCH_PREFIX} are kept for replays` }
+  const root = await $.session.root()
+  const oldPath = projectFile(root, oldName)
+  const newPath = projectFile(root, newName)
+  if (!(await $.fs.exists(oldPath))) return { done: null, text: `${oldName} is gone: nothing to rename` }
+  if (await $.fs.exists(newPath)) return { done: null, text: `rename: a project named ${newName} exists` }
+  if ((await read($, runProjectAtom)) === oldName && (await read($, runAtom)).status === 'running') return { done: null, text: `${oldName} is being run: it can be renamed once the run ends` }
+  const parsed = parseProject(await $.fs.read(oldPath).catch(() => ''))
+  if (!parsed.ok) return { done: null, text: `rename: ${oldName} is not a valid project file` }
+  try {
+    await $.fs.write(newPath, serializeProject({ ...parsed.project, name: newName }))
+  } catch (error) {
+    return { done: null, text: `rename: ${newName} could not be saved: ${reason(error)}` }
+  }
+  const removed = await $.process.run(['rm', '--', oldPath]).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: reason(error) }))
+  if (removed.exitCode !== 0) return { done: newName, text: `${newName} was written, but ${PROJECT_DIR}/${oldName}.json could not be removed` }
+  // Its script moves with it. One that stays behind is said: the project is renamed all the same.
+  const script = await scriptOf($, root, oldName)
+  const scriptMoved = script === null || (await $.process.run(['mv', '--', script, scriptFile(root, newName)]).catch(() => ({ exitCode: 1 }))).exitCode === 0
+  for (const book of books()) {
+    if (oldName in book) book[newName] = book[oldName]
+    delete book[oldName]
+  }
+  delete previews[oldName]
+  // The project the list was opened from: the way back is to its new name.
+  if (behind !== null && behind.ui.name === oldName) behind = { project: { ...behind.project, name: newName }, ui: { ...behind.ui, name: newName } }
+  await update($, uiAtom, held => {
+    const picks = { ...(held.picks ?? {}) }
+    const left = picks[oldName]
+    delete picks[oldName]
+
+    return { ...held, back: held.back === oldName ? newName : (held.back ?? null), picks: left === undefined ? picks : { ...picks, [newName]: left } }
+  })
+
+  return { done: newName, text: scriptMoved ? `renamed ${oldName} to ${newName}` : `renamed ${oldName} to ${newName}, but its script could not be moved with it` }
+}
+
+/** Enter in the start screen's name field: the project is renamed, the list read again, and the ring goes back to the catcher. */
+const renameEnter = ($: EngineInterface, oldName: string, value: string): void => {
+  keyChain = keyChain
+    .then(async (): Promise<void> => {
+      if (((await read($, uiAtom)).renaming ?? null) !== oldName) return
+      const answer = await renameSaved($, oldName, value)
+      await relist($, answer.done ?? oldName, answer.text)
+      await home($)
+    })
+    .catch((error: unknown) => {
+      $.ui.toast(`conductor: ${reason(error)}`)
+    })
+    .then(() => $.ui.invalidate('ui.render'))
+}
+
+/**
+ * One key on the start screen: `w` / `s` move the mark (the arrows do too: the `ui.focus` hook), Enter opens the
+ * marked row, `?` turns the help pages and `x` closes them. On a saved project `e` renames it (its name becomes a
+ * field) and `x` deletes it, asked twice. Opened from a project, `p` and `b` go back to it.
+ */
 const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
+  const ui = await read($, uiAtom)
+  // A name is being typed: a letter that reached the catcher on the ring's way to the field is no key. One that comes
+  // once the ring has been there found it back on the catcher (a click took it): the name is left as it was.
+  if ((ui.renaming ?? null) !== null) {
+    if (isRenameField(ringTo)) return true
+    await update($, uiAtom, held => ({ ...held, renaming: null }))
+  }
   if (key === ENTER) {
     await openEntry($)
 
     return false
   }
   const op = KEY_OPS[key]
+  const helping = (ui.help ?? 0) > 0
+  const marked = startEntries(ui.saved ?? [])[ui.startMark ?? 0]
+  const asked = ui.deleteAsk ?? null
+  // Any key but a second `x` takes the question back.
+  if (asked !== null && !(op === 'remove' && !helping)) await update($, uiAtom, held => ({ ...held, deleteAsk: null, notice: null }))
   if (op === 'up' || op === 'down') beat($)
   if (op === 'up' || op === 'down') await update($, uiAtom, held => ({ ...moveStartMark(held, op === 'up' ? -1 : 1), help: 0 }))
   else if (op === 'help') await update($, uiAtom, held => ({ ...held, notice: null, help: ((held.help ?? 0) % HELP_PAGES) + 1 }))
-  else if (op === 'remove' && ((await read($, uiAtom)).help ?? 0) > 0) await update($, uiAtom, held => ({ ...held, help: 0 }))
-  // Opened from a project: `x` goes back to it, and so does the key that opened the list.
-  else if ((op === 'remove' || op === 'projects') && ((await read($, uiAtom)).back ?? null) !== null) {
+  else if (op === 'remove' && helping) await update($, uiAtom, held => ({ ...held, help: 0 }))
+  // Opened from a project: the key that opened the list goes back to it, and so does `b`.
+  else if ((op === 'projects' || op === 'back') && (ui.back ?? null) !== null) {
     await closeProjectList($)
+
+    return false
+  } else if ((op === 'remove' || (op === 'edit' && key !== ENTER)) && marked?.kind !== 'saved') await say($, `${op === 'remove' ? 'delete' : 'rename'}: mark a saved project first`)
+  else if (op === 'remove' && marked) {
+    if (asked === marked.id) await relist($, null, await deleteSaved($, marked.id))
+    else await update($, uiAtom, held => ({ ...held, deleteAsk: marked.id, notice: `delete ${marked.id} (${blocksWord(marked.blocks)}) and its script? x again deletes it · any other key keeps it` }))
+  } else if (op === 'edit' && marked) {
+    renameGen++
+    await update($, uiAtom, held => ({ ...held, renaming: marked.id, help: 0, notice: null }))
+    landOn($, renameKey, 'rename: click the name to type in it')
 
     return false
   } else await say($, unboundNotice(key))
@@ -1002,6 +1307,8 @@ const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
 const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   const ui = await read($, uiAtom)
   const project = await read($, projectAtom)
+  // The splash waits for Claude's draft: there is nothing to act on.
+  if (ui.drafting === 'wait') return false
   if (ui.status === 'pick') return startKey($, key)
   // A file that is no project: the one key is the way to the others.
   if (ui.status === 'error' && KEY_OPS[key] === 'projects') await openProjectList($)
@@ -1186,176 +1493,23 @@ const filterKeys = ($: EngineInterface, element: string, value: string): void =>
 }
 
 export const registerProject = (on: On, tracker: Tracker): void => {
-  // run.tsx registers /conductor and answers its own verbs; it passes these on.
-  on('command.run', { command: 'conductor', args: PROJECT_VERBS }, async ($, e, next) => {
-    const [verb = '', ...rest] = e.args.trim().split(/\s+/)
+  runTracker = tracker
+  // run.tsx registers /conductor. With words /conductor is a draft: Claude makes a new project for
+  // them and names it. With none it is the board: a run in progress on its project (run.tsx's phase view when it came
+  // from none), else the project last opened, with the keyboard, else the start screen.
+  on('command.run', { command: COMMAND }, async ($, e, next) => {
+    const words = e.args.trim().replace(/\s+/g, ' ')
     terminalColumns = e.presentation?.columns ?? terminalColumns
-    // Whatever was typed into a field and not sent is saved before the command acts (it may open another project, or run this one).
+    // Whatever was typed into a field and not sent is saved before the command acts (it may open another project).
     await flushDrafts($)
-    // No argument: a run in progress on its project (run.tsx's phase view when it came from none).
-    // With no run in progress: the project last opened, with the keyboard; the start screen when there is none.
-    const bare = verb === '' ? bareTarget((await read($, runAtom)).status, await read($, runProjectAtom), await read($, uiAtom)) : null
-    if (bare !== null && bare.view === 'run') return next(e)
-    const shown = bare !== null && bare.view === 'project' && bare.live ? bare.name : null
-    const root = await $.session.root()
     // The person is at the prompt, sending a command: nothing waits there for the keys any more.
     if ((await read($, uiAtom)).handed) await update($, uiAtom, held => ({ ...held, handed: false, notice: held.notice === HANDED_NOTICE ? null : held.notice }))
 
-    if (verb === 'delete') {
-      // Asked twice: the name, then the name again with `confirm`. The file goes; this session's undo history of it too.
-      const [first = '', word] = rest
-      if (first === '') return { text: `Usage: /${COMMAND} delete <name>. /${COMMAND} list names the saved projects.` }
-      const name = projectName(first)
-      const path = projectFile(root, name)
-      if (!isSaved(name) || !(await $.fs.exists(path))) return { text: `No saved project named ${name} (${PROJECT_DIR}/${name}.json): nothing to delete.` }
-      const entry = savedProject(name, await $.fs.read(path).catch(() => ''))
-      if (word !== 'confirm' && word !== name) {
-        return { text: `Delete ${savedLine(entry)}? This removes ${PROJECT_DIR}/${name}.json${(await scriptOf($, root, name)) === null ? '' : ' and its script'} and cannot be undone here. To go ahead: /${COMMAND} delete ${name} confirm` }
-      }
-      if ((await read($, runProjectAtom)) === name && (await read($, runAtom)).status === 'running') return { text: `Project ${name} is being run: it can be deleted once the run ends.` }
-      const removed = await $.process.run(['rm', '--', path]).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: reason(error) }))
-      if (removed.exitCode !== 0) return { text: `Project ${name} could not be deleted: ${removed.stderr.trim().slice(0, 160) || 'rm failed'}` }
-      // Its script goes with it. One that stays behind is said: the project is gone all the same.
-      const script = await scriptOf($, root, name)
-      const scriptGone = script === null || (await $.process.run(['rm', '--', script]).catch(() => ({ exitCode: 1 }))).exitCode === 0
-      delete histories[name]
-      delete revisions[name]
-      delete seenByClaude[name]
-      delete seenProjects[name]
-      delete warnedAt[name]
-      // The pane was showing it: nothing is shown in its place but the way to open another.
-      if ((await read($, uiAtom)).name === name) {
-        await update($, projectAtom, () => null)
-        await update($, uiAtom, held => ({ ...carryUi(held, initialUi()), picks: Object.fromEntries(Object.entries(held.picks ?? {}).filter(([key]) => key !== name)) }))
-      }
-
-      if (!scriptGone) return { text: `Project ${name} deleted (${PROJECT_DIR}/${name}.json), but its script ${PROJECT_DIR}/${name}.workflow.js could not be removed.` }
-
-      return { text: `Project ${name} deleted (${PROJECT_DIR}/${name}.json${script === null ? '' : ' and its script'}).` }
-    }
-
-    if (verb === 'rename') {
-      const [from = '', to = '', ...more] = rest
-      if (from === '' || to === '' || more.length > 0) return { text: `Usage: /${COMMAND} rename <old> <new>. /${COMMAND} list names the saved projects.` }
-      const oldName = projectName(from)
-      const newName = projectName(to)
-      if (!isSaved(oldName)) return { text: `${oldName} is a replay, not a saved project: there is nothing to rename.` }
-      if (!isSaved(newName)) return { text: `Names starting with ${SCRATCH_PREFIX} are kept for replays: choose another name.` }
-      if (oldName === newName) return { text: `Project ${oldName} already has that name.` }
-      const oldPath = projectFile(root, oldName)
-      const newPath = projectFile(root, newName)
-      const held = await read($, uiAtom)
-      // A project started from a template and not edited yet is on the board only.
-      const onBoard = held.name === oldName && held.status === 'ready' ? await read($, projectAtom) : null
-      const onDisk = await $.fs.exists(oldPath)
-      if (!onDisk && onBoard === null) return { text: `No saved project named ${oldName} (${PROJECT_DIR}/${oldName}.json): nothing to rename.` }
-      if (await $.fs.exists(newPath)) return { text: `A project named ${newName} exists (${PROJECT_DIR}/${newName}.json): nothing was renamed. Choose another name, or delete it first with /${COMMAND} delete ${newName}.` }
-      if ((await read($, runProjectAtom)) === oldName && (await read($, runAtom)).status === 'running') return { text: `Project ${oldName} is being run: it can be renamed once the run ends.` }
-      let source: Project | null = onBoard
-      if (source === null) {
-        const parsed = parseProject(await $.fs.read(oldPath).catch(() => ''))
-        if (!parsed.ok) return { text: `Project ${oldName} is not valid, nothing was renamed: ${parsed.error}` }
-        source = parsed.project
-      }
-      const renamed: Project = { ...source, name: newName }
-      try {
-        await $.fs.write(newPath, serializeProject(renamed))
-      } catch (error) {
-        return { text: `Project ${newName} could not be saved, nothing was renamed: ${reason(error)}` }
-      }
-      if (onDisk) {
-        const removed = await $.process.run(['rm', '--', oldPath]).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: reason(error) }))
-        if (removed.exitCode !== 0) return { text: `Project ${newName} was written, but ${PROJECT_DIR}/${oldName}.json could not be removed: ${removed.stderr.trim().slice(0, 160) || 'rm failed'}` }
-      }
-      // Its script moves with it. One that stays behind is said: the project is renamed all the same.
-      const script = await scriptOf($, root, oldName)
-      const scriptMoved = script === null || (await $.process.run(['mv', '--', script, scriptFile(root, newName)]).catch(() => ({ exitCode: 1 }))).exitCode === 0
-      // What this session knows of the project goes with it: its undo history, its revisions, the block it was left on.
-      for (const book of [histories, revisions, seenByClaude, seenProjects, warnedAt] as Record<string, unknown>[]) {
-        if (oldName in book) book[newName] = book[oldName]
-        delete book[oldName]
-      }
-      if (held.name === oldName && held.status !== 'closed') {
-        if (onBoard !== null) await update($, projectAtom, () => renamed)
-        await update($, uiAtom, ui => ({ ...ui, name: newName, notice: ui.notice?.includes(`${COMMAND} rename`) ? null : ui.notice }))
-      }
-      await update($, uiAtom, ui => {
-        const picks = { ...(ui.picks ?? {}) }
-        const left = picks[oldName]
-        delete picks[oldName]
-
-        return { ...ui, picks: left === undefined ? picks : { ...picks, [newName]: left } }
-      })
-
-      if (!scriptMoved) return { text: `Project ${oldName} renamed to ${newName} (${PROJECT_DIR}/${newName}.json), but its script ${PROJECT_DIR}/${oldName}.workflow.js could not be moved with it.` }
-
-      return { text: `Project ${oldName} renamed to ${newName} (${PROJECT_DIR}/${newName}.json${script === null ? '' : ', its script with it'}).` }
-    }
-
-    if (verb === 'replay') {
-      const [, templateId, speed] = rest
-      const template = TEMPLATES.find(one => one.id === templateId)
-      if (!template || (speed !== undefined && speed !== 'fast' && speed !== 'slow')) {
-        return { text: `Usage: /${COMMAND} replay project <${TEMPLATES.map(one => one.id).join('|')}> [fast|slow]` }
-      }
-      // A replay's project lives in the session only (`isSaved`): no file is written, and none is listed.
-      const name = projectName(`replay-${template.id}`)
-      const made: Project = { ...template.make(), name }
-      // Another project under the same name: what could be undone in the one before is not its history.
-      delete histories[name]
-      await update($, projectAtom, () => made)
-      await update($, uiAtom, held => ({ ...carryUi(held, initialUi()), name, status: 'ready' as const, selectedId: made.nodes[0]?.id ?? null }))
-      await $.ui.open(paneArgs(true))
-      settleRing($)
-      // A replay reuses its run id: the clock of the one before must not time this one.
-      await update($, timesAtom, () => initialTimes())
-      tracker.handoff(handoffOf(name, made))
-      tracker.replay(replayProjectEvents(made, name), speed ?? 'fast')
-
-      return { text: `Replaying a made-up run over the ${template.id} template (${speed ?? 'fast'}); token counts are made up, and nothing is saved.` }
-    }
-
-    // Bare `project` (and bare /conductor with nothing opened yet): the saved projects to pick from, above the templates.
-    const fresh = rest.join('').trim() === '' && (verb === 'project' || (bare !== null && bare.view === 'project' && !bare.live && bare.name === DEFAULT_PROJECT_NAME && (await read($, uiAtom)).status === 'closed'))
-    const saved: SavedProject[] = []
-    // The saved projects, each read: `/conductor list` prints them, the start screen lists them and draws the marked one.
-    const listSaved = async (): Promise<void> => {
-      saved.push(...(await readSaved($, root)))
-    }
-    if (verb === 'list' || fresh) await listSaved()
-
-    if (verb === 'list') {
-      if (saved.length === 0) return { text: `No saved projects yet: /${COMMAND} project <name> starts one.` }
-
-      return { text: [`Saved projects (${PROJECT_DIR}), open one with /${COMMAND} project <name>:`, ...saved.map(one => `  ${savedLine(one)}`)].join('\n') }
-    }
-
-    if (verb === 'draft') {
-      const [first = '', ...words] = rest
-      const brief = words.join(' ').trim()
-      if (first === '' || brief === '') return { text: `Usage: /${COMMAND} draft <name> <what the workflow should do>` }
-      const name = projectName(first)
-      if (!isSaved(name)) return { text: `Names starting with ${SCRATCH_PREFIX} are kept for replays: choose another name.` }
-      const path = projectFile(root, name)
-      if (await $.fs.exists(path)) {
-        const saved = parseProject(await $.fs.read(path).catch(() => ''))
-        // A draft never writes over work: an existing project is changed by asking in chat.
-        if (!saved.ok || !isBlank(saved.project)) {
-          return { text: `A project named ${name} exists (${PROJECT_DIR}/${name}.json). Open it with /${COMMAND} project ${name} and ask for changes in chat, or draft under another name.` }
-        }
-      }
-      const blank: Project = withGoal(emptyProject(name), brief)
-      try {
-        await $.fs.write(path, serializeProject(blank))
-      } catch (error) {
-        return { text: `Project ${name} could not be saved: ${reason(error)}` }
-      }
-      await update($, projectAtom, () => blank)
-      // The empty graph says Claude is drafting until the first blocks land.
-      await update($, uiAtom, held => ({ ...carryUi(held, initialUi()), name, status: 'ready' as const, drafting: true }))
-      await $.ui.open(paneArgs(false))
-      const prompt = `Draft the "${name}" workflow project: ${brief}`
-      // As the handoff: `prompt.submit` is refused inside this hook, so it is sent once the command has settled.
+    if (words !== '') {
+      // The splash is shown until the project lands; the brief goes with this answer, and the prompt that follows starts the turn.
+      await beginDraft($)
+      const prompt = `Draft a workflow project: ${words}`
+      // `prompt.submit` is refused inside this hook (it would wait on the turn the hook holds), so it is sent once the command has settled.
       $.clock.after(SUBMIT_DELAY_MS, () => {
         const fill = async (): Promise<void> => {
           const filled = await $.prompt.fill({ text: prompt }).catch(() => ({ isFilled: false }))
@@ -1367,93 +1521,31 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           .catch(() => fill())
       })
 
-      return { text: `drafting project "${name}"`, context: draftBrief(name, brief) }
+      return { text: 'drafting a workflow project', context: draftBrief(words) }
     }
 
-    if (verb === 'run') {
-      // `fill` as a last word leaves the prompt in the box for the person to send.
-      const fillOnly = rest.length > 1 && rest.at(-1) === 'fill'
-      const typed = (fillOnly ? rest.slice(0, -1) : rest).join(' ')
-      if (typed.trim() === '') return { text: `Usage: /${COMMAND} run <name> [fill]. /${COMMAND} list names the saved projects.` }
-      const name = projectName(typed)
-      const path = projectFile(root, name)
-      // A project started from a template and not edited yet is on the board only: running it is what saves it.
-      const onBoard = (await read($, uiAtom)).name === name && (await read($, uiAtom)).status === 'ready' ? await read($, projectAtom) : null
-      if (isSaved(name) && onBoard !== null && !(await $.fs.exists(path))) await $.fs.write(path, serializeProject(onBoard)).catch(() => undefined)
-      if (onBoard !== null) await update($, uiAtom, held => (held.unsaved ? { ...held, unsaved: false } : held))
-      if (!(await $.fs.exists(path))) return { text: `No project named ${name} (${PROJECT_DIR}/${name}.json). /${COMMAND} project ${name} starts one.` }
-      let body: string
-      try {
-        body = await $.fs.read(path)
-      } catch (error) {
-        return { text: `Project ${name} could not be read: ${reason(error)}` }
-      }
-      const parsed = parseProject(body)
-      if (!parsed.ok) return { text: `Project ${name} is not valid, nothing was handed off: ${parsed.error}` }
-      if (isBlank(parsed.project)) return { text: `Project ${name} is empty: add a block before running it.` }
-
-      const handoff = buildHandoff(parsed.project, path, await scriptOf($, root, name))
-      // The next run to start is this project's: its agents count against these ids.
-      tracker.handoff(handoffOf(name, parsed.project))
-      offerSettled(name)
-      // The pane shows the project being run, whatever it showed before; the keyboard stays in the prompt.
-      const shownUi = await read($, uiAtom)
-      if (shownUi.name !== name || shownUi.status !== 'ready') {
-        const opened = openProject(name, body, shownUi)
-        await update($, projectAtom, () => opened.project)
-        await update($, uiAtom, () => opened.ui)
-      }
-      // The designer's "run: …" line is spent once the command has been sent; the selection follows the run that starts.
-      await update($, uiAtom, held => ({ ...held, follow: true, runCleared: false, notice: held.notice?.startsWith('run: ') ? null : held.notice }))
-      await $.ui.open(paneArgs(false)).catch(() => undefined)
-      // This answer's `context` carries the conventions: the prompt hook leaves them out when the prompt follows.
-      delivered = name
-      // Said before the handoff, never a gate: how much the project implies.
-      const facts = preflightLine(parsed.project)
-      const prompt = `Implement and run the "${name}" workflow project.`
-      const fill = async (): Promise<void> => {
-        // Left for the person to finish: what to run it on.
-        const filled = await $.prompt.fill({ text: handoffPrompt(name) }).catch(() => ({ isFilled: false }))
-        $.ui.toast(filled.isFilled ? 'conductor: say what to run it on, then Enter' : `conductor: type "${handoffPrompt(name).trim()} …" to start the handoff`)
-      }
-      if (fillOnly) {
-        await fill()
-
-        return { text: `${handoff.text} · ${facts}; say what to run it on in the filled prompt, then Enter`, context: handoff.context }
-      }
-      // The engine refuses `prompt.submit` from inside a command.run hook (it
-      // would wait on the turn this hook holds), so it is sent from a clock
-      // callback once this command has settled. The context is recorded first.
-      $.clock.after(SUBMIT_DELAY_MS, () => {
-        void $.prompt
-          .submit({ text: prompt })
-          .then(entered => (entered.drop === undefined ? undefined : fill()))
-          .catch(() => fill())
-      })
-
-      return { text: `${handoff.text} · ${facts}`, context: handoff.context }
-    }
-
+    // A draft was awaited and the person asks for the board: the wait is given up, and one being laid out is shown whole.
+    await endDraft($, false)
+    const bare = bareTarget((await read($, runAtom)).status, await read($, runProjectAtom), await read($, uiAtom))
+    if (bare.view === 'run') return next(e)
+    const root = await $.session.root()
     const previous = await read($, uiAtom)
-    // Bare /conductor: the run's project, else the project this session last had open.
-    const name = bare !== null && bare.view === 'project' ? bare.name : projectName(rest.join(' '))
-    // A replay's project is made by `/conductor replay project`, never from the start screen: its name is not offered for a new project.
-    if (!isSaved(name) && !(verb === '' && previous.name === name && previous.status === 'ready')) {
-      return { text: `Names starting with ${SCRATCH_PREFIX} are kept for replays (/${COMMAND} replay project <template>): choose another name for a project.` }
-    }
-    const path = projectFile(root, name)
-    // The run's project, or the one last worked on, is often already loaded: it is shown as it stands.
-    if (verb === '' && previous.name === name && previous.status === 'ready' && (await read($, projectAtom)) !== null) {
+    // The run's project, else the project this session last had open.
+    const name = bare.name
+    // It is often already loaded: it is shown as it stands.
+    if (previous.name === name && previous.status === 'ready' && (await read($, projectAtom)) !== null) {
       // A field left open when the keyboard went to the prompt is closed: the keys are keys again.
       if (previous.editing || previous.picker !== null) await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, picker: null }))
       await $.ui.open(paneArgs(true))
       // On the catcher, never in a field.
       settleRing($)
 
-      return { text: shown !== null ? `Project ${name} opened with its run.` : `Project ${name} opened.` }
+      return { text: bare.live ? `Project ${name} opened with its run.` : `Project ${name} opened.` }
     }
-    if (fresh && saved.length > 0) {
-      // Coming back: the saved projects first. A template starts a new project under a name none of them has.
+    // The saved projects, each read: the start screen lists them and draws the marked one.
+    const saved = await readSaved($, root)
+    // Nothing was opened yet in this session: the saved projects first. A template starts a new project under a name none of them has.
+    if (!bare.live && name === DEFAULT_PROJECT_NAME && previous.status === 'closed' && saved.length > 0) {
       const started = openProject(freeName(saved.map(one => one.name)), undefined, previous)
       await update($, projectAtom, () => null)
       await update($, uiAtom, () => ({ ...started.ui, saved, startMark: 0 }))
@@ -1462,8 +1554,11 @@ export const registerProject = (on: On, tracker: Tracker): void => {
 
       return { text: `${saved.length} saved ${saved.length === 1 ? 'project' : 'projects'}: open one in the pane, or start a new one from a template.` }
     }
+    // A replay's project lives in the session only: one that is gone is not started from the start screen.
+    if (!isSaved(name)) return { text: `Names starting with ${SCRATCH_PREFIX} are kept for replays: the start screen starts one (p, then a row under "Replay a run").` }
+    const path = projectFile(root, name)
     let step = openProject(name, undefined, previous)
-    if (isSaved(name) && (await $.fs.exists(path))) {
+    if (await $.fs.exists(path)) {
       try {
         step = openProject(name, await $.fs.read(path), previous)
       } catch (error) {
@@ -1471,11 +1566,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         step = { ...step, ui: { ...step.ui, status: 'error', error: `could not be read: ${reason(error)}` } }
       }
     }
-    // No such project yet: the start screen, for this name. The saved ones are listed all the same; the mark starts on the first template.
-    if (step.ui.status === 'pick') {
-      if (!fresh) await listSaved()
-      step = { ...step, ui: { ...step.ui, saved, startMark: saved.length } }
-    }
+    // No such project (yet): the start screen. The saved ones are listed; the mark starts on the first template.
+    if (step.ui.status === 'pick') step = { ...step, ui: { ...step.ui, name: saved.some(one => one.name === name) ? freeName(saved.map(one => one.name)) : name, saved, startMark: saved.length } }
     await update($, projectAtom, () => step.project)
     await update($, uiAtom, () => step.ui)
     // With the keyboard, the keys work at once: no click on the graph.
@@ -1484,7 +1576,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
 
     if (step.ui.status === 'error') return { text: `Project ${name} could not be opened: ${step.ui.error}` }
 
-    return { text: step.ui.status === 'pick' ? `No project named ${name} yet: start it from a template in the pane.` : `Project ${name} opened.` }
+    return { text: step.ui.status === 'pick' ? 'Open a saved project in the pane, or start a new one from a template.' : `Project ${name} opened.` }
   })
 
   // The tool Claude edits a project with, deferred: its schema is loaded when Claude asks for it, not sent with every turn.
@@ -1492,20 +1584,33 @@ export const registerProject = (on: On, tracker: Tracker): void => {
   on('session.start', { cwd: /^/ }, async ($, e, next) => {
     await $.tool.register({ name: TOOL_NAME, description: toolDescription(), inputSchema: TOOL_SCHEMA, isDeferred: true })
     runBoard = { projectOfRun: workflow => projectOfRun($, workflow), keepScript: (from, to) => keepScript($, from, to) }
+    setOfferBoard({ drafting: () => beginDraft($) })
     // A load (the first, or a reload): the state outlives it, what it said of the moment does not. No field is open,
-    // nothing waits in the prompt box under a `run: …` line, and the ring starts on the catcher.
+    // nothing waits in the prompt box under a `run: …` line, no draft is counted in (its ticker went with the load
+    // before), and the ring starts on the catcher.
     await update($, uiAtom, held =>
-      held.editing || held.picker !== null || held.handed || held.confirmId !== null || (held.notice !== null && /^(run|ask|draft): /.test(held.notice)) || held.notice === HANDED_NOTICE
-        ? { ...held, editing: false, freshId: null, picker: null, handed: false, confirmId: null, notice: held.notice !== null && (/^(run|ask|draft): /.test(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice }
+      held.editing || held.picker !== null || held.handed || held.confirmId !== null || (held.drafting ?? null) !== null || (held.renaming ?? null) !== null || (held.deleteAsk ?? null) !== null || (held.notice !== null && /^(run|ask|draft): /.test(held.notice)) || held.notice === HANDED_NOTICE
+        ? {
+            ...held,
+            editing: false,
+            freshId: null,
+            picker: null,
+            handed: false,
+            confirmId: null,
+            drafting: null,
+            reveal: null,
+            renaming: null,
+            deleteAsk: null,
+            notice: held.notice !== null && (/^(run|ask|draft): /.test(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice,
+          }
         : held,
     )
 
     return next(e)
   })
 
-  // The hand-off as a prompt: `r` fills the box with the request, the person says what to run it on
-  // and sends it. The conventions go with the prompt as hidden context (the same text
-  // `/conductor run` answers with), and the run that starts is counted against the project.
+  // Every prompt: what was typed is saved, a board changed by hand is said, and the hand-off sentence typed by the
+  // person (`r` sends it itself, past this hook) hands its project off.
   on('prompt.submit', { text: /^/ }, async ($, e, enter) => {
     // What was typed into a field and not sent goes with the project: Claude reads the file.
     await flushDrafts($)
@@ -1541,28 +1646,28 @@ export const registerProject = (on: On, tracker: Tracker): void => {
 
       return answer
     }
+    // The hand-off sentence, typed or left in the box by `r` where it could not be sent: the hand-off is made as `r` makes it.
     const name = handoffTarget(e.text)
-    if (name === null || !isSaved(name)) return next(pass)
-    const root = await $.session.root()
-    const path = projectFile(root, name)
-    // A template nobody edited yet is on the board only: handing it off is what saves it.
-    const onBoard = shown.name === name && shown.status === 'ready' ? await read($, projectAtom) : null
-    if (onBoard !== null && !(await $.fs.exists(path))) await $.fs.write(path, serializeProject(onBoard)).catch(() => undefined)
-    if (!(await $.fs.exists(path))) return next(pass)
-    if (onBoard !== null && shown.unsaved) await update($, uiAtom, held => ({ ...held, unsaved: false }))
-    const parsed = parseProject(await $.fs.read(path).catch(() => ''))
-    if (!parsed.ok || isBlank(parsed.project)) return next(pass)
-    tracker.handoff(handoffOf(name, parsed.project))
-    offerSettled(name)
-    await update($, uiAtom, held => ({ ...held, follow: true, runCleared: false, notice: held.notice?.startsWith('run: ') ? null : held.notice }))
-    // `/conductor run` recorded the conventions with its own answer: once is enough.
-    if (delivered === name) {
-      delivered = null
+    if (name !== null && isSaved(name)) await handOff($, name)
 
-      return next(pass)
+    return next(pass)
+  })
+
+  // Claude's turn is over. A draft laid out on the graph is done with it: the project can be edited, and its board
+  // takes the keyboard. One still awaited stays so where the turn ended on a question (the answer goes in the
+  // prompt); given up with Escape, it is over. From a clock callback: the pane is not opened inside this hook.
+  // The matcher is always true: run.tsx holds the unmatched turn.complete.
+  on('turn.complete', { isAborted: [true, false] }, async ($, e, next) => {
+    if (e.agentId === undefined) {
+      const drafting = (await read($, uiAtom)).drafting ?? null
+      if (drafting === 'show' || (drafting === 'wait' && e.isAborted)) {
+        $.clock.after(FOCUS_DELAY_MS, () => {
+          void endDraft($, true).catch(() => undefined)
+        })
+      }
     }
 
-    return next({ ...pass, context: [...context, ...buildHandoff(parsed.project, path, await scriptOf($, root, name)).context] })
+    return next(e)
   })
 
   // The summary that takes the conversation's place does not hold the project as Claude read it: a change made by hand
@@ -1659,18 +1764,30 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     }
     await update($, projectAtom, () => edit.project)
     await update($, uiAtom, held => showEdit(held, name, edit.project, edit))
+    // The draft the splash waited for: a new project, laid out on the graph block by block from its start block (the
+    // ticker that moved the splash goes on, and shows more of it with each beat). Any other edit made while the splash
+    // waited (an existing project changed, as the person's own words asked) is shown as edits are.
+    const awaited = ui.drafting === 'wait'
+    const drafted = awaited && action === 'write' && isBlank(project)
+    if (awaited) {
+      await update($, uiAtom, held =>
+        drafted ? { ...held, drafting: 'show' as const, reveal: 1, selectedId: edit.project.nodes[0]?.id ?? null, notice: null, flash: { ids: [], seq: held.flash?.seq ?? 0 } } : { ...held, drafting: null, reveal: null },
+      )
+    }
+    if (drafted) startDraftTicker($)
     const seq = (await read($, uiAtom)).flash?.seq ?? 0
     let unplaced: string[] | null = null
     if (ran !== null) {
       await update($, runScriptAtom, held => (held !== null && held.runId === ran.runId ? { ...held, drawn: name } : held))
       unplaced = await showRunOn($, tracker, name, edit.project)
     }
-    // Shown, but the keyboard stays where the person is typing. The draft the person asked for in the question before a
-    // workflow is theirs to review next: its board takes the keyboard, as `/conductor project` gives it.
+    // Shown, but the keyboard stays where the person is typing. A draft the person asked for is theirs to review next:
+    // it waits on the board for their approval, and the board takes the keyboard once Claude's turn is over (`endDraft`),
+    // at once where no splash waited for it.
     const offered = action === 'write' && takeOffered()
-    if (offered) offerDrafted(name)
-    const opened = await $.ui.open(paneArgs(offered)).catch(() => undefined)
-    if (offered) settleRing($)
+    if (offered || drafted) offerDrafted(name)
+    const opened = await $.ui.open(paneArgs(offered && !drafted)).catch(() => undefined)
+    if (offered && !drafted) settleRing($)
     $.clock.after(FLASH_CLEAR_MS, () => {
       void update($, uiAtom, held => clearFlash(held, seq))
     })
@@ -1787,7 +1904,9 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const stray = person && (before.status === 'ready' || before.status === 'pick') && drawnCatcher !== '' && !isCatcher(e.element) && !isDetailStop(e.element) && !door
     // On the start screen the arrows choose, as in the add list: a step onto a row was Down, any other Up.
     if (stray && before.status === 'pick') {
-      await update($, uiAtom, held => ({ ...moveStartMark(held, (e.element ?? '').startsWith(START_KEY) ? 1 : -1), help: 0 }))
+      // From the name's field an arrow is the way out of it: the name is left as it was, and the mark stays.
+      if ((before.renaming ?? null) !== null) await update($, uiAtom, held => ({ ...held, renaming: null, notice: null }))
+      else await update($, uiAtom, held => ({ ...moveStartMark(held, (e.element ?? '').startsWith(START_KEY) ? 1 : -1), help: 0, deleteAsk: null }))
       $.ui.invalidate('ui.render')
 
       return { deny: ARROWS_CHOOSE }
@@ -1860,13 +1979,15 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const run = await read($, runAtom)
     const runProject = await read($, runProjectAtom)
     const over = overlaysProject(run, runProject, ui)
-    const locked = over && run.status === 'running'
+    // Claude's draft being laid out locks the project as a run does.
+    const locked = (over && run.status === 'running') || ui.drafting === 'show'
     // The tick clock is read only while it matters, so an idle pane is not redrawn by it.
     const clock = locked ? await read($, clockAtom) : 0
     const overlay = over ? runOverlay(run, clock) : undefined
     // The header's persona: a gesture it was asked for, else what the run laid over the project calls for, else at rest.
     const asked = await read($, personaAtom)
-    const pose: Pose = asked !== 'idle' ? asked : ((over ? runPose(run.status, clock) : null) ?? 'idle')
+    const draftBeats = (ui.drafting ?? null) !== null ? await read($, draftBeatAtom) : 0
+    const pose: Pose = ui.drafting === 'show' ? draftPose(draftBeats) : asked !== 'idle' ? asked : ((over ? runPose(run.status, clock) : null) ?? 'idle')
     const splashed = await read($, splashedAtom)
     const dock = e.props.placement !== 'inline'
     // Docked and wide the graph and the detail pane stand side by side; otherwise the same parts are one column.
@@ -1883,7 +2004,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const marked = entries[mark]
 
     // Row 1: the project's name, what state it is in, the agents it starts. Every part is cut to its room, so the row never wraps.
-    const drafting = ui.drafting === true && project !== null && isBlank(project)
+    const drafting = ui.drafting === 'show' && project !== null
     // The list of projects, opened from one: the start screen, with the way back.
     const listing = starting && (ui.back ?? null) !== null
     const summary = over ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, headColumns - COMMAND.length - 3 - 10 - 3)) : null
@@ -1894,7 +2015,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         : drafting
           ? { text: 'DRAFTING', color: 'claude' }
           : starting && marked
-            ? { text: marked.kind === 'saved' ? `${begins} · saved project` : marked.kind === 'blank' ? `${begins} · blank project` : `${begins} · from the ${marked.title} template`, color: FADED }
+            ? { text: `${begins} · ${marked.kind === 'saved' ? 'saved project' : marked.kind === 'blank' ? 'blank project' : marked.kind === 'replay' ? `replay over the ${marked.title} template` : marked.kind === 'recording' ? 'recorded run' : marked.kind === 'reset' ? 'stored answers' : `from the ${marked.title} template`}`, color: FADED }
             : ui.status !== 'ready' || !project
               ? { text: 'project', color: FADED }
               : { text: `EDITING · ${!isSaved(ui.name) ? 'replay, not saved' : !ui.unsaved ? 'saved' : isBlank(project) ? 'not saved yet' : 'unsaved template'}`, color: FADED }
@@ -1944,21 +2065,21 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       ]
     }
 
-    if (ui.status === 'closed') {
+    if (ui.status === 'closed' && ui.drafting !== 'wait') {
       return (
         <Box flexDirection="column">
           <Text bold color={TEXT}>{`${GLYPH.diamond} ${PROJECT_PANE_TITLE}`}</Text>
-          <Text color={FADED}>{`${GLYPH.railEnd} /${COMMAND} project <name> opens a project`}</Text>
+          <Text color={FADED}>{`${GLYPH.railEnd} /${COMMAND} opens the start screen`}</Text>
         </Box>
       )
     }
 
-    if (ui.status === 'error') {
+    if (ui.status === 'error' && ui.drafting !== 'wait') {
       return (
         <Box flexDirection="column" paddingLeft={1}>
           {headOf(null, [{ keys: 'p', word: 'Projects', core: true }])}
           <Text color="error">{`${file} could not be used: ${ui.error ?? 'unknown reason'}`}</Text>
-          <Text color={FADED}>{`The file was left as it is. Fix or remove it, then run /${COMMAND} project ${ui.name} again.`}</Text>
+          <Text color={FADED}>{`The file was left as it is. Fix or remove it, then run /${COMMAND} again.`}</Text>
         </Box>
       )
     }
@@ -2170,21 +2291,36 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     )
 
     // The splash, once a session: the conductor and its ensemble for a few beats, then the screen below. The keys wait
-    // for that screen: no catcher is drawn under the splash. A pane too short for it goes without.
-    if (!splashed) {
-      startSplash($)
+    // for that screen: no catcher is drawn under the splash. A pane too short for it goes without. While a draft is
+    // awaited it is shown again, on the beats counted here, for as long as the wait lasts: the project has no name yet.
+    const waiting = ui.drafting === 'wait'
+    if (waiting || !splashed) {
+      if (!waiting) startSplash($)
       const sceneRows = columns >= SCENE_COLUMNS && bodyRows >= SCENE_ROWS + 3 ? SCENE_ROWS : SOLO_ROWS
       if (bodyRows >= sceneRows + 3) {
+        // The name as pixels where it fits under the scene; the plain word where it does not.
+        const drawn = wordmark()
+        const mark = columns >= drawn.width + 2 && bodyRows >= sceneRows + drawn.lines.length + 3 ? drawn : null
         return (
           <Box flexDirection="column" paddingLeft={1} paddingRight={1} height={dock ? bodyRows : undefined} justifyContent="center">
             <Box key="project-splash" flexDirection="column" alignItems="center" height={sceneRows} flexShrink={0}>
-              {'Client' in els ? <els.Client key={SPLASH_KEY} module="./splash.tsx" width="100%" height={sceneRows} props={{ rows: sceneRows } as never} /> : spanRows(splashScene(2, columns, sceneRows).lines)}
+              {'Client' in els ? <els.Client key={SPLASH_KEY} module="./splash.tsx" width="100%" height={sceneRows} props={(waiting ? { rows: sceneRows, beat: draftBeats } : { rows: sceneRows }) as never} /> : spanRows((waiting ? waitScene(draftBeats, columns, sceneRows) : splashScene(2, columns, sceneRows)).lines)}
             </Box>
             <Text color={TEXT}> </Text>
             <Box flexDirection="column" alignItems="center" flexShrink={0}>
-              <Text bold color="claude">{`${GLYPH.diamond} ${PANE_TITLE}`}</Text>
-              <Text color={FADED}>{SPLASH_NOTE}</Text>
+              {mark ? spanRows(mark.lines) : <Text bold color="claude">{`${GLYPH.diamond} ${PANE_TITLE}`}</Text>}
+              {mark ? <Text color={TEXT}> </Text> : null}
+              <Text color={FADED} wrap="truncate-end">{waiting ? DRAFT_WAIT_NOTE : SPLASH_NOTE}</Text>
             </Box>
+          </Box>
+        )
+      }
+      // Too short for the scene: the wait is said all the same.
+      if (waiting) {
+        return (
+          <Box flexDirection="column" paddingLeft={1} paddingRight={1}>
+            <Text bold color="claude">{`${GLYPH.diamond} ${PANE_TITLE}`}</Text>
+            <Text color={FADED} wrap="truncate-end">{DRAFT_WAIT_NOTE}</Text>
           </Box>
         )
       }
@@ -2204,20 +2340,36 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           previews[marked.id] = parsed.ok ? parsed.project : null
         }
         shown = previews[marked.id] ?? null
-      } else if (marked) shown = TEMPLATES.find(one => one.id === marked.id)?.make() ?? emptyProject(ui.name)
+      } else if (marked && marked.kind !== 'recording' && marked.kind !== 'reset') shown = TEMPLATES.find(one => one.id === marked.id)?.make() ?? emptyProject(ui.name)
       const mainRows = mainRowsFor(dock && !wide)
       // The keys: the list's on the detail pane's last rows, the rest in the header.
-      const keys = legendItems({ ring: 'start', placed: false, retype: false, empty: true, helping, locked: false, selected: false, container: false, nested: false, results: false, undo: false, redo: false, hidden: false, back: listing })
+      // A name is typed in its field only while the pane holds the keyboard: Escape hands the keys to the prompt, and the field is closed to the eye.
+      const renaming = Input !== null && focused ? (ui.renaming ?? null) : null
+      const keys = legendItems({ ring: 'start', placed: false, retype: false, empty: true, helping, locked: false, selected: false, container: false, nested: false, results: false, undo: false, redo: false, hidden: false, back: listing, saved: marked?.kind === 'saved', renaming: renaming !== null })
       const message = focused ? ui.notice : KEYS_CUE
 
       // The list: the saved projects, then the templates, one row each, the marked one said in `claude`.
       const nameW = Math.min(Math.max(...entries.map(one => one.title.length)), Math.max(8, Math.floor(detailW / 2) - 4))
-      const countW = Math.max(...entries.map(one => (one.kind === 'blank' ? 0 : blocksWord(one.blocks).length)))
+      const countW = Math.max(...entries.map(one => (isProjectEntry(one) ? blocksWord(one.blocks).length : 0)))
       const entryRow = (entry: (typeof entries)[number], at: number): Item => {
         const lit = at === mark
         // The project the list was opened from says so, and the one a run is on.
         const tags = entry.kind !== 'saved' ? [] : [...(entry.id === ui.back ? ['open'] : []), ...(entry.id === runProject && run.status === 'running' ? ['running'] : [])]
         const note = clip([...tags, ...(entry.note === '' ? [] : [entry.note])].join(' · '), Math.max(0, detailW - 2 - nameW - 2 - countW - 2))
+        // Its name is being typed: a field in the row's place, holding the name as it is. Enter renames.
+        if (Input !== null && entry.kind === 'saved' && entry.id === renaming) {
+          return {
+            rows: 1,
+            el: (
+              <Box flexDirection="row" height={1}>
+                <Text color="claude" bold>{'▸ '}</Text>
+                <Box width={Math.max(8, detailW - 4)}>
+                  <Input key={renameKey()} placeholder="a new name" value={entry.id} submitLabel="" onSubmit={value => renameEnter($, entry.id, value)} />
+                </Box>
+              </Box>
+            ),
+          }
+        }
         return {
           rows: 1,
           el: (
@@ -2225,7 +2377,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
               <Button key={`${START_KEY}${entry.kind}:${entry.id}`} plain onPress={() => openEntry($, at)}>
                 <Text color="claude" bold>{lit ? '▸ ' : '  '}</Text>
                 <Text color={lit ? 'claude' : TEXT} bold>{clip(entry.title, nameW).padEnd(nameW)}</Text>
-                <Text color={FADED}>{`  ${(entry.kind === 'blank' ? '' : blocksWord(entry.blocks)).padEnd(countW)}`}</Text>
+                <Text color={FADED}>{`  ${(isProjectEntry(entry) ? blocksWord(entry.blocks) : '').padEnd(countW)}`}</Text>
                 <Text color={FADED}>{note === '' ? '' : `  ${note}`}</Text>
               </Button>
             </Box>
@@ -2243,21 +2395,28 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           </Box>
         ),
       }
-      const detailRows = beside ? mainRows : Math.max(Math.min(HINT_ROWS + 1, mainRows), Math.min(mainRows - Math.max(GRAPH_LEAST_ROWS, Math.floor(mainRows * (1 - DETAIL_REST_SHARE) * 0.6)), helping ? mainRows : entries.length + 5))
+      const detailRows = beside ? mainRows : Math.max(Math.min(HINT_ROWS + 1, mainRows), Math.min(mainRows - Math.max(GRAPH_LEAST_ROWS, Math.floor(mainRows * (1 - DETAIL_REST_SHARE) * 0.6)), helping ? mainRows : entries.length + 8))
       const hints = hintsOf(keys.detail, detailW, detailRows)
       const contentRows = Math.max(0, detailRows - hints.length)
+      // Where the rows that open no project start: the first replay.
+      const extras = Math.max(saved.length, entries.findIndex(one => one.kind === 'replay'))
       const listed = fit(4, contentRows, level => {
         const gaps = level < 1 ? [blank] : []
         const ways = level < 2 ? [...gaps, draftRow] : [draftRow]
         // Short of rows, the saved projects are a window around the marked one; the templates are always all there.
-        const room = level < 3 ? saved.length : Math.max(1, Math.min(SAVED_ROWS, contentRows - (entries.length - saved.length) - 3))
+        const room = level < 3 ? saved.length : Math.max(1, Math.min(SAVED_ROWS, contentRows - (entries.length - saved.length) - 5))
         const from = room >= saved.length ? 0 : listWindow(saved.length, room, Math.min(mark, saved.length - 1))
         const more = saved.length - Math.min(room, saved.length)
         return [
           ...(saved.length > 0 ? [label('Saved projects'), ...entries.slice(from, from + Math.min(room, saved.length)).map((entry, index) => entryRow(entry, from + index)), ...(more > 0 ? [line(`… ${more} more: w and s reach them`, FADED)] : []), ...gaps] : []),
           label('New from a template'),
-          ...entries.slice(saved.length).map((entry, index) => entryRow(entry, saved.length + index)),
+          ...entries.slice(saved.length, extras).map((entry, index) => entryRow(entry, saved.length + index)),
           ...ways,
+          // Under every way to a project: the replays, and last the row that forgets the stored answers.
+          ...gaps,
+          label('Replay a run'),
+          ...entries.slice(extras, -1).map((entry, index) => entryRow(entry, extras + index)),
+          ...entries.slice(-1).map(entry => entryRow(entry, entries.length - 1)),
         ]
       })
       const content = helping ? helpItems(ui.help, undefined, detailW, contentRows, true) : listed
@@ -2269,7 +2428,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       graphArea = graphRows < 1 || !('Client' in els) ? null : { top: HEAD_ROWS + (dock ? 1 : 0), left: 1, columns: graphW, rows: graphRows }
       drawnCatcher = Input !== null ? catcherKey() : ''
       fieldsDrawn = false
-      const stops = [ui.status, ui.name, saved.length, helping, listing].join('|')
+      const stops = [ui.status, ui.name, saved.length, helping, listing, renaming ?? ''].join('|')
       if (stops !== ringStops) {
         ringStops = stops
         if (focused) settleRing($)
@@ -2294,7 +2453,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     // to the prompt and no hook hears of it, so drawn without it they are closed to the eye.
     const picking = ui.picker !== null && !locked && focused
     const helping = !picking && ui.help > 0
-    const hidden = ui.detailHidden === true && !picking && !helping
+    // While Claude's draft is laid out the graph has the pane's width: there is nothing to edit yet.
+    const hidden = (ui.detailHidden === true || drafting) && !picking && !helping
 
     // The widths. Beside the graph the detail pane has about a third, and one column of rule stands between them.
     const beside = wide && !hidden
@@ -2330,10 +2490,10 @@ export const registerProject = (on: On, tracker: Tracker): void => {
 
     // What is said on the message row: a change just made (with the way back), a refused edit, the delete question, the lock.
     const said: Said =
-      ui.notice !== null && (ui.notice !== LOCK_NOTICE || locked)
+      ui.notice !== null && ((ui.notice !== LOCK_NOTICE && ui.notice !== DRAFT_LOCK_NOTICE) || locked)
         ? { text: ui.notice.endsWith(UNDO_HINT) && !ui.notice.startsWith('redone: ') ? `Last change: ${ui.notice}` : ui.notice, color: noticeInforms(ui.notice) ? undefined : 'warning' }
         : locked
-          ? { text: LOCK_NOTICE, color: FADED }
+          ? { text: drafting ? DRAFT_LOCK_NOTICE : LOCK_NOTICE, color: FADED }
           : null
     // Without the keyboard the pane says nothing that names a key of its own: the cue takes the row, and what was said
     // follows it only stripped of its key, and only where both fit.
@@ -2754,7 +2914,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const graph = graphBoxOf(
       graphW,
       graphRows,
-      { ...graphProps(project, ui, box, overlay), wheel: { from: LOAD, rows: wheelRows }, ...(focused ? {} : { quiet: true }) },
+      // A draft being laid out: its blocks so far, and no problem marked on a project that is not all there yet.
+      { ...graphProps(drafting && (ui.reveal ?? null) !== null ? firstBlocks(project, ui.reveal ?? 0) : project, ui, box, overlay), ...(drafting ? { problems: {} } : {}), wheel: { from: LOAD, rows: wheelRows }, ...(focused ? {} : { quiet: true }) },
       flatten(project)
         .slice(0, graphRows)
         .map(row => (

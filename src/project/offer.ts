@@ -32,13 +32,11 @@ export function offerChoice(answer: string): { choice: OfferChoice; always: bool
 
 /**
  * A stored answer to a question the mod asks is kept in `$.store` under `ask.<question>`:
- * `/conductor ask reset` deletes every key that starts so, whichever question it belongs to.
+ * The start screen's `Ask again` row deletes every key that starts so, whichever question it belongs to.
  */
 export const ASK_PREFIX = 'ask.'
 /** The stored "Always" answer to the offer: an OfferChoice, or unset. */
 export const OFFER_KEY = `${ASK_PREFIX}workflow`
-/** What `/conductor ask …` this is: run.tsx passes it on, offer.tsx answers it. */
-export const ASK_VERB = /^\s*ask(\s|$)/
 
 export function storedChoice(value: unknown): OfferChoice | null {
   return value === 'conductor' || value === 'standard' ? value : null
@@ -73,30 +71,36 @@ export function typedResult(text: string): string {
 /**
  * What the tool answers, with no question, while the project its last "Conductor" answer led to waits on the board
  * unapproved: Claude neither drafts again nor writes a script the board knows nothing of. `handoff` is what
- * `/conductor run <name>` tells Claude (handoff.ts): an approval given in chat is carried out by it.
+ * `r` on the board tells Claude (handoff.ts): an approval given in chat is carried out by it.
  */
 export function waitingResult(name: string, handoff: string): string {
   return [
-    `The user was not asked: project "${name}", drafted when they chose Conductor here, is on the Conductor board and they have not approved it yet. They approve it on the board with r, or with /conductor run ${name}. Which of these three is true decides what you do:`,
+    `The user was not asked: project "${name}", drafted when they chose Conductor here, is on the Conductor board and they have not approved it yet. They approve it on the board with r (Implement and Run). Which of these three is true decides what you do:`,
     `1. The user has not told you to run it: do not draft another project and do not author or run a Workflow script. Tell them the project waits on the board for their approval.`,
-    `2. The user told you in chat to run it ("run it", "go ahead"): that is their approval of project "${name}" as it is on the board now. Do not draft again. Carry out the handoff below, which is what /conductor run ${name} would have given you.`,
+    `2. The user told you in chat to run it ("run it", "go ahead"): that is their approval of project "${name}" as it is on the board now. Do not draft again. Carry out the handoff below, which is what r on the board would have given you.`,
     '3. This call is for a different workflow than that project: call this tool once more, and the user is asked.',
     '',
     handoff,
   ].join('\n')
 }
 
-/** What the person sees when an "Always" answer is kept. */
-export function keptToast(choice: OfferChoice): string {
-  return `conductor: always ${choice === 'conductor' ? 'Conductor' : 'Standard'} from now on · /conductor ask reset asks again`
+/**
+ * What the tool answers, with no question, for a project the person handed off on the board (`r`, Implement and
+ * Run): the hand-off itself. It comes this way because a prompt the mod sends carries no hidden context.
+ */
+export function handedResult(handoff: string): string {
+  return ['The user was not asked: they approved this project on the Conductor board (Implement and Run). Carry out the handoff below.', '', handoff].join('\n')
 }
 
-export const ASK_USAGE = 'Usage: /conductor ask reset   (forgets every stored "Always" and "Never" answer, so Conductor asks both its questions again: before a workflow, and whether to visualize a run)'
+/** What the person sees when an "Always" answer is kept. */
+export function keptToast(choice: OfferChoice): string {
+  return `conductor: always ${choice === 'conductor' ? 'Conductor' : 'Standard'} from now on · Ask again on the start screen undoes it`
+}
 
 export function resetText(cleared: number): string {
   return cleared === 0
-    ? 'No "Always" or "Never" answer is stored: Conductor already asks before a workflow, and whether to visualize a run.'
-    : `Stored "Always" and "Never" answers cleared (${cleared}): Conductor asks again before a workflow, and whether to visualize a run.`
+    ? 'no "Always" or "Never" answer is stored: Conductor already asks'
+    : `${cleared} stored ${cleared === 1 ? 'answer' : 'answers'} forgotten: Conductor asks again`
 }
 
 // The second question: a workflow that started with no project is asked about once it runs (run.tsx),
@@ -124,7 +128,7 @@ export function storedVisualize(value: unknown): VisualizeChoice | null {
 }
 
 export function visualizeToast(choice: VisualizeChoice): string {
-  return `conductor: ${choice === 'visualize' ? 'always' : 'never'} visualize from now on · /conductor ask reset asks again`
+  return `conductor: ${choice === 'visualize' ? 'always' : 'never'} visualize from now on · Ask again on the start screen undoes it`
 }
 
 /** Text typed under the options: the run goes on undrawn, and Claude is told what the person said. */
@@ -134,5 +138,5 @@ export function visualizeTyped(text: string): string {
 
 /** What the person sees when a run is put on a saved project without a question. `placed` is false when the board could not open by itself. */
 export function reusedToast(name: string, placed: boolean): string {
-  return `conductor: this run is shown on project ${name}${placed ? '' : ` · /conductor project ${name} opens it`}`
+  return `conductor: this run is shown on project ${name}${placed ? '' : ' · /conductor opens it'}`
 }

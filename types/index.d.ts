@@ -48,7 +48,8 @@ export type ConductorProjectUi = {
   editing: boolean
   flash: { ids: string[]; seq: number } | null
   follow: boolean
-  drafting: boolean
+  drafting: 'wait' | 'show' | null
+  reveal: number | null
   freshId: string | null
   picks: Record<string, string>
   runCleared: boolean
@@ -56,6 +57,8 @@ export type ConductorProjectUi = {
   handed: boolean
   startMark: number
   back: string | null
+  renaming: string | null
+  deleteAsk: string | null
 }
 
 declare module 'claude-code' {
@@ -96,6 +99,8 @@ declare module 'claude-code' {
       projectUi: ConductorProjectUi
       /** Whether this session has seen the splash. */
       splashed: boolean
+      /** Beats counted since a draft was asked for: the splash that waits for it and the header's persona move on them. */
+      draftBeat: number
       /** The gesture the header's persona holds (Pose in src/ui/persona.ts); `idle` at rest. */
       persona: 'idle' | 'ready' | 'conducting' | 'complete'
     }

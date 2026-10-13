@@ -12,7 +12,7 @@ import type { Project } from '../project/model'
 
 export type Pose = 'idle' | 'ready' | 'conducting' | 'complete'
 
-/** Rows of pixels: `#` the body, `o` chalk (eyes, collar), `h` a hand, a space nothing. */
+/** Rows of pixels: `#` the body, `o` chalk (eyes, collar, tie), `h` a hand, a space nothing. */
 type Sprite = readonly string[]
 
 /** The theme keys nearest the source's own colours (`#d46944`, `#f1ebe1`, `#f9855e`) in the dark theme. */
@@ -29,11 +29,11 @@ const FULL: Record<Pose, Sprite> = {
     ...HEAD,
     '       #####',
     '      #######',
-    '     ##ooooo##',
+    '     ##o###o##',
+    '    ####ooo####',
     '    #####o#####',
-    '    #####o#####',
-    '    #####o######',
-    '    #####o######     ##',
+    '    ####ooo#####',
+    '    ####ooo#####     ##',
     '    #####o### ###   ##',
     '    #########  ##  ##',
     '    h########   h##',
@@ -53,11 +53,11 @@ const FULL: Record<Pose, Sprite> = {
     '     #########   hh',
     '       #####    ###',
     '      #######   ###',
-    '     ##ooooo######',
-    '    #####o#######',
+    '     ##o###o######',
+    '    ####ooo######',
     '    ###hho#####',
-    '    ###hho###',
-    '    #####o###',
+    '    ###hhoo##',
+    '    ####ooo##',
     '      ###o###',
     '      #######',
     '      #######',
@@ -68,11 +68,11 @@ const FULL: Record<Pose, Sprite> = {
     ...HEAD,
     'hh     #####',
     'hh    #######',
-    '###  ##ooooo##',
-    ' ## #####o#####',
+    '###  ##o###o##',
+    ' ## ####ooo####',
     ' ########o######',
-    '  ### ###o### #####',
-    '      ###o###  ####hh',
+    '  ### ##ooo## #####',
+    '      ##ooo##  ####hh',
     '      ###o###    ##hh',
     '      #######        #',
     '      #######         #',
@@ -88,11 +88,11 @@ const FULL: Record<Pose, Sprite> = {
     '     #########',
     '       #####',
     '      #######',
-    '     ##ooooo##',
+    '     ##o###o##',
+    '    ####ooo####',
     '    #####o#####',
-    '    #####o#####',
-    '   ######o#####',
-    '   ######o#####',
+    '   #####ooo####',
+    '   #####ooo####',
     'hh### ###o#####',
     ' h##  #########',
     '      #########',
@@ -277,6 +277,11 @@ function paintFine(canvas: Canvas): PersonaSpan[][] {
   return out
 }
 
+/** Rows of pixels in the persona's inks, painted as the splash is: for what stands beside it. */
+export function paintPixels(pixels: readonly (readonly string[])[]): PersonaSpan[][] {
+  return paint(pixels.map(row => [...row]))
+}
+
 /** The header's persona in a pose: `SMALL_ROWS` rows, `SMALL_W` cells each. */
 export function smallPersona(pose: Pose): PersonaSpan[][] {
   const canvas = blankCanvas(SMALL_W * 2, SMALL_ROWS * 4)
@@ -330,6 +335,16 @@ export function splashScene(beat: number, columns: number, rows: number): { line
     stamp(canvas, AGENT[up ? 1 : 0] ?? [], seat.x, seat.y - (up ? 1 : 0))
   })
   return { lines: paint(canvas), width: SCENE_W }
+}
+
+/** The splash while a draft is awaited: its two bars, round and round, for as long as that takes. `beat` only grows. */
+export function waitScene(beat: number, columns: number, rows: number): { lines: PersonaSpan[][]; width: number } {
+  return splashScene(1 + (Math.max(0, Math.trunc(beat)) % 2), columns, rows)
+}
+
+/** The header's persona on the same beats, while a draft is laid out on the graph. */
+export function draftPose(beat: number): Pose {
+  return Math.max(0, Math.trunc(beat)) % 2 === 0 ? 'conducting' : 'ready'
 }
 
 /** The beat the splash is on, `ms` after it began. */
