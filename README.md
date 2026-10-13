@@ -10,6 +10,8 @@ Conductor is a Claude Code mod for people who got tired of hoping. The workflow 
 /plugin install conductor --marketplace bruw/workflow-conductor
 ```
 
+![Conductor in Claude Code: open the board, build a workflow, watch the run on the graph, minimize it](docs/demo.gif)
+
 ## What you get
 
 Type `/conductor review this PR thoroughly`. Claude drafts this and puts it on the board:
