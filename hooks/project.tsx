@@ -117,7 +117,7 @@ const REST_KEY = 'project-rest:'
 const START_KEY = 'start:'
 const DRAFT_LABEL = '[Draft using claude]'
 const NAME_BUTTON_KEY = 'projects-button'
-const ACTION_BUTTON_KEY = 'act:'
+const ACTION_BUTTON_PREFIX = 'act:'
 const MINIMIZE_BUTTON_KEY = 'project-minimize'
 const ARROWS_CHOOSE = 'the arrows choose a row'
 /** Saved projects the start screen lists at once where it is short of rows. */
@@ -1866,7 +1866,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
             ...(index > 0 ? [<Box width={ACTION_GAP} flexShrink={0} />] : []),
             action.on ? (
               <Box flexShrink={0}>
-                <Button key={`${ACTION_BUTTON_KEY}${action.key}`} plain onPress={() => queueKeys($, [action.key])}>
+                <Button key={`${ACTION_BUTTON_PREFIX}${action.key}`} plain onPress={() => queueKeys($, [action.key])}>
                   {label}
                 </Button>
               </Box>
