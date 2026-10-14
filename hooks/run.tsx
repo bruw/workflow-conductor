@@ -46,7 +46,7 @@ const text = (value: unknown): string | undefined => (typeof value === 'string' 
 const count = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0)
 
 /** The figure shown for a request or a turn: all four usage counts, as the built-in workflow row totals them. */
-const tokensOf = (usage: unknown): number | undefined => {
+const usageTotal = (usage: unknown): number | undefined => {
   if (usage === null || typeof usage !== 'object') return undefined
   const counts = usage as Record<string, unknown>
 
@@ -209,7 +209,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
   // Runs on every loop: each chunk goes through untouched, the last one is read.
   on('turn.step', async function* (_$, e, next) {
     for await (const chunk of next(e)) {
-      if (chunk.kind === 'stop' && e.agentId !== undefined) tracker.agentUsage(e.agentId, tokensOf(chunk.usage) ?? 0)
+      if (chunk.kind === 'stop' && e.agentId !== undefined) tracker.agentUsage(e.agentId, usageTotal(chunk.usage) ?? 0)
       yield chunk
     }
   })
@@ -220,7 +220,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         ok: !e.isAborted && e.reason !== 'error' && e.reason !== 'refusal',
         aborted: e.isAborted,
         durationMs: e.durationMs,
-        tokens: tokensOf(e.usage),
+        tokens: usageTotal(e.usage),
       })
     }
 

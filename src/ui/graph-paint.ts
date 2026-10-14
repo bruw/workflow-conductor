@@ -6,7 +6,7 @@ import type { Place } from '../project/ops'
 import type { NodeRun, RunStatus } from '../run/events'
 import { CRUMB_PAD, CRUMB_SEP, EMPTY_KEYS, EMPTY_NOTE, UNMAPPED_ID, edgeMarks, graphRows, samePlace, segsWidth, stickyCards } from './graph-layout'
 import type { GraphCard, GraphDrop, GraphLayout, Seg } from './graph-layout'
-import { FAILED, fmtTokens, spinnerFrame } from './rail'
+import { FAILED, fmtCount, spinnerFrame } from './rail'
 import { cellWidth, clip, glyphs, plainCells } from './text'
 import { ACCENT, ACTIVE, FADED, GLYPH, GRAY, GRAY_FADED, RULE } from './theme'
 
@@ -54,7 +54,7 @@ function runWords(sum: NodeRun): { text: string; shorter: string[] } {
   const failed = sum.failed > 0 ? ` · ${sum.failed} failed` : ''
   // No token figure before the first usage arrives: `0/4 done`, not `0/4 done · 0`.
   const full = `${count} done${failed}`
-  return { text: sum.tokens > 0 ? `${full} · ${fmtTokens(sum.tokens)}` : full, shorter: [full, `${count}${failed}`, count] }
+  return { text: sum.tokens > 0 ? `${full} · ${fmtCount(sum.tokens)}` : full, shorter: [full, `${count}${failed}`, count] }
 }
 
 /** The longest wording that fits `room` cells, glyph included; '' when none does. */

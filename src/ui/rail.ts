@@ -57,7 +57,7 @@ const COUNT_COLUMN = 8
 const TOKEN_COLUMN = 8
 
 /** `842`, `18.2k`, `120k`, `1.2M`. */
-export function fmtTokens(tokens: number): string {
+export function fmtCount(tokens: number): string {
   if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens <= 0) return '0'
   const n = Math.round(tokens)
   if (n < 1000) return String(n)
@@ -143,7 +143,7 @@ function tally(counts: Counts & { tokens: number }): Part[] {
     { text: pad },
     ...(failed ? [{ text: failed, color: 'error' as const }] : []),
     { text: settled },
-    { text: fmtTokens(counts.tokens).padStart(TOKEN_COLUMN, ' '), color: FADED },
+    { text: fmtCount(counts.tokens).padStart(TOKEN_COLUMN, ' '), color: FADED },
   ]
 }
 
@@ -198,7 +198,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
         width,
       ),
       counts: { total: all.total, running: all.running, done: all.done, failed: all.failed },
-      tokens: fmtTokens(all.tokens),
+      tokens: fmtCount(all.tokens),
     }),
   )
 
@@ -227,7 +227,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
           width,
         ),
         counts: { total: counts.total, running: counts.running, done: counts.done, failed: counts.failed },
-        tokens: fmtTokens(counts.tokens),
+        tokens: fmtCount(counts.tokens),
         bar: progress,
       }),
     )
@@ -239,7 +239,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
       const agentGlyph = agent.status === 'running' ? spin : agent.status === 'failed' ? FAILED : GLYPH.done
       const branch = at === members.length - 1 ? GLYPH.railEnd : GLYPH.railBranch
       const took = agent.durationMs === undefined ? '' : fmtDuration(agent.durationMs)
-      const tokens = agent.tokens > 0 ? fmtTokens(agent.tokens) : ''
+      const tokens = agent.tokens > 0 ? fmtCount(agent.tokens) : ''
 
       rows.push(
         row({
@@ -280,7 +280,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
       color: FADED,
       parts: line([{ text: `${GLYPH.railEnd}─ `, color: RULE }, { text: summary.join(' · '), color: FADED }], [], width),
       counts: { total: all.total, running: all.running, done: all.done, failed: all.failed },
-      tokens: fmtTokens(all.tokens),
+      tokens: fmtCount(all.tokens),
     }),
   )
 
@@ -312,7 +312,7 @@ export function endText(state: RunState): string {
   const all = countOf(Object.values(state.agents))
   const failed = all.failed > 0 ? ` · ${all.failed} failed` : ''
 
-  return `wf ${oneLine(state.name ?? state.runId ?? '') || 'workflow'} ${state.status}: ${all.done}/${all.total} agents${failed} · ${fmtTokens(all.tokens)} tokens`
+  return `wf ${oneLine(state.name ?? state.runId ?? '') || 'workflow'} ${state.status}: ${all.done}/${all.total} agents${failed} · ${fmtCount(all.tokens)} tokens`
 }
 
 /** `open` is what the person sees now; the phase goes to its opposite. */

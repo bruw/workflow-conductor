@@ -49,7 +49,7 @@ function patchAgentBuckets(state: RunState, agent: AgentRun, patch: (one: NodeRu
   }
 }
 
-function tokenCount(value: unknown): number | undefined {
+function usageCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
@@ -108,7 +108,7 @@ export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): Run
 
     case 'agent-usage': {
       const agent = state.agents[event.agentId]
-      const tokens = tokenCount(event.tokens)
+      const tokens = usageCount(event.tokens)
       if (!agent || tokens === undefined || tokens === agent.tokens) return state
 
       const delta = tokens - agent.tokens
@@ -124,7 +124,7 @@ export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): Run
       if (!agent || agent.status !== 'running') return state
 
       const status = event.ok ? 'done' : 'failed'
-      const tokens = tokenCount(event.tokens) ?? agent.tokens
+      const tokens = usageCount(event.tokens) ?? agent.tokens
       const delta = tokens - agent.tokens
       const ended: AgentRun = { ...agent, status, tokens }
       if (typeof event.durationMs === 'number') ended.durationMs = event.durationMs

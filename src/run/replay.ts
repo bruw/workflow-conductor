@@ -10,7 +10,7 @@ import type { AgentMeta } from './journal'
 export type ReplayFixture = { journal: string; metas: Record<string, AgentMeta> }
 
 /** A journal records no token counts, so a replay makes one up per agent, stable across runs. */
-export function replayTokens(agentId: string): number {
+export function replayUsage(agentId: string): number {
   let hash = 0
   for (const char of agentId) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) % 9973
 
@@ -28,7 +28,7 @@ export function replayEvents(name: string, fixture: ReplayFixture): RunEvent[] {
     if (event.kind === 'agent-start') open.add(event.agentId)
     if (event.kind === 'agent-end') {
       open.delete(event.agentId)
-      events.push({ ...event, tokens: replayTokens(event.agentId) })
+      events.push({ ...event, tokens: replayUsage(event.agentId) })
       continue
     }
     events.push(event)
@@ -70,7 +70,7 @@ export function replayProjectEvents(project: Project, name: string = project.nam
   const failing = leaves[Math.min(1, leaves.length - 1)]?.node.id
 
   const run = (agentId: string, label: string, phase: string | undefined, ok: boolean): RunEvent[][] => {
-    const tokens = replayTokens(agentId)
+    const tokens = replayUsage(agentId)
 
     return [
       [{ kind: 'agent-start', runId, agentId, label, phase }],

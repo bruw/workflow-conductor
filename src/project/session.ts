@@ -9,7 +9,7 @@ import type { GraphMessage, GraphProps } from '../ui/graph-model'
 import type { RunOverlay } from '../ui/graph-paint'
 import { KEY_OPS, LOCKED_OPS } from '../ui/keys'
 import type { KeyOp } from '../ui/keys'
-import { fmtDuration, fmtTokens } from '../ui/rail'
+import { fmtDuration, fmtCount } from '../ui/rail'
 import { clip, wrapText } from '../ui/text'
 import { REDO_HINT, UNDO_HINT } from './history'
 import { lint } from './lints'
@@ -939,9 +939,9 @@ export function runSummary(run: RunState, elapsedMs: number | null, room: number
   const time = elapsedMs !== null && elapsedMs >= 0 ? [fmtDuration(elapsedMs)] : []
   const count = `${done}/${agents.length}`
   const wordings = [
-    [status, `${count} agents done`, ...fails, `${fmtTokens(tokens)} tokens`, ...time],
-    [status, `${count} done`, ...fails, fmtTokens(tokens), ...time],
-    [status, `${count} done`, ...fails, fmtTokens(tokens)],
+    [status, `${count} agents done`, ...fails, `${fmtCount(tokens)} tokens`, ...time],
+    [status, `${count} done`, ...fails, fmtCount(tokens), ...time],
+    [status, `${count} done`, ...fails, fmtCount(tokens)],
     [status, `${count} done`, ...fails],
     [status, count, ...fails],
     // A failure outranks the count once only one of them fits.

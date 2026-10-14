@@ -92,7 +92,7 @@ import { BORDER_CELLS, BORDER_ROWS, COMPACT_BAR_W, EXPAND_W, EXPAND_WORD, LIST_G
 import type { CompactWhy, Minimized } from '../src/ui/compact'
 import { ENTER, KEY_OPS, MINIMIZE_KEYS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
-import { FAILED, bar, fmtTokens } from '../src/ui/rail'
+import { FAILED, bar, fmtCount } from '../src/ui/rail'
 import { BEAT_MS, GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, draftPose, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene, waitScene } from '../src/ui/persona'
 import type { PersonaSpan, Pose } from '../src/ui/persona'
 import { cellWidth, clip, cutCells, firstLines, oneLine, padCells, sanitize, wrapText } from '../src/ui/text'
@@ -2427,7 +2427,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           rows: 1,
           el: (
             <Text wrap="truncate-end" color={agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'claude' : TEXT}>
-              {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${oneLine(agent.title)}  ${agent.status} · ${fmtTokens(agent.tokens)}`}
+              {`${agent.status === 'failed' ? FAILED : agent.status === 'running' ? GLYPH.dot : GLYPH.done} ${oneLine(agent.title)}  ${agent.status} · ${fmtCount(agent.tokens)}`}
             </Text>
           ),
         })),

@@ -4,13 +4,13 @@ import type { RunEvent } from '../src/run/events'
 import { emptyRunState } from '../src/run/events'
 import { journalToEvents } from '../src/run/journal'
 import { reduceAll } from '../src/run/reducer'
-import { replayEvents, replayTokens } from '../src/run/replay'
+import { replayEvents, replayUsage } from '../src/run/replay'
 import {
   bar,
   buildRunRows,
   currentPhase,
   fmtDuration,
-  fmtTokens,
+  fmtCount,
   NO_PHASE,
   SPIN_MS,
   SPINNER,
@@ -43,20 +43,20 @@ const MIXED = reduceAll([
 const kinds = (rows: Row[]) => rows.map(row => row.kind)
 const byKey = (rows: Row[], key: string) => rows.find(row => row.key === key)
 
-test('fmtTokens keeps three significant places', async () => {
-  expect(fmtTokens(0)).toBe('0')
-  expect(fmtTokens(842)).toBe('842')
-  expect(fmtTokens(999)).toBe('999')
-  expect(fmtTokens(1000)).toBe('1.0k')
-  expect(fmtTokens(18_234)).toBe('18.2k')
-  expect(fmtTokens(99_949)).toBe('99.9k')
-  expect(fmtTokens(99_950)).toBe('100k')
-  expect(fmtTokens(120_300)).toBe('120k')
-  expect(fmtTokens(999_499)).toBe('999k')
-  expect(fmtTokens(999_500)).toBe('1.0M')
-  expect(fmtTokens(1_240_000)).toBe('1.2M')
-  expect(fmtTokens(-5)).toBe('0')
-  expect(fmtTokens(Number.NaN)).toBe('0')
+test('fmtCount keeps three significant places', async () => {
+  expect(fmtCount(0)).toBe('0')
+  expect(fmtCount(842)).toBe('842')
+  expect(fmtCount(999)).toBe('999')
+  expect(fmtCount(1000)).toBe('1.0k')
+  expect(fmtCount(18_234)).toBe('18.2k')
+  expect(fmtCount(99_949)).toBe('99.9k')
+  expect(fmtCount(99_950)).toBe('100k')
+  expect(fmtCount(120_300)).toBe('120k')
+  expect(fmtCount(999_499)).toBe('999k')
+  expect(fmtCount(999_500)).toBe('1.0M')
+  expect(fmtCount(1_240_000)).toBe('1.2M')
+  expect(fmtCount(-5)).toBe('0')
+  expect(fmtCount(Number.NaN)).toBe('0')
 })
 
 test('fmtDuration picks the unit by size', async () => {
@@ -148,7 +148,7 @@ test('the 41-agent fixture folds into five finished phases', async () => {
   const state = reduceAll(replayEvents('review-41', review41))
   const rows = buildRunRows(state, NONE)
   const phases = rows.filter(row => row.kind === 'phase')
-  const total = Object.keys(state.agents).reduce((sum, agentId) => sum + replayTokens(agentId), 0)
+  const total = Object.keys(state.agents).reduce((sum, agentId) => sum + replayUsage(agentId), 0)
 
   expect(state.status).toBe('done')
   expect(kinds(rows)).toEqual(['header', 'phase', 'phase', 'phase', 'phase', 'phase', 'footer'])
@@ -158,7 +158,7 @@ test('the 41-agent fixture folds into five finished phases', async () => {
     expect(phase).toMatchObject({ color: 'success', open: false })
     expect(phase.counts?.done).toBe(phase.counts?.total)
   }
-  expect(rows[0]).toMatchObject({ color: 'success', tokens: fmtTokens(total) })
+  expect(rows[0]).toMatchObject({ color: 'success', tokens: fmtCount(total) })
   expect(rows[0]?.counts).toEqual({ total: 41, running: 0, done: 41, failed: 0 })
 
   const open = buildRunRows(state, { expanded: new Set(['Fix', 'Integrate']) })
