@@ -82,6 +82,16 @@ Then press `r`. Claude confirms the design, asks what to run it on, writes a rea
 - **It tells you what's wrong and stops nobody.** A loop with no stop condition, a verify with nothing to check, a branch arm with no condition: each gets a ` ! ` on its card. You can run it anyway. It's your money.
 - **It works on runs you never designed.** When Claude starts a workflow on its own, Conductor asks once whether to draw it. Say yes and the run shows up on a graph of the script that's already running.
 
+## Cost
+
+What Claude spends getting a workflow to run, before the run's own agents. Estimates, in tokens.
+
+| Flow | Design | Hand-off (`r`) |
+| --- | --- | --- |
+| Draw it yourself, press `r` | ~0k: the board makes no Claude calls | ~10–20k, what Claude spends writing any Workflow script, but from a full spec |
+| `/conductor <description…>`, press `r` | ~5–15k for the draft, like Plan mode | ~10–20k |
+| Draft, `q` for a review, fix, press `r` | ~10–25k, like Plan mode plus a round of refinement | ~10–20k |
+
 ## The parts
 
 Eight blocks to rule them all. 
