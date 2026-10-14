@@ -10,6 +10,7 @@
   "supportUrl": "https://github.com/bruw/workflow-conductor/issues",
   "documentationUrl": "https://github.com/bruw/workflow-conductor#readme",
   "license": "MIT",
+  "types": "./types/index.d.ts",
   "keywords": [
     "workflow",
     "agents",
