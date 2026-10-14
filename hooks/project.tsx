@@ -8,7 +8,7 @@ import { lint, preflightLine, problemFields } from '../src/project/lints'
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
 import { LAST_SCRIPTS_STORE, handoffPrompt, handoffTarget, noteScript, reviewPrompt } from '../src/project/handoff'
-import { ASK_PREFIX, resetText } from '../src/project/offer'
+import { ASK_STORES, resetText } from '../src/project/offer'
 import { replayEvents } from '../src/run/replay'
 import type { ReplayFixture } from '../src/run/replay'
 import { emptyProject, findNode, flatten, goalOf, isBlank, isProjectName, kindsOf, parseProject, serializeProject, typeName } from '../src/project/model'
@@ -998,9 +998,13 @@ const replayRecording = async ($: EngineInterface, id: string): Promise<void> =>
 }
 
 const forgetAnswers = async ($: EngineInterface): Promise<void> => {
-  const keys = (await $.store.keys().catch(() => [])).filter(key => key.startsWith(ASK_PREFIX))
-  for (const key of keys) await $.store.delete(key).catch(() => undefined)
-  await say($, resetText(keys.length))
+  let cleared = 0
+  for (const slot of ASK_STORES) {
+    if ((await $.store.get(slot).catch(() => undefined)) === undefined) continue
+    await $.store.delete(slot).catch(() => undefined)
+    cleared++
+  }
+  await say($, resetText(cleared))
 }
 
 const openEntry = async ($: EngineInterface, at?: number): Promise<void> => {

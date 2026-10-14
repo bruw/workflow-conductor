@@ -27,7 +27,7 @@ export function offerChoice(answer: string): { choice: OfferChoice; always: bool
 }
 
 /** The start screen's `Ask again` row deletes every `$.store` key that starts so, whichever question it belongs to. */
-export const ASK_PREFIX = 'ask.'
+const ASK_PREFIX = 'ask.'
 export const OFFER_STORE = `${ASK_PREFIX}workflow`
 
 export function storedChoice(value: unknown): OfferChoice | null {
@@ -90,6 +90,8 @@ export const VISUALIZE_QUESTION = 'Visualize this run in Conductor?'
 export const VISUALIZE_HEADER = 'Conductor'
 export const VISUALIZE_OPTIONS = ['Visualize', 'Skip', 'Always visualize', 'Never visualize'] as const
 export const VISUALIZE_STORE = `${ASK_PREFIX}visualize`
+/** Every stored answer, so a reset names what it forgets. */
+export const ASK_STORES = [OFFER_STORE, VISUALIZE_STORE] as const
 
 export type VisualizeChoice = 'visualize' | 'skip'
 
