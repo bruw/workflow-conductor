@@ -59,10 +59,12 @@ export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): Run
     case 'run-start': {
       // A repeated start for the run already in progress must not drop its agents.
       const dir = event.transcriptDir === undefined ? {} : { transcriptDir: event.transcriptDir }
+      const task = event.taskId === undefined ? {} : { taskId: event.taskId }
       if (state.status === 'running' && state.runId === event.runId) {
-        return event.name === undefined && (event.transcriptDir === undefined || event.transcriptDir === state.transcriptDir) ? state : { ...state, ...(event.name === undefined ? {} : { name: event.name }), ...dir }
+        const same = (event.name === undefined || event.name === state.name) && (event.transcriptDir === undefined || event.transcriptDir === state.transcriptDir) && (event.taskId === undefined || event.taskId === state.taskId)
+        return same ? state : { ...state, ...(event.name === undefined ? {} : { name: event.name }), ...dir, ...task }
       }
-      return { ...emptyRunState(), runId: event.runId, name: event.name, ...dir, status: 'running' }
+      return { ...emptyRunState(), runId: event.runId, name: event.name, ...dir, ...task, status: 'running' }
     }
 
     case 'agent-start': {
@@ -90,7 +92,7 @@ export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): Run
       const label = typeof event.label === 'string' ? event.label : ''
       const nodeId = nodeOf(label, event.phase, mapping)
       const agent: AgentRun = { agentId: event.agentId, label, nodeId, phase: event.phase, status: 'running', tokens: 0 }
-      // A spawn for the run that was held finished (the quiet period is a guess) reopens it.
+      // A spawn for a run held stopped (no notice says so, the stop is inferred) reopens it.
       const sameRun = state.runId === undefined || state.runId === event.runId
 
       return {
@@ -141,7 +143,10 @@ export function reduce(state: RunState, event: RunEvent, mapping?: Mapping): Run
 
     case 'run-end': {
       if (state.runId !== undefined && event.runId !== state.runId) return state
-      return { ...state, status: event.ok ? 'done' : 'failed' }
+      const status = event.stopped === true ? 'stopped' : event.ok ? 'done' : 'failed'
+      const durationMs = typeof event.durationMs === 'number' && Number.isFinite(event.durationMs) && event.durationMs >= 0 ? event.durationMs : state.durationMs
+      if (status === state.status && durationMs === state.durationMs) return state
+      return { ...state, status, ...(durationMs === undefined ? {} : { durationMs }) }
     }
 
     default:

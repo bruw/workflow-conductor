@@ -132,14 +132,14 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     const answer = await next(e)
     const result = (answer as { result?: unknown }).result
     if (result === null || typeof result !== 'object') return answer
-    const { runId, workflowName, transcriptDir, scriptPath } = result as Record<string, unknown>
+    const { runId, taskId, workflowName, transcriptDir, scriptPath } = result as Record<string, unknown>
     const id = text(runId)
     if (id === undefined) return answer
     const workflow = text(workflowName)
     // The board is on the run's project before the tracker places an agent on it. Never a throw: a run is tracked all the same.
     const board = runBoardOf()
     const own = (await board?.projectOfRun(workflow).catch(() => null)) ?? null
-    tracker.runStarted({ runId: id, name: workflow, transcriptDir: text(transcriptDir), project: own === null ? undefined : handoffOf(own.name, own.project) })
+    tracker.runStarted({ runId: id, name: workflow, transcriptDir: text(transcriptDir), taskId: text(taskId), project: own === null ? undefined : handoffOf(own.name, own.project) })
 
     try {
       // The script is the file the result names, in every form of the call. A run started again keeps its drawing.
@@ -217,9 +217,31 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     if (e.agentId !== undefined) {
       tracker.agentEnded(e.agentId, {
         ok: !e.isAborted && e.reason !== 'error' && e.reason !== 'refusal',
+        aborted: e.isAborted,
         durationMs: e.durationMs,
         tokens: tokensOf(e.usage),
       })
+    }
+
+    return next(e)
+  })
+
+  // A stopped run gets no notice; Claude's stop of its task is the one sign of it there is, besides its agents' aborted ends.
+  on('tool.call', { tool: 'TaskStop' }, async (_$, e, next) => {
+    const answer = await next(e)
+    const stopped = text((answer as { result?: { task_id?: unknown } }).result?.task_id)
+    if (stopped !== undefined && answer.deny === undefined && answer.isError !== true) tracker.taskEnded(stopped, 'killed')
+
+    return answer
+  })
+
+  // The run's end: the engine's notice of its task, as the transcript draws it, passed on untouched and drawn again on every redraw.
+  // Told from a timer: no state is written while a render hook draws.
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    const task = e.props.task
+    if (e.props.origin.kind === 'task-notification' && task?.id !== undefined && task.status !== undefined) {
+      const { id, status, durationMs } = task
+      $.clock.after(0, () => tracker.taskEnded(id, status, durationMs))
     }
 
     return next(e)

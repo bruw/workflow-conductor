@@ -177,7 +177,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
   const width = Math.max(MIN_WIDTH, Math.floor(ui.width ?? DEFAULT_WIDTH))
   const spin = spinnerFrame(ui.now)
   const all = countOf(agents)
-  const statusColor: ColorKey = state.status === 'running' ? 'claude' : state.status === 'failed' ? 'error' : 'success'
+  const statusColor: ColorKey = state.status === 'running' ? 'claude' : state.status === 'failed' ? 'error' : state.status === 'stopped' ? 'subtle' : 'success'
   const rows: Row[] = []
   // A run's name, a phase's title and an agent's label are not this mod's words: each is shown cleaned, on one line.
   const name = oneLine(state.name ?? state.runId ?? '') || 'workflow'

@@ -1,11 +1,11 @@
 export type RunEvent =
-  | { kind: 'run-start'; runId: string; name?: string; transcriptDir?: string; at?: number }
+  | { kind: 'run-start'; runId: string; name?: string; transcriptDir?: string; taskId?: string; at?: number }
   | { kind: 'agent-start'; runId: string; agentId: string; label: string; phase?: string; index?: number; at?: number }
   | { kind: 'agent-usage'; agentId: string; tokens: number }
   | { kind: 'agent-end'; agentId: string; ok: boolean; durationMs?: number; tokens?: number }
-  | { kind: 'run-end'; runId: string; ok: boolean }
+  | { kind: 'run-end'; runId: string; ok: boolean; stopped?: boolean; durationMs?: number }
 
-export type RunStatus = 'idle' | 'running' | 'done' | 'failed'
+export type RunStatus = 'idle' | 'running' | 'done' | 'failed' | 'stopped'
 
 export type AgentStatus = 'running' | 'done' | 'failed'
 
@@ -26,7 +26,11 @@ export type RunState = {
   name?: string
   /** Kept in the state so that a load of the module midway through a run still reads its phases. */
   transcriptDir?: string
+  /** The background task the engine runs it as: its end notice names it. Kept for the same reason. */
+  taskId?: string
   status: RunStatus
+  /** How long the engine says the run took; set at its end. */
+  durationMs?: number
   /** By agentId. */
   agents: Record<string, AgentRun>
   /** By project node id. */

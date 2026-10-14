@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import type { RunState } from '../src/run/events'
-import { QUIET_MS } from '../src/run/tracker'
+import { STOPPED_MS } from '../src/run/tracker'
 
 const DIR = '/projects/demo/session/subagents/workflows/wf_1'
 const RUN = { plugin: 'workflow-conductor', key: 'run' } as const
@@ -25,7 +25,7 @@ const SPAWN = {
   fork: false,
 } as const
 
-test('a workflow run is followed from launch to the quiet end', async ($, on) => {
+test("a workflow run is followed from launch to the engine's notice of its end", async ($, on) => {
   const clock = mock.clock(on)
   const statuses: (string | undefined)[] = []
   const toasts: string[] = []
@@ -69,6 +69,7 @@ test('a workflow run is followed from launch to the quiet end', async ($, on) =>
     return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn' as const, usage: usage(100, 20) }
   })
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
+  on('ui.render', { component: 'UserMessage' }, async (_$, e) => ({ type: 'Text' as const, props: {}, children: [e.props.text] }))
 
   // The kit keeps `$.state`; the test reads what the mod last wrote on its way down.
   let written: RunState | undefined
@@ -91,6 +92,11 @@ test('a workflow run is followed from launch to the quiet end', async ($, on) =>
       reason: isAborted ? 'aborted' : 'answer',
       usage: usage(200, 40),
     })
+
+  // The transcript drawing the row of a background task's notification.
+  const noticeProps = (id: string, status: string, durationMs?: number) => ({ text: `Dynamic workflow ${status}`, origin: { kind: 'task-notification' as const }, isExpanded: false, task: { id, status, durationMs } })
+  const notice = (id: string, status: string, durationMs?: number) =>
+    $.ui.mount({ plugin: 'workflow-conductor', surface: 'terminal', component: 'UserMessage', requestId: `m-${id}`, props: noticeProps(id, status, durationMs) })
 
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Workflow', script: 'export const meta = {}' })
@@ -140,27 +146,60 @@ test('a workflow run is followed from launch to the quiet end', async ($, on) =>
   expect(state.status).toBe('running')
   expect(typeof statuses.at(-1)).toBe('string')
 
-  await clock.advance(QUIET_MS + 1000)
+  await clock.advance(STOPPED_MS + 1000)
   expect((await stored()).status).toBe('running')
 
+  // No agent runs, and nothing said the run ended: it waits for the engine's notice.
   await complete(c)
-  await clock.advance(QUIET_MS - 500)
+  await clock.advance(STOPPED_MS + 1000)
   expect((await stored()).status).toBe('running')
   expect(toasts).toEqual([])
 
-  await clock.advance(600)
+  await notice('t2', 'completed')
+  await clock.advance(200)
+  expect((await stored()).status).toBe('running')
+
+  const row = await notice('t1', 'completed', 9000)
+  await clock.advance(200)
   state = await stored()
-  expect(state.status).toBe('done')
+  expect(state).toMatchObject({ status: 'done', durationMs: 9000 })
   expect(statuses.at(-1)).toBe(undefined)
   expect(toasts).toHaveLength(1)
 
-  const late = await $.agent.spawn({ ...SPAWN, description: 'n2: four', workflow: { runId: 'wf_1', agentIndex: 4 } })
+  // Drawn again with the transcript, the notice ends nothing twice.
+  await row.redraw(noticeProps('t1', 'completed', 9000))
   await clock.advance(200)
-  expect((await stored()).status).toBe('running')
-  await complete(late.agentId)
-  await clock.advance(QUIET_MS + 100)
-  state = await stored()
-  expect(state.status).toBe('done')
-  expect(state.byPhase.Beta).toMatchObject({ total: 2, done: 2 })
-  expect(toasts.length).toBe(2)
+  expect(toasts).toHaveLength(1)
+})
+
+test("Claude's stop of the run's task ends it stopped", async ($, on) => {
+  const clock = mock.clock(on)
+  let spawned = 0
+  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+  on('command.register', async (_$, e) => ({ value: { command: e.name } }))
+  on('ui.panes', async () => ({ value: [] }))
+  on('ui.status', async () => ({ value: undefined }))
+  on('ui.toast', async () => ({ value: undefined }))
+  on('fs.read', async () => ({ value: '{"type":"launched"}\n' }))
+  on('tool.call', { tool: 'Workflow' }, async () => ({ result: { status: 'async_launched' as const, taskId: 't1', runId: 'wf_1', workflowName: 'demo', transcriptDir: DIR } }))
+  on('tool.call', { tool: 'TaskStop' }, async (_$, e) => ({ result: { message: 'stopped', task_id: e.task_id ?? '', task_type: 'local_workflow' } }))
+  on('agent.spawn', async () => ({ model: 'claude-haiku-5-5', agentId: `agent${++spawned}` }))
+  let written: RunState | undefined
+  on('state.set', RUN, (_$, e, next) => {
+    written = e.value
+
+    return next(e)
+  })
+
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Workflow', script: 'export const meta = {}' })
+  await $.agent.spawn({ ...SPAWN, description: 'n1: one', workflow: { runId: 'wf_1', agentIndex: 1 } })
+  await $.tool.call({ tool: 'TaskStop', task_id: 't9' })
+  await clock.advance(300)
+  expect(written?.status).toBe('running')
+
+  await $.tool.call({ tool: 'TaskStop', task_id: 't1' })
+  await clock.advance(300)
+  expect(written?.status).toBe('stopped')
+  expect(Object.values(written?.agents ?? {}).map(agent => agent.status)).toEqual(['failed'])
 })

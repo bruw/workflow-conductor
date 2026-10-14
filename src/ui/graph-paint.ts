@@ -41,7 +41,7 @@ export type CardRun = {
 const WAITING = 'waiting'
 const NOT_RUN = 'not run'
 const NO_RUN: NodeRun = { total: 0, running: 0, done: 0, failed: 0, tokens: 0 }
-const OVER: readonly RunStatus[] = ['done', 'failed']
+const OVER: readonly RunStatus[] = ['done', 'failed', 'stopped']
 
 function addRuns(a: NodeRun, b: NodeRun | undefined): NodeRun {
   if (!b) return a

@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { RunState } from '../src/run/events'
 import { replayDue, replayEvents } from '../src/run/replay'
-import { createTracker, HANDOFF_MS, QUIET_MS, REPLAY_MS, TICK_MS } from '../src/run/tracker'
+import { createTracker, HANDOFF_MS, REPLAY_MS, STOPPED_MS, TICK_MS } from '../src/run/tracker'
 import type { TrackerHost } from '../src/run/tracker'
 import * as review41 from '../fixtures/review-41'
 
@@ -132,7 +132,7 @@ test('the tick runs only while something is running, and the spinner only while 
   tracker.attach(host)
   expect(live()).toBe(0)
 
-  tracker.runStarted({ runId: 'wf_1', transcriptDir: '/t/wf_1' })
+  tracker.runStarted({ runId: 'wf_1', transcriptDir: '/t/wf_1', taskId: 't1' })
   tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'a1' })
   await advance(2000)
   expect(log.frames).toEqual([])
@@ -146,13 +146,83 @@ test('the tick runs only while something is running, and the spinner only while 
   tracker.agentEnded('a1', { ok: true, tokens: 50 })
   await advance(500)
   const frames = log.frames.length
-  // Only the quiet timer is left; it ends the run and then nothing is pending at all.
-  expect(live()).toBe(1)
-  await advance(QUIET_MS)
+  // Nothing is pending while the run waits for the engine's notice of its end.
+  expect(live()).toBe(0)
+  expect(tracker.state().status).toBe('running')
+
+  tracker.taskEnded('t1', 'completed')
+  await advance(500)
   expect(log.frames.length).toBe(frames)
   expect(tracker.state().status).toBe('done')
   expect(log.toasts).toHaveLength(1)
   expect(live()).toBe(0)
+})
+
+test("the run ends as the engine's notice of its task says; agents still open take their journal result", async () => {
+  const journal = [{ type: 'result', agentId: 'a2', result: 'ok' }, { type: 'result', agentId: 'a3', result: null }].map(line => JSON.stringify(line)).join('\n')
+  const { host, log, advance } = fakeHost(() => journal)
+  const tracker = createTracker()
+  tracker.attach(host)
+  tracker.runStarted({ runId: 'wf_1', transcriptDir: '/t/wf_1', taskId: 't1' })
+  for (const agentId of ['a1', 'a2', 'a3', 'a4']) tracker.agentSpawned({ runId: 'wf_1', agentId, label: agentId })
+  tracker.agentEnded('a1', { ok: true })
+  await advance(STOPPED_MS * 2)
+  expect(tracker.state().status).toBe('running')
+
+  tracker.taskEnded('t9', 'completed')
+  await advance(200)
+  expect(tracker.state().status).toBe('running')
+
+  tracker.taskEnded('t1', 'failed', 5000)
+  await advance(200)
+  expect(tracker.state()).toMatchObject({ status: 'failed', durationMs: 5000 })
+  expect(Object.values(tracker.state().agents).map(agent => agent.status)).toEqual(['done', 'done', 'failed', 'failed'])
+  expect(log.toasts).toHaveLength(1)
+
+  // The notice is drawn again with every redraw of the transcript.
+  tracker.taskEnded('t1', 'failed', 5000)
+  await advance(200)
+  expect(log.toasts).toHaveLength(1)
+})
+
+test('a run whose agents were all aborted is held stopped until a notice says otherwise; a skipped agent is no stop', async () => {
+  const { host, log, advance } = fakeHost()
+  const tracker = createTracker()
+  tracker.attach(host)
+  tracker.runStarted({ runId: 'wf_1', taskId: 't1' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'a1' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a2', label: 'a2' })
+  tracker.agentEnded('a1', { ok: false, aborted: true })
+  tracker.agentEnded('a2', { ok: true })
+  await advance(STOPPED_MS + 200)
+  expect(tracker.state().status).toBe('running')
+
+  // Skipped: the agent is aborted and the script goes on at once.
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a3', label: 'a3' })
+  tracker.agentEnded('a3', { ok: false, aborted: true })
+  await advance(STOPPED_MS - 200)
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a4', label: 'a4' })
+  await advance(STOPPED_MS + 200)
+  expect(tracker.state().status).toBe('running')
+
+  tracker.agentEnded('a4', { ok: false, aborted: true })
+  await advance(STOPPED_MS + 200)
+  expect(tracker.state().status).toBe('stopped')
+  expect(log.toasts).toHaveLength(1)
+
+  tracker.taskEnded('t1', 'completed')
+  await advance(200)
+  expect(tracker.state().status).toBe('done')
+  expect(log.toasts).toHaveLength(1)
+
+  // A stop of the task, as Claude's TaskStop says it: the agents still running fail with it.
+  const other = createTracker()
+  other.attach(fakeHost().host)
+  other.runStarted({ runId: 'wf_2', taskId: 't2' })
+  other.agentSpawned({ runId: 'wf_2', agentId: 'b1', label: 'b1' })
+  other.taskEnded('t2', 'killed')
+  expect(other.state().status).toBe('stopped')
+  expect(other.state().agents.b1?.status).toBe('failed')
 })
 
 test('a newer run takes over; late agents of the old one are ignored', async () => {
@@ -177,6 +247,7 @@ test('a stored run is picked up after a reload', async () => {
   const first = createTracker()
   const one = fakeHost()
   first.attach(one.host)
+  first.runStarted({ runId: 'wf_1', taskId: 't1' })
   first.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'a1' })
   first.agentUsage('a1', 300)
   await one.advance(1000)
@@ -186,7 +257,9 @@ test('a stored run is picked up after a reload', async () => {
   second.attach(two.host, one.log.writes.at(-1))
   second.agentUsage('a1', 100)
   second.agentEnded('a1', { ok: true })
-  await two.advance(QUIET_MS + 200)
+  // The task the run is, kept in the stored state, is what the notice names.
+  second.taskEnded('t1', 'completed')
+  await two.advance(200)
 
   expect(second.state().agents.a1).toMatchObject({ status: 'done', tokens: 400 })
   expect(second.state().status).toBe('done')

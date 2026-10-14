@@ -56,7 +56,7 @@ export type CompactInput = {
   shell: Shell
   name: string | null
   goal: string
-  run: { bar: string; text: string; color: 'claude' | 'success' | 'error' } | null
+  run: { bar: string; text: string; color: 'claude' | 'success' | 'error' | 'inactive' } | null
   saved: readonly string[]
 }
 
@@ -67,7 +67,7 @@ export type CompactView = {
   name: string
   state: string
   /** The last row: the run, else the goal, else what to do with no project open. */
-  status: { bar: string | null; text: string; color: 'claude' | 'success' | 'error' | null }
+  status: { bar: string | null; text: string; color: 'claude' | 'success' | 'error' | 'inactive' | null }
   list: CompactList | null
   bordered: boolean
   taken: number

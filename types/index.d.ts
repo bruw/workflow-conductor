@@ -65,7 +65,7 @@ declare module 'claude-code' {
       run: {
         runId?: string
         name?: string
-        status: 'idle' | 'running' | 'done' | 'failed'
+        status: 'idle' | 'running' | 'done' | 'failed' | 'stopped'
         agents: Record<
           string,
           {

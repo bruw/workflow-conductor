@@ -79,6 +79,23 @@ export function journalPhases(journalText: string): Map<string, string | null> {
   return phases
 }
 
+/** By agentId, whether the agent's `result` line holds a value: the engine writes one per agent that completed, null where it gave nothing back. */
+export function journalResults(journalText: string): Map<string, boolean> {
+  const results = new Map<string, boolean>()
+  if (typeof journalText !== 'string') return results
+
+  for (const line of journalText.split('\n')) {
+    if (!line.includes('"result"')) continue
+    const entry = parseLine(line)
+    if (entry?.type !== 'result') continue
+
+    const agentId = text(entry.agentId)
+    if (agentId !== undefined) results.set(agentId, entry.result !== null && entry.result !== undefined)
+  }
+
+  return results
+}
+
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }

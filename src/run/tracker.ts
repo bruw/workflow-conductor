@@ -2,17 +2,20 @@ import { endText, statusText } from '../ui/rail'
 
 import { emptyRunState } from './events'
 import type { RunEvent, RunState } from './events'
-import { journalPhases } from './journal'
+import { journalPhases, journalResults } from './journal'
 import { reduce, remap } from './reducer'
 import type { Mapping } from './reducer'
 import { replayDue } from './replay'
 
-// Decides when things happen for a live run: which agents count, when the state is written, the journal read, the run held finished.
+// Decides when things happen for a live run: which agents count, when the state is written, the journal read, the run ended.
 // Reaches everything outside through a TrackerHost, so it runs under a fake host in tests.
 
 export const TICK_MS = 96
-/** No agent running and no spawn for this long: the run is held finished. */
-export const QUIET_MS = 8000
+/**
+ * Every agent that ended since the last spawn was aborted, none runs, and no spawn came for this long: the run was stopped
+ * where the engine sends no notice of it (the workflow view). A skipped agent is aborted too, and its run spawns on at once.
+ */
+export const STOPPED_MS = 8000
 /** A handoff waits this long for a run under another name than its project's; a prompt from the person starts the wait again. */
 export const HANDOFF_MS = 180_000
 /** A slow replay spreads its events over this long. */
@@ -52,13 +55,18 @@ type Claim = Mapping & { name: string; titles?: Readonly<Record<string, string>>
 const claimOf = (from: Handoff): Claim => ({ name: from.name, ids: new Set(from.nodeIds), titles: from.titles, match: from.match })
 
 /** `project`: the saved project the run's workflow is named as; the run is that project's, handed off or not. */
-export type RunStarted = { runId: string; name?: string; transcriptDir?: string; project?: Handoff }
+export type RunStarted = { runId: string; name?: string; transcriptDir?: string; taskId?: string; project?: Handoff }
 export type AgentSpawned = { runId: string; agentId: string; label: string; index?: number }
-export type AgentEnded = { ok: boolean; durationMs?: number; tokens?: number }
+export type AgentEnded = { ok: boolean; aborted?: boolean; durationMs?: number; tokens?: number }
 
 export type Tracker = ReturnType<typeof createTracker>
 
 const hasRunning = (state: RunState): boolean => Object.values(state.agents).some(agent => agent.status === 'running')
+
+type Ending = 'done' | 'failed' | 'stopped'
+
+/** The words a task notification ends with: `completed`, `failed`, `killed`, or another its producer wrote. */
+const endingOf = (status: string): Ending => (status === 'completed' ? 'done' : status === 'killed' ? 'stopped' : 'failed')
 
 export function createTracker() {
   let host: TrackerHost | undefined
@@ -66,7 +74,7 @@ export function createTracker() {
   /** 0 clean, 1 token counts only, 2 anything else. */
   let dirty: 0 | 1 | 2 = 0
   let ticker: Timer | undefined
-  let quiet: Timer | undefined
+  let stopWait: Timer | undefined
   let replaying: Timer | undefined
   let ticks = 0
   let lastRead = -JOURNAL_EVERY
@@ -80,6 +88,9 @@ export function createTracker() {
   /** The project whose handoff is being worked on: from the handoff until the person's next prompt after its claim is spent. A run of it meanwhile (the first, a retry) comes out of the handoff. */
   let handed: string | undefined
   let replayed = false
+  /** Agents ended since the last spawn, and whether every one of them was aborted. */
+  let ends = 0
+  let abortedOnly = true
 
   /** Agents of the tracked run still running, with their token total so far. */
   const totals = new Map<string, number>()
@@ -128,21 +139,48 @@ export function createTracker() {
     )
   }
 
-  const cancelQuiet = (): void => {
-    quiet?.cancel()
-    quiet = undefined
+  const cancelStopWait = (): void => {
+    stopWait?.cancel()
+    stopWait = undefined
   }
 
-  const armQuiet = (): void => {
-    if (!host || quiet) return
-    quiet = host.after(QUIET_MS, () => {
-      quiet = undefined
-      if (state.status !== 'running' || state.runId === undefined || hasRunning(state)) return
-      // Failed only when no agent succeeded and one failed; else the failures show as counts.
-      const agents = Object.values(state.agents)
-      const ok = agents.some(agent => agent.status === 'done') || !agents.some(agent => agent.status === 'failed')
-      apply([{ kind: 'run-end', runId: state.runId, ok }])
+  const looksStopped = (): boolean => ends > 0 && abortedOnly && !hasRunning(state)
+
+  const armStopWait = (): void => {
+    if (!host || stopWait) return
+    stopWait = host.after(STOPPED_MS, () => {
+      stopWait = undefined
+      if (state.status === 'running' && looksStopped()) conclude('stopped')
     })
+  }
+
+  /** Ends the run as the engine says it ended. Agents still open (an end missed, as across a reload) take their journal result, else fail. */
+  function conclude(ending: Ending, durationMs?: number): void {
+    const runId = state.runId
+    if (runId === undefined) return
+    cancelStopWait()
+
+    const close = (results: Map<string, boolean>): void => {
+      if (state.runId !== runId) return
+      const open = Object.values(state.agents).filter(agent => agent.status === 'running')
+      for (const agent of open) totals.delete(agent.agentId)
+      noPhase.clear()
+      apply([
+        ...open.map((agent): RunEvent => ({ kind: 'agent-end', agentId: agent.agentId, ok: results.get(agent.agentId) ?? false })),
+        { kind: 'run-end', runId, ok: ending === 'done', stopped: ending === 'stopped', durationMs },
+      ])
+    }
+
+    const dir = state.transcriptDir
+    if (!host || dir === undefined || !hasRunning(state)) {
+      close(new Map())
+
+      return
+    }
+    host.readText(`${dir}/journal.jsonl`).then(
+      text => close(journalResults(text)),
+      () => close(new Map()),
+    )
   }
 
   const readJournal = (): void => {
@@ -191,6 +229,9 @@ export function createTracker() {
   /** An agent not heard from for STALE_MS is held failed: its end was missed, or never comes. */
   const closeStale = (): void => {
     const stale = Object.values(state.agents).filter(agent => agent.status === 'running' && ticks - (heard.get(agent.agentId) ?? 0) >= STALE_TICKS)
+    if (stale.length === 0) return
+    ends += stale.length
+    abortedOnly = false
     for (const agent of stale) totals.delete(agent.agentId)
     apply(stale.map(agent => ({ kind: 'agent-end', agentId: agent.agentId, ok: false })))
   }
@@ -221,7 +262,7 @@ export function createTracker() {
   }
 
   const finish = (): void => {
-    cancelQuiet()
+    cancelStopWait()
     flush()
     const text = endText(state)
     call(h => h.toast(text))
@@ -242,8 +283,8 @@ export function createTracker() {
     if (state === before) return
 
     if (state.status === 'running') {
-      if (hasRunning(state)) cancelQuiet()
-      else armQuiet()
+      if (looksStopped()) armStopWait()
+      else cancelStopWait()
     }
     if (wasRunning && state.status !== 'running') finish()
     else startTicker()
@@ -264,8 +305,10 @@ export function createTracker() {
   const begin = (runId: string, own?: Handoff): void => {
     replaying?.cancel()
     replaying = undefined
-    cancelQuiet()
+    cancelStopWait()
     replayed = false
+    ends = 0
+    abortedOnly = true
     totals.clear()
     noPhase.clear()
     heard.clear()
@@ -315,9 +358,7 @@ export function createTracker() {
           heard.set(agent.agentId, ticks)
         }
       }
-      if (state.status !== 'running') return
-      if (!hasRunning(state)) armQuiet()
-      startTicker()
+      if (state.status === 'running') startTicker()
     },
 
     /** The first run to start within HANDOFF_MS is the project's; then the claim drops, so a later unrelated run is not taken. */
@@ -362,7 +403,7 @@ export function createTracker() {
     runStarted(run: RunStarted): void {
       const isNew = state.runId !== run.runId || state.status !== 'running'
       if (isNew) begin(run.runId, run.project)
-      apply([{ kind: 'run-start', runId: run.runId, name: run.name, transcriptDir: run.transcriptDir || undefined }])
+      apply([{ kind: 'run-start', runId: run.runId, name: run.name, transcriptDir: run.transcriptDir || undefined, taskId: run.taskId || undefined }])
       // Its agents were seen before the run was announced, so it began with no name: they are placed again by its project.
       if (!isNew && run.project !== undefined && active?.name !== run.project.name) take(run.project)
     },
@@ -373,7 +414,9 @@ export function createTracker() {
         begin(agent.runId)
         apply([{ kind: 'run-start', runId: agent.runId }])
       }
-      cancelQuiet()
+      cancelStopWait()
+      ends = 0
+      abortedOnly = true
       totals.set(agent.agentId, 0)
       noPhase.set(agent.agentId, 0)
       apply([{ kind: 'agent-start', runId: agent.runId, agentId: agent.agentId, label: agent.label, index: agent.index }])
@@ -391,8 +434,21 @@ export function createTracker() {
       const total = totals.get(agentId)
       if (total === undefined) return
       totals.delete(agentId)
+      ends++
+      abortedOnly &&= end.aborted === true
       // The end's own count is the agent's total; one that says none (absent, or 0) never takes away what was counted.
       apply([{ kind: 'agent-end', agentId, ok: end.ok, durationMs: end.durationMs, tokens: end.tokens !== undefined && end.tokens > 0 ? end.tokens : total }])
+    },
+
+    /**
+     * The engine's notice that task `taskId` ended, with its status word. Said again for every drawing of the notice: only the
+     * first counts. A run held stopped for want of a notice takes the status a later one gives.
+     */
+    taskEnded(taskId: string, status: string, durationMs?: number): void {
+      if (state.taskId === undefined || state.taskId !== taskId) return
+      const ending = endingOf(status)
+      if (state.status === ending || (state.status !== 'running' && state.status !== 'stopped')) return
+      conclude(ending, durationMs)
     },
 
     /** Refused (false) while `busy`: the real run's agents would be dropped as a superseded run's. */

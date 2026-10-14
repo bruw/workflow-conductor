@@ -935,12 +935,12 @@ export function fitHelp(page: readonly HelpRow[], rows: number): HelpRow[] {
 }
 
 /** The longest wording `room` cells hold. Tight, the long words go first, then the time, the tokens, the failures, the count; the status always stays. */
-export function runSummary(run: RunState, elapsedMs: number | null, room: number = Infinity): { text: string; color: 'claude' | 'success' | 'error' } {
+export function runSummary(run: RunState, elapsedMs: number | null, room: number = Infinity): { text: string; color: 'claude' | 'success' | 'error' | 'inactive' } {
   const agents = Object.values(run.agents)
   const done = agents.filter(agent => agent.status === 'done').length
   const failed = agents.filter(agent => agent.status === 'failed').length
   const tokens = agents.reduce((sum, agent) => sum + agent.tokens, 0)
-  const status = run.status === 'running' ? 'running' : 'finished'
+  const status = run.status === 'running' ? 'running' : run.status === 'stopped' ? 'stopped' : 'finished'
   const fails = failed > 0 ? [`${failed} failed`] : []
   const time = elapsedMs !== null && elapsedMs >= 0 ? [fmtDuration(elapsedMs)] : []
   const count = `${done}/${agents.length}`
@@ -955,7 +955,7 @@ export function runSummary(run: RunState, elapsedMs: number | null, room: number
     [status],
   ].map(parts => parts.join(' · '))
   const text = wordings.find(one => one.length <= room) ?? status
-  return { text, color: run.status === 'running' ? 'claude' : failed > 0 || run.status === 'failed' ? 'error' : 'success' }
+  return { text, color: run.status === 'running' ? 'claude' : failed > 0 || run.status === 'failed' ? 'error' : run.status === 'stopped' ? 'inactive' : 'success' }
 }
 
 /** In the clock's ms: the run state itself carries no times, and a drawing reads no clock. */
@@ -973,8 +973,12 @@ export function stampTimes(times: RunTimes, run: RunState, now: number): RunTime
   if (run.status === 'idle') return times.runId === null ? times : initialTimes()
   const runId = run.runId ?? ''
   if (times.runId !== runId || times.startedAt === null) return { runId, startedAt: now, endedAt: run.status === 'running' ? null : now, seenAt: now }
-  if (run.status !== 'running') return times.endedAt === null ? { ...times, endedAt: now, seenAt: now } : times
-  // A run held finished can start again (the quiet period is a guess): it is timed on.
+  if (run.status !== 'running') {
+    // The notice comes once the main loop is idle, maybe long after the run: its own time is the one shown.
+    const endedAt = run.durationMs === undefined ? (times.endedAt ?? now) : times.startedAt + run.durationMs
+    return endedAt === times.endedAt ? times : { ...times, endedAt, seenAt: now }
+  }
+  // A run held stopped can start again (the stop is inferred): it is timed on.
   if (times.endedAt !== null) return { ...times, endedAt: null, seenAt: now }
   return now - (times.seenAt ?? 0) >= ELAPSED_STEP_MS ? { ...times, seenAt: now } : times
 }
@@ -1005,7 +1009,7 @@ export function failedBlock(project: Project, run: RunState): string | null {
 
 /** The selection goes to the first block with a failure, where the person has to look, and following ends. */
 export function endRun(ui: ProjectUi, project: Project | null, run: RunState, runProject: string | null): ProjectUi {
-  if (!ui.follow || !project || ui.status !== 'ready' || runProject === null || ui.name !== runProject || (run.status !== 'done' && run.status !== 'failed')) return ui
+  if (!ui.follow || !project || ui.status !== 'ready' || runProject === null || ui.name !== runProject || run.status === 'running' || run.status === 'idle') return ui
   const id = failedBlock(project, run)
   if (id === null) return { ...ui, follow: false }
   return { ...ui, follow: false, selectedId: id, confirmId: null, editing: false, freshId: null }

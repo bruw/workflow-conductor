@@ -340,7 +340,7 @@ export function gestureOf(before: Project | null, after: Project | null): Pose |
   return now.every(row => ids.has(row.node.id)) ? 'conducting' : null
 }
 
-export function runPose(status: 'idle' | 'running' | 'done' | 'failed', clockMs: number): Pose | null {
+export function runPose(status: 'idle' | 'running' | 'done' | 'failed' | 'stopped', clockMs: number): Pose | null {
   if (status === 'running') return Math.floor(clockMs / (BEAT_MS * 2)) % 2 === 0 ? 'conducting' : 'ready'
   if (status === 'done') return 'complete'
   return null
