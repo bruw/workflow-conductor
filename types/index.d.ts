@@ -55,8 +55,6 @@ export type ConductorProjectUi = {
   handed: boolean
   startMark: number
   back: string | null
-  renaming: string | null
-  deleteAsk: string | null
 }
 
 declare module 'claude-code' {

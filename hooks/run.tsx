@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import { visualizeBrief } from '../src/project/chat'
+import { LAST_SCRIPTS_KEY, noteScript } from '../src/project/handoff'
 import { parseProject } from '../src/project/model'
 import { VISUALIZE_HEADER, VISUALIZE_KEY, VISUALIZE_OPTIONS, VISUALIZE_QUESTION, reusedToast, storedVisualize, visualizeChoice, visualizeToast, visualizeTyped } from '../src/project/offer'
 import { PROJECT_PANE_ID, bareTarget, projectFile, projectName, endRun, followRun, handoffOf, initialTimes, initialUi, isSaved, scriptFile, stampTimes } from '../src/project/session'
@@ -148,11 +149,11 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       const claimed = tracker.project()
       if (claimed !== undefined) {
         offerSettled(claimed)
-        // Out of a handoff the script is the project's as of now, kept beside it for the next handoff to update.
-        // A run that has only the project's name never writes over the script the project has: that one may be newer.
+        // Out of a handoff the script is the project's as of now, for the next handoff to start from.
+        // A run that has only the project's name never stands in for the script the project has: that one may be newer.
         if (script !== undefined && isSaved(claimed)) {
           const beside = scriptFile(await $.session.root(), claimed)
-          if (tracker.handedOff() || !(await $.fs.exists(beside).catch(() => true))) await board?.keepScript(script, beside)
+          if (tracker.handedOff() || !(await $.fs.exists(beside).catch(() => true))) await $.store.set(LAST_SCRIPTS_KEY, noteScript(await $.store.get(LAST_SCRIPTS_KEY).catch(() => undefined), claimed, script, beside)).catch(() => undefined)
         }
         // Where nobody handed the project off, a toast says where the run went.
         if (own !== null) {

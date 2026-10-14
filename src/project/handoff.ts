@@ -53,8 +53,25 @@ export function reviewPrompt(name: string): string {
   return `Review the "${name}" workflow project as it is on the board now (it may have changed by hand: read it, unless a Conductor note with this prompt says what changed): is the structure right for its goal, what is missing, what is wasteful? `
 }
 
-/** `scriptPath` is the project's script when that file exists: Claude updates and runs it in place of writing a new one. */
-export function buildHandoff(project: Project, projectPath: string, scriptPath: string | null): Handoff {
+/** `$.store` key: per project, the script its last run ran where that is not the file beside the project. */
+export const LAST_SCRIPTS_KEY = 'lastScripts'
+
+export function lastScripts(value: unknown): Record<string, string> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+}
+
+/** A run of the file beside the project leaves nothing to remember: that file is the newest. */
+export function noteScript(value: unknown, name: string, ran: string, beside: string): Record<string, string> {
+  const { [name]: _, ...rest } = lastScripts(value)
+  return ran === beside ? rest : { ...rest, [name]: ran }
+}
+
+/** Claude writes the script itself, at `path` beside the project (the mod writes no file another tool runs); `from` is the script to start from, null for none. */
+export type HandoffScript = { path: string; from: string | null }
+
+export function buildHandoff(project: Project, projectPath: string, script: HandoffScript): Handoff {
+  const scriptPath = script.from
   const count = flatten(project).length
   // The start block is the goal and the input, not a stage: it gets no phase and no agent is labelled with it.
   const stages = project.nodes.filter(node => node.type !== 'start')
@@ -72,10 +89,10 @@ export function buildHandoff(project: Project, projectPath: string, scriptPath: 
     `Read the project file: ${projectPath}`,
     'It defines the workflow: what each block says (its type, kind, name, logic and knobs) is what to build.',
     ...(scriptPath === null
-      ? ['Write it as a Workflow script and run it with the Workflow tool.']
+      ? [`Write it as a Workflow script to ${script.path} and run it with the Workflow tool's \`scriptPath\`.`]
       : [
-          `Its script exists: ${scriptPath}`,
-          "Update THAT file to match the project as it is now, changing only what the project changed, and run it with the",
+          scriptPath === script.path ? `Its script exists: ${script.path}` : `Its last run's script is ${scriptPath}: copy it to ${script.path}.`,
+          `Update ${script.path} to match the project as it is now, changing only what the project changed, and run it with the`,
           "Workflow tool's `scriptPath`. If it already matches, run it unchanged. Do not write another script.",
         ]),
     `The user approved it on the board: do not call ${OFFER_TOOL_FULL_NAME} for it again.`,

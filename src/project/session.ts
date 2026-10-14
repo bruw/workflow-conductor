@@ -81,10 +81,6 @@ export type ProjectUi = {
   startMark: number
   /** The start screen was opened from this project (`p`, a press on the header's name): it lists the projects, and `p` goes back to this one. */
   back: string | null
-  /** The saved project whose name is being typed on the start screen (`e`). */
-  renaming: string | null
-  /** The saved project a first `x` on the start screen asked about; a second one on it deletes it. */
-  deleteAsk: string | null
 }
 
 export type SavedProject = { name: string; blocks: number; goal: string }
@@ -195,8 +191,6 @@ export function initialUi(): ProjectUi {
     handed: false,
     startMark: 0,
     back: null,
-    renaming: null,
-    deleteAsk: null,
   }
 }
 
@@ -341,7 +335,7 @@ export function isProjectEntry(entry: Pick<StartEntry, 'kind'>): boolean {
 export function moveStartMark(ui: ProjectUi, by: number): ProjectUi {
   const last = startEntries(ui.saved ?? []).length - 1
   const startMark = Math.max(0, Math.min(last, (ui.startMark ?? 0) + by))
-  return startMark === (ui.startMark ?? 0) ? ui : { ...ui, startMark, notice: null, renaming: null, deleteAsk: null }
+  return startMark === (ui.startMark ?? 0) ? ui : { ...ui, startMark, notice: null }
 }
 
 /** `count` rows of a list of `total` around the marked one: the first row shown. */
@@ -880,7 +874,7 @@ export const KEY_HELP: readonly (readonly [string, string])[] = [
   ['q', 'Claude review: asks Claude to review the project (fills the prompt)'],
   ['r', 'implement and run: hands the project to Claude at once; Claude confirms the design and asks what to run it on'],
   ['c', 'put away the results of a run that is over (the first edit does too)'],
-  ['p', 'the projects: the saved ones and the templates, to open another or start one (there: e renames, x deletes); p comes back'],
+  ['p', 'the projects: the saved ones and the templates, to open another or start one; p comes back'],
   ['?  h', 'these pages, one after the other'],
 ]
 
@@ -909,7 +903,7 @@ export function helpColumn(page: number): number {
 export const START_HELP: readonly string[] = [
   'A project is a workflow drawn as a graph of blocks: agents, the code between them, and the containers that run them in a row, at once or in a loop.',
   'The Up and Down arrows choose a row (w and s too), Enter opens it. A saved project opens as it was left; a template starts a new project, and Blank an empty one.',
-  'Nothing is written until the first edit. On a saved project, e renames it and x deletes it (x again to confirm).',
+  `Nothing is written until the first edit. Each saved project is a file in ${PROJECT_DIR}/: rename or delete it there.`,
   '/conductor <what you want> has Claude draft a new project on the board and name it; in an open project, a plain message to Claude changes it.',
   'Under the templates: a replay shows a run without running one (made up over a template, or recorded), and Ask again forgets every "Always" and "Never" answer given to Conductor\'s questions.',
 ]

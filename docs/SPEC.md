@@ -106,7 +106,7 @@ One screen: header (name as the project list's button, state; the legend on its 
 
 **Compact view** (`$.state` `shell`): `m` or a pane with no room minimizes into the band; any drawing of a placed pane with room ends it, so no way of opening the pane needs to know of it. The band draws the project, the saved projects as buttons, the run or the goal, and Expand.
 
-**`/conductor`**: bare is the run in progress, else the project last opened, else the start screen; `min` / `max` move the designer; any other words are a draft. Everything else (projects, rename, delete, replays, forgetting kept answers) is on the start screen.
+**`/conductor`**: bare is the run in progress, else the project last opened, else the start screen; `min` / `max` move the designer; any other words are a draft. Everything else (projects, replays, forgetting kept answers) is on the start screen.
 
 ## Not exercised
 
@@ -116,7 +116,6 @@ The desktop surface; the main screen outside fullscreen; clicks on the band and 
 
 - Known block ids are not restored if the plugin reloads mid-run.
 - A prompt queued mid-turn marks the change note as seen early.
-- After `/clear`, and after a rename, an `attach` to the run still shown is refused.
-- A failed delete can leave `<name>.workflow.js` behind.
+- After `/clear`, an `attach` to the run still shown is refused.
 - The turn is held while the Visualize dialog is up.
 - A project file changed outside Claude's tools is not followed.

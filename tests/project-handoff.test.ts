@@ -1,16 +1,18 @@
 import { expect, test } from 'claude-code/testing'
 
-import { OUTLINE_MAX, buildHandoff, handoffPrompt, handoffTarget, outline } from '../src/project/handoff'
+import { OUTLINE_MAX, buildHandoff, handoffPrompt, handoffTarget, lastScripts, noteScript, outline } from '../src/project/handoff'
 import { flatten } from '../src/project/model'
 import type { Project, ProjectNode } from '../src/project/model'
 import { TEMPLATES, review } from '../src/project/templates'
 
 const PATH = '/project/.claude/workflow-conductor/demo.json'
 const SCRIPT = '/project/.claude/workflow-conductor/demo.workflow.js'
+const RAN = '/sessions/s1/workflows/wf_1/script.js'
+const FRESH = { path: SCRIPT, from: null }
 
 test('handoff: one visible line, one context entry that names the file, the name and the phases', () => {
   const project = { ...review(), name: 'demo' }
-  const handoff = buildHandoff(project, PATH, null)
+  const handoff = buildHandoff(project, PATH, FRESH)
 
   expect(handoff.text).not.toMatch(/\n/)
   expect(handoff.text).toContain('"demo"')
@@ -25,11 +27,29 @@ test('handoff: one visible line, one context entry that names the file, the name
   expect(context).toContain(project.nodes[0]?.knobs?.goal ?? '?')
 })
 
-test('handoff: a project that has its script is told to update that file', () => {
+test('handoff: the script is always to be at the file beside the project, started from the newest one there is', () => {
   const project = { ...review(), name: 'demo' }
+  const fresh = buildHandoff(project, PATH, FRESH).context[0] ?? ''
+  const there = buildHandoff(project, PATH, { path: SCRIPT, from: SCRIPT }).context[0] ?? ''
+  const elsewhere = buildHandoff(project, PATH, { path: SCRIPT, from: RAN }).context[0] ?? ''
 
-  expect(buildHandoff(project, PATH, null).context[0]).not.toContain(SCRIPT)
-  expect(buildHandoff(project, PATH, SCRIPT).context[0]).toContain(SCRIPT)
+  expect(fresh).toContain(SCRIPT)
+  expect(fresh).toMatch(/implement and run/)
+  expect(there).toMatch(/update and run/)
+  expect(there).toContain(SCRIPT)
+  expect(elsewhere).toMatch(/update and run/)
+  expect(elsewhere).toContain(RAN)
+  expect(elsewhere).toContain(SCRIPT)
+})
+
+test('the script a project last ran is remembered only where it is not the file beside it', () => {
+  const noted = noteScript(undefined, 'demo', RAN, SCRIPT)
+
+  expect(noted).toEqual({ demo: RAN })
+  expect(noteScript(noted, 'demo', SCRIPT, SCRIPT)).toEqual({})
+  expect(noteScript({ other: RAN }, 'demo', SCRIPT, SCRIPT)).toEqual({ other: RAN })
+  expect(lastScripts(['x'])).toEqual({})
+  expect(lastScripts({ demo: RAN, bad: 3 })).toEqual({ demo: RAN })
 })
 
 test('the prompt that hands a project off names it, and only that prompt does', () => {

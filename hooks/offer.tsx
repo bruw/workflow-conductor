@@ -1,7 +1,8 @@
-import type { On } from 'claude-code'
+import type { EngineInterface, On } from 'claude-code'
 
 import { offerBrief } from '../src/project/chat'
-import { buildHandoff } from '../src/project/handoff'
+import { LAST_SCRIPTS_KEY, buildHandoff, lastScripts } from '../src/project/handoff'
+import type { HandoffScript } from '../src/project/handoff'
 import { isBlank, parseProject } from '../src/project/model'
 import {
   DISMISSED_RESULT,
@@ -22,6 +23,15 @@ import {
 } from '../src/project/offer'
 import { projectFile, scriptFile } from '../src/project/session'
 import type { Tracker } from '../src/run/tracker'
+
+/** A script a run left elsewhere is newer than the one beside the project: a run of that one forgets it. */
+const scriptOf = async ($: EngineInterface, root: string, name: string): Promise<HandoffScript> => {
+  const path = scriptFile(root, name)
+  const last = lastScripts(await $.store.get(LAST_SCRIPTS_KEY).catch(() => undefined))[name]
+  if (last !== undefined && (await $.fs.exists(last).catch(() => false))) return { path, from: last }
+
+  return { path, from: (await $.fs.exists(path).catch(() => false)) ? path : null }
+}
 
 /** "Conductor" was answered and the draft it asks Claude for has not landed yet. A module variable: it lasts a turn. */
 let offered = false
@@ -101,9 +111,7 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
       const path = projectFile(root, name)
       const parsed = parseProject(await $.fs.read(path).catch(() => ''))
       if (parsed.ok && !isBlank(parsed.project)) {
-        const script = scriptFile(root, name)
-
-        return { result: handedResult(buildHandoff({ ...parsed.project, name }, path, (await $.fs.exists(script).catch(() => false)) ? script : null).context.join('\n')) }
+        return { result: handedResult(buildHandoff({ ...parsed.project, name }, path, await scriptOf($, root, name)).context.join('\n')) }
       }
     }
     // The script being written is the project the person approved on the board: that was their answer.
@@ -119,9 +127,7 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
       const parsed = parseProject(await $.fs.read(path).catch(() => ''))
       if (parsed.ok && !isBlank(parsed.project)) {
         answered = true
-        const script = scriptFile(root, waiting)
-
-        return { result: waitingResult(waiting, buildHandoff({ ...parsed.project, name: waiting }, path, (await $.fs.exists(script).catch(() => false)) ? script : null).context.join('\n')) }
+        return { result: waitingResult(waiting, buildHandoff({ ...parsed.project, name: waiting }, path, await scriptOf($, root, waiting)).context.join('\n')) }
       }
     }
     waiting = null

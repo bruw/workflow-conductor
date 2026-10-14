@@ -114,9 +114,6 @@ export type LegendState = {
   hidden: boolean
   /** The start screen was opened from a project (`p`): `p` goes back to it. */
   back?: boolean
-  /** The start screen's marked row is a saved project: it can be renamed and deleted there. */
-  saved?: boolean
-  renaming?: boolean
 }
 
 /** `core` entries are kept when the room is short. */
@@ -137,11 +134,8 @@ export function legendItems(state: LegendState): Legend {
   if (state.ring === 'start') {
     const choose: LegendItem[] = [{ keys: '↑ ↓', word: 'Choose', core: true }, { keys: 'Enter', word: 'Open', core: true }]
     const back: LegendItem[] = state.back ? [{ keys: 'p', word: 'Back', core: true }] : []
-    // The name's field has the letters: the one way out, and what Enter does.
-    if (state.renaming) return { header: [out], actions: [], detail: [{ keys: 'Enter', word: 'Rename', core: true }, { keys: '↑ ↓', word: 'Cancel', core: true }] }
-    const row: LegendItem[] = state.saved ? [{ keys: 'e', word: 'Rename', core: true }, { keys: 'x', word: 'Delete', core: true }] : []
     // A help page has the detail pane in place of the list: the keys that walk the list still act, and are the header's.
-    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, minimize, help], actions: [], detail: [...choose, ...row] }
+    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, minimize, help], actions: [], detail: choose }
   }
   const edits = !state.locked
   // In a field and in the add list the letters are text, so the actions wait.
