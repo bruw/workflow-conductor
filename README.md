@@ -7,7 +7,7 @@ Then the agents go off somewhere you can't see, and you sit watching a counter, 
 Conductor is a Claude Code mod for people who got tired of hoping. The workflow is a graph, in a pane beside your transcript. You draw it, or you tell Claude to and fix what it got wrong. When the plan is good, hand it over for build and run. The run comes back onto the same graph, block by block, so you know which agent failed, where, and what it cost you.
 
 ```
-/plugin install conductor --marketplace bruw/workflow-conductor
+/plugin install workflow-conductor --marketplace bruw/workflow-conductor
 ```
 
 
@@ -138,13 +138,13 @@ Conductor makes no network requests and reads no settings or credentials.
 - **Files.** It writes only `.claude/workflow-conductor/<name>.json` and `<name>.workflow.js` under the session's root, and `<name>` is always kebab-case. The `.workflow.js` file is a copy of the script Claude wrote and the Workflow tool last ran for that project: on the next hand-off Claude updates it and the Workflow tool runs it. It is the only file Conductor writes that another tool runs, and Conductor never changes what the copy says. Conductor never writes settings, `CLAUDE.md`, build or start-up files.
 - **Programs.** It runs `rm -- <file>` to delete a saved project and `mv -- <file> <file>` to rename one, and only on those two files: the mod API has no delete or rename. They are given those file paths and nothing else: no file content or conversation text reaches them, and they send nothing off the machine. It runs no other program.
 - **Prompts.** It submits a prompt in two cases, to your own session:
-  - `r`: `Implement and run the "<name>" workflow project (Conductor hands it off: call mcp__conductor__before_workflow first).`
+  - `r`: `Implement and run the "<name>" workflow project (Conductor hands it off: call mcp__workflow-conductor__before_workflow first).`
   - `/conductor <description>`: `Draft a workflow project: <description>`, your own words.
 
   `q` and the draft key only put a sentence in the prompt box for you to send. Conductor reads the prompt box only to see whether it is empty.
 - **Tools.** Conductor stands in for two tools, both its own: it adds them to Claude and answers every call to them itself, the only way a mod serves a tool it adds. It answers no other tool's call in that tool's place.
-  - `mcp__conductor__before_workflow`: Claude calls it before writing or running a Workflow script. Conductor asks you whether to design the workflow on the board first and answers with your choice, or with the one you told it to keep. Subagents and `-p` runs get the standard answer without a question.
-  - `mcp__conductor__project`: Claude reads and edits a project with it (`read`, `apply`, `write`, `attach`). The project's goal, blocks and file paths reach Claude this way and in notes on the prompts you send while the board is open.
+  - `mcp__workflow-conductor__before_workflow`: Claude calls it before writing or running a Workflow script. Conductor asks you whether to design the workflow on the board first and answers with your choice, or with the one you told it to keep. Subagents and `-p` runs get the standard answer without a question.
+  - `mcp__workflow-conductor__project`: Claude reads and edits a project with it (`read`, `apply`, `write`, `attach`). The project's goal, blocks and file paths reach Claude this way and in notes on the prompts you send while the board is open.
 
   Claude's own `Write`, `Edit` and `Workflow` calls run as usual. Conductor refreshes the board after a project file is written and tracks a started run. Two changes: a project file cannot be written or edited while that project is running, and a `Workflow` run no project claims gets one question, whether to draw it: a yes, or what you type instead, is added to the tool's result as a note to Claude.
 - **Hooks.** Besides its tools and its own pane, Conductor hooks:

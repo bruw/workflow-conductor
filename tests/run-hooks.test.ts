@@ -4,7 +4,7 @@ import type { RunState } from '../src/run/events'
 import { QUIET_MS } from '../src/run/tracker'
 
 const DIR = '/projects/demo/session/subagents/workflows/wf_1'
-const RUN = { plugin: 'conductor', key: 'run' } as const
+const RUN = { plugin: 'workflow-conductor', key: 'run' } as const
 
 const usage = (input: number, output: number) => ({
   input_tokens: input,

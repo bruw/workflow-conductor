@@ -1,5 +1,5 @@
 {
-  "name": "conductor",
+  "name": "workflow-conductor",
   "private": true,
   "type": "module",
   "scripts": {

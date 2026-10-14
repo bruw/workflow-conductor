@@ -22,20 +22,20 @@ const MAX_WIDTH = 96
 const MAX_ROWS = 400
 // Both hooks modules declare the run's atoms (an atom must be spelled in the file that reads it):
 // run.tsx writes them through the tracker, project.tsx reads them.
-const runAtom = atom({ plugin: 'conductor', key: 'run' } as const, emptyRunState())
-const clockAtom = atom({ plugin: 'conductor', key: 'runClock' } as const, 0)
+const runAtom = atom({ plugin: 'workflow-conductor', key: 'run' } as const, emptyRunState())
+const clockAtom = atom({ plugin: 'workflow-conductor', key: 'runClock' } as const, 0)
 /** The project the tracked run belongs to (handed off, or named as it); null for any other run. */
-const runProjectAtom = atom({ plugin: 'conductor', key: 'runProject' } as const, null)
-const uiAtom = atom({ plugin: 'conductor', key: 'runUi' } as const, { expanded: [], collapsed: [] })
+const runProjectAtom = atom({ plugin: 'workflow-conductor', key: 'runProject' } as const, null)
+const uiAtom = atom({ plugin: 'workflow-conductor', key: 'runUi' } as const, { expanded: [], collapsed: [] })
 /** When the run began and ended: stamped as its state is written. */
-const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initialTimes())
+const timesAtom = atom({ plugin: 'workflow-conductor', key: 'runTimes' } as const, initialTimes())
 /** The tracked run's script file, and the project drawn of that run after it started (project.tsx `attach` sets it). */
-const runScriptAtom = atom({ plugin: 'conductor', key: 'runScript' } as const, null)
+const runScriptAtom = atom({ plugin: 'workflow-conductor', key: 'runScript' } as const, null)
 // The designer's state (project.tsx owns it): read and written here only so the selection can follow the run.
-const projectAtom = atom({ plugin: 'conductor', key: 'project' } as const, null)
-const projectUiAtom = atom({ plugin: 'conductor', key: 'projectUi' } as const, initialUi())
+const projectAtom = atom({ plugin: 'workflow-conductor', key: 'project' } as const, null)
+const projectUiAtom = atom({ plugin: 'workflow-conductor', key: 'projectUi' } as const, initialUi())
 /** Where the designer is (project.tsx owns it): written here only so a run whose pane could not open is shown in the band. */
-const shellAtom = atom({ plugin: 'conductor', key: 'shell' } as const, initialShell())
+const shellAtom = atom({ plugin: 'workflow-conductor', key: 'shell' } as const, initialShell())
 
 // The reducer leaves optional fields present but undefined; the stored copy is plain data.
 const plain = (state: RunState): RunState => JSON.parse(JSON.stringify(state)) as RunState

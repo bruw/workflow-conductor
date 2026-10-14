@@ -15,7 +15,7 @@ import type { ProjectUi } from './session'
 import { KIND_TEACH, KNOB_HELP, TEACH, defaultName, fillOf, logicOf } from './teach'
 
 export const TOOL_NAME = 'project'
-export const TOOL_FULL_NAME = 'mcp__conductor__project'
+export const TOOL_FULL_NAME = 'mcp__workflow-conductor__project'
 export const PROJECT_DIR_HINT = `${PROJECT_DIR}/<name>.json`
 
 export const ACTIONS = ['read', 'apply', 'write', 'attach'] as const

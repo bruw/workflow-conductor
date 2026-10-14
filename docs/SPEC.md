@@ -67,7 +67,7 @@ scripts/render-graph.ts  layout + paint as text with no session (--list names th
 
 ## What Claude is sent
 
-**The project tool** (`mcp__conductor__project`, deferred, so every brief names it in full): `read`, `apply` (ops, all or nothing), `write` (the whole tree; a block whose id existed keeps it, every other gets a fresh one), `attach` (a `write` for the run tracked now). It edits the mod's atoms, so the pane redraws from state. The description is generated from `teach.ts` and must stay under the engine's cut at 4096 characters: what belongs to one field is said on that field in the schema.
+**The project tool** (`mcp__workflow-conductor__project`, deferred, so every brief names it in full): `read`, `apply` (ops, all or nothing), `write` (the whole tree; a block whose id existed keeps it, every other gets a fresh one), `attach` (a `write` for the run tracked now). It edits the mod's atoms, so the pane redraws from state. The description is generated from `teach.ts` and must stay under the engine's cut at 4096 characters: what belongs to one field is said on that field in the schema.
 
 **Claude edits the board as it is.** `revisions[name]` counts every change; an edit from an older revision is denied. After a change by hand the next prompt carries a note of what differs from the project Claude last saw (`changedNote`), which counts as a read; with no snapshot, `staleNote` says to read. The snapshot is kept only while Claude holds the project whole: an edit that stored text Claude never saw (a kind's fill), a compaction, `/clear` or a resume drop it. A `write` over an unread project that has blocks is denied. A deny states a reason, never an instruction: Claude does not take instructions from a refusal.
 
@@ -77,7 +77,7 @@ scripts/render-graph.ts  layout + paint as text with no session (--list names th
 
 **How it gets there.** `r` saves, tells the tracker, and submits the hand-off sentence itself. The mod's own prompt skips its own hooks and carries no context, so the sentence tells Claude to call `before_workflow`, which answers with the hand-off once. A sentence the person sends goes through the `prompt.submit` hook instead, which attaches the same text as context.
 
-**The offer** (`mcp__conductor__before_workflow`, not deferred: Claude calls a tool before a workflow only when its description is in every turn). It asks whether to design in Conductor first; an `Always …` answer is kept in `$.store` under `ask.`. No dialog, answer Standard: a subagent, no surface, a handoff waiting for its run. After a Conductor draft and until it is handed off, a call answers that the project waits unapproved.
+**The offer** (`mcp__workflow-conductor__before_workflow`, not deferred: Claude calls a tool before a workflow only when its description is in every turn). It asks whether to design in Conductor first; an `Always …` answer is kept in `$.store` under `ask.`. No dialog, answer Standard: a subagent, no surface, a handoff waiting for its run. After a Conductor draft and until it is handed off, a call answers that the project waits unapproved.
 
 **Draft** (`/conductor <words>`): the brief goes as the command's context, the prompt is submitted from a clock callback (refused inside `command.run`), Claude names the project in one `write`. The pane shows a waiting scene, then lays the blocks out a few per beat on its own, locked, until the turn ends.
 

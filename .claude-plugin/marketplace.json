@@ -1,12 +1,12 @@
 {
-  "name": "conductor",
+  "name": "workflow-conductor",
   "description": "Conductor: visual workflow planner for Claude Code",
   "owner": {
     "name": "Artur Turdiev"
   },
   "plugins": [
     {
-      "name": "conductor",
+      "name": "workflow-conductor",
       "source": "./"
     }
   ]

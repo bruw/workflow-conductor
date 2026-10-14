@@ -61,7 +61,7 @@ export type ConductorProjectUi = {
 
 declare module 'claude-code' {
   interface PluginState {
-    conductor: {
+    'workflow-conductor': {
       run: {
         runId?: string
         name?: string

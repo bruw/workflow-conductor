@@ -2,10 +2,10 @@
 // in Conductor first. No imports: chat.ts imports this file by way of handoff.ts.
 
 /** chat.ts `TOOL_FULL_NAME`, spelled again because chat.ts imports this file. */
-const PROJECT_TOOL = 'mcp__conductor__project'
+const PROJECT_TOOL = 'mcp__workflow-conductor__project'
 
 export const OFFER_TOOL_NAME = 'before_workflow'
-export const OFFER_TOOL_FULL_NAME = 'mcp__conductor__before_workflow'
+export const OFFER_TOOL_FULL_NAME = 'mcp__workflow-conductor__before_workflow'
 /** Sent with every turn (the tool is not deferred, or Claude never finds it), so it stays this short. */
 export const OFFER_TOOL_DESCRIPTION = 'Call this before authoring or running any Workflow script (multi-agent workflow); it asks the user how they want to proceed.'
 

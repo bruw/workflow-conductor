@@ -312,18 +312,18 @@ let runTracker: Tracker | undefined
 let draftTicker: { cancel: () => void } | null = null
 
 // Both hooks modules declare these (an atom must be spelled in the file that reads it): run.tsx writes them through the tracker.
-const runAtom = atom({ plugin: 'conductor', key: 'run' } as const, emptyRunState())
-const clockAtom = atom({ plugin: 'conductor', key: 'runClock' } as const, 0)
+const runAtom = atom({ plugin: 'workflow-conductor', key: 'run' } as const, emptyRunState())
+const clockAtom = atom({ plugin: 'workflow-conductor', key: 'runClock' } as const, 0)
 /** Null for a run that no handoff started. */
-const runProjectAtom = atom({ plugin: 'conductor', key: 'runProject' } as const, null)
-const projectAtom = atom({ plugin: 'conductor', key: 'project' } as const, null)
-const uiAtom = atom({ plugin: 'conductor', key: 'projectUi' } as const, initialUi())
-const splashedAtom = atom({ plugin: 'conductor', key: 'splashed' } as const, false)
-const draftBeatAtom = atom({ plugin: 'conductor', key: 'draftBeat' } as const, 0)
-const personaAtom = atom({ plugin: 'conductor', key: 'persona' } as const, 'idle')
-const timesAtom = atom({ plugin: 'conductor', key: 'runTimes' } as const, initialTimes())
-const shellAtom = atom({ plugin: 'conductor', key: 'shell' } as const, initialShell())
-const runScriptAtom = atom({ plugin: 'conductor', key: 'runScript' } as const, null)
+const runProjectAtom = atom({ plugin: 'workflow-conductor', key: 'runProject' } as const, null)
+const projectAtom = atom({ plugin: 'workflow-conductor', key: 'project' } as const, null)
+const uiAtom = atom({ plugin: 'workflow-conductor', key: 'projectUi' } as const, initialUi())
+const splashedAtom = atom({ plugin: 'workflow-conductor', key: 'splashed' } as const, false)
+const draftBeatAtom = atom({ plugin: 'workflow-conductor', key: 'draftBeat' } as const, 0)
+const personaAtom = atom({ plugin: 'workflow-conductor', key: 'persona' } as const, 'idle')
+const timesAtom = atom({ plugin: 'workflow-conductor', key: 'runTimes' } as const, initialTimes())
+const shellAtom = atom({ plugin: 'workflow-conductor', key: 'shell' } as const, initialShell())
+const runScriptAtom = atom({ plugin: 'workflow-conductor', key: 'runScript' } as const, null)
 
 const reason = (error: unknown): string => cutCells(sanitize(error instanceof Error ? error.message : String(error)), 160)
 
