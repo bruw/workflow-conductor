@@ -253,17 +253,10 @@ function chipsOf(node: ProjectNode): Seg[] {
 
 const MANY: readonly NodeType[] = ['pipeline', 'parallel']
 
-/** What a block hands on is what its last block does, where it is a phase: a phase only frames. */
-function lastOf(node: ProjectNode): ProjectNode {
-  const last = node.type === 'phase' ? node.children?.at(-1) : undefined
-  return last ? lastOf(last) : node
-}
-
-/** A pipeline's stages hand each item on. Elsewhere the next block waits for `from`: a barrier when `from` yields many results, by its type, never by what its fields say. For a phase, `parent` is the container the phase stands in. */
+/** A pipeline's stages hand each item on. Elsewhere the next block waits for `from`: a barrier when `from` yields many results, by its type, never by what its fields say. */
 function edgeKind(parent: NodeType | undefined, from: ProjectNode): EdgeKind {
   if (parent === 'pipeline') return 'stream'
-  const source = lastOf(from)
-  return MANY.includes(source.type) ? 'barrier' : 'stream'
+  return MANY.includes(from.type) ? 'barrier' : 'stream'
 }
 
 /** What a block needs and lacks, said in its place before `[not set]`. */
@@ -272,11 +265,6 @@ function missingOf(node: ProjectNode): string {
   if (needsStop(node) && clean(node.knobs?.stopCondition ?? '') === '') return 'Stop'
   if (node.type === 'start' && cardText(node) === '') return 'Goal'
   return ''
-}
-
-/** A phase only frames, so its blocks are no deeper; the frame of a view always adds one. */
-function depthStep(type: NodeType, depth: number): number {
-  return type === 'phase' && depth > 0 ? 0 : 1
 }
 
 type Arm = { word: 'IF' | 'ELSE'; when: string }
@@ -342,8 +330,6 @@ type Ctx = {
   asked: Readonly<Record<string, number>>
   carousels: Record<string, GraphCarousel>
   locked: boolean
-  /** By phase id: the type of the container the phase stands in (through any phase around it); undefined at the top level. */
-  lanes: Map<string, NodeType | undefined>
 }
 
 type Box = {
@@ -515,7 +501,7 @@ function openBox(node: ProjectNode, w: number, depth: number, parent: ProjectNod
   let gap = 0
   let range = ''
   let body = 0
-  const deeper = depth + depthStep(node.type, depth)
+  const deeper = depth + 1
   if (flow === 'chain') {
     kids = kin.map((child, i) => measure(child, inner, within, deeper, node, i, ctx))
     // Before the first block there is no arrow row for the open slot to stand on.
@@ -623,13 +609,6 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
     asked: options.scroll ?? {},
     carousels: {},
     locked: options.locked === true,
-    lanes: new Map(),
-  }
-  // Parents come before their children: a phase in a phase takes the lane that one has.
-  for (const row of index.rows) {
-    if (row.node.type !== 'phase') continue
-    const around = row.parentId === undefined ? undefined : index.byId.get(row.parentId)?.node
-    ctx.lanes.set(row.node.id, around?.type === 'phase' ? ctx.lanes.get(around.id) : around?.type)
   }
 
   const cards: GraphCard[] = []
@@ -673,8 +652,6 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
     const place = (at: number): Place => (parentId === undefined ? { index: at } : { parentId, index: at })
     const count = host ? (host.box.node.children ?? []).length : kids.length
     const flow = host ? childFlow(host.box.node.type) : 'chain'
-    // A phase only frames: its blocks follow each other as the container around it has them do.
-    const lane = host?.box.node.type === 'phase' ? ctx.lanes.get(host.card.id) : host?.box.node.type
     const arrowX = ox + Math.floor((lw - 1) / 2)
     const lead = host ? host.box.lead : isOpen(place(0)) && count > 0 ? 1 : 0
     const base = { target: false }
@@ -711,7 +688,7 @@ export function layoutGraph(project: Project, options: GraphOptions): GraphLayou
       for (const [i, kid] of kids.entries()) {
         const before = kids[i - 1]
         if (before) {
-          const kind = edgeKind(lane, before.node)
+          const kind = edgeKind(host?.box.node.type, before.node)
           edges.push({ kind, from: before.node.id, to: kid.node.id, x: arrowX, y })
           const open = isOpen(place(i))
           // Two cells right of the arrow (a barrier's `all` is on its left).
@@ -1099,7 +1076,7 @@ export function viewShows(project: Project, viewRootId: string | null, id: strin
     if (!node) return false
     const inner = list ? width - 4 : width
     width = list && childFlow(list.type) === 'stack' ? stackShare(inner, (list.children ?? []).length, list.type).share : inner
-    depth += list ? depthStep(list.type, depth) : 1
+    depth += 1
     if (!drawnOpen(depth, width)) return false
     list = node
   }

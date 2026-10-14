@@ -58,7 +58,7 @@ export function replayProjectEvents(project: Project, name: string = project.nam
   const runId = `replay:project:${name}`
   const events: RunEvent[] = [{ kind: 'run-start', runId, name }]
   const rows = flatten(project)
-  const leaves = rows.filter(row => (row.node.children?.length ?? 0) === 0 && row.node.type !== 'code' && row.node.type !== 'start' && row.node.type !== 'phase')
+  const leaves = rows.filter(row => (row.node.children?.length ?? 0) === 0 && row.node.type !== 'code' && row.node.type !== 'start')
   const phaseOf = new Map<string, string>()
   let phase = ''
   for (const row of rows) {

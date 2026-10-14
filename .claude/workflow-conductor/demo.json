@@ -12,76 +12,69 @@
       }
     },
     {
-      "id": "n28",
-      "type": "phase",
-      "name": "design",
+      "id": "n4",
+      "type": "pipeline",
+      "name": "deep read",
+      "logic": "Each source is read and checked independently.",
+      "knobs": {
+        "oncePer": "deduped sources"
+      },
       "children": [
         {
-          "id": "n4",
-          "type": "pipeline",
-          "name": "deep read",
-          "logic": "Each source is read and checked independently.",
+          "id": "n2",
+          "type": "agent",
+          "name": "searchs",
+          "logic": "One agent per search angle",
           "knobs": {
-            "oncePer": "deduped sources"
+            "prompt": "Search for sources on the question using only this angle",
+            "output": "{ sources: [{ ref, why }] }",
+            "model": "opus",
+            "effort": "low"
+          }
+        },
+        {
+          "id": "n30",
+          "type": "agent",
+          "name": "1",
+          "logic": "1"
+        },
+        {
+          "id": "n6",
+          "type": "agent",
+          "name": "check claims",
+          "logic": "Drop claims the source does not actually support.",
+          "knobs": {
+            "prompt": "Try to refute each claim against the quoted source",
+            "model": "sonnet",
+            "effort": "low"
+          }
+        },
+        {
+          "id": "n1",
+          "type": "parallel",
+          "kind": "sweep",
+          "name": "multi-modal sweep",
+          "logic": "Each searcher is blind to the others, so expect overlap between their results.",
+          "knobs": {
+            "oncePer": "4 search angles: by container, by content, by entity, by time"
           },
           "children": [
             {
-              "id": "n2",
+              "id": "n29",
               "type": "agent",
-              "name": "searchs",
-              "logic": "One agent per search angle",
-              "knobs": {
-                "prompt": "Search for sources on the question using only this angle",
-                "output": "{ sources: [{ ref, why }] }",
-                "model": "opus",
-                "effort": "low"
-              }
-            },
-            {
-              "id": "n30",
-              "type": "agent",
-              "name": "1",
-              "logic": "1"
-            },
-            {
-              "id": "n6",
-              "type": "agent",
-              "name": "check claims",
-              "logic": "Drop claims the source does not actually support.",
-              "knobs": {
-                "prompt": "Try to refute each claim against the quoted source",
-                "model": "sonnet",
-                "effort": "low"
-              }
-            },
-            {
-              "id": "n1",
-              "type": "parallel",
-              "kind": "sweep",
-              "name": "multi-modal sweep",
-              "logic": "Each searcher is blind to the others, so expect overlap between their results.",
-              "knobs": {
-                "oncePer": "4 search angles: by container, by content, by entity, by time"
-              },
-              "children": [
-                {
-                  "id": "n29",
-                  "type": "agent",
-                  "name": "agent"
-                }
-              ]
-            },
-            {
-              "id": "n5",
-              "type": "agent",
-              "name": "read source",
-              "logic": "One reader per source.",
-              "knobs": {
-                "prompt": "Read the source in full and extract the claims that bear on the question, with quotes",
-                "output": "{ claims: [{ claim, quote, confidence }] }"
-              }
+              "name": "agent"
             }
           ]
+        },
+        {
+          "id": "n5",
+          "type": "agent",
+          "name": "read source",
+          "logic": "One reader per source.",
+          "knobs": {
+            "prompt": "Read the source in full and extract the claims that bear on the question, with quotes",
+            "output": "{ claims: [{ claim, quote, confidence }] }"
+          }
         }
       ]
     },

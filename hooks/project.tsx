@@ -2362,7 +2362,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       ? [
           // A block just added opens with its name field empty: the default name shows dim and stays if nothing is typed.
           ...(hasName(node) ? [{ key: NAME_KEY, knob: 'name', label: FIELD_LABEL.name, value: typed(NAME_KEY, ui.freshId === node.id ? '' : node.name), placeholder: node.name }] : []),
-          // A phase is its name and no more: it has a logic field only for logic it already carries.
+          // The start block has a logic field only for logic it already carries.
           ...(hasLogic(node) ? [{ key: LOGIC_KEY, knob: 'logic', label: FIELD_LABEL.logic, value: typed(LOGIC_KEY, node.logic ?? ''), placeholder: placeholderOf(node, 'logic') }] : []),
           ...textKnobs.map((knob: TextKnob) => ({
             key: `${KNOB_KEY}${knob}`,

@@ -86,7 +86,7 @@ test('a container of a kind that starts with blocks is added with them, each wit
 })
 
 test('only the container types accept children', async () => {
-  expect([...CONTAINER_TYPES].sort()).toEqual(['branch', 'loop', 'parallel', 'phase', 'pipeline'])
+  expect([...CONTAINER_TYPES].sort()).toEqual(['branch', 'loop', 'parallel', 'pipeline'])
 
   for (const type of NODE_TYPES.filter(one => one !== 'start')) {
     const holder = addNode(emptyProject('demo'), { type }, { index: 99 })

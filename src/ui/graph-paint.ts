@@ -8,12 +8,12 @@ import { CRUMB_PAD, CRUMB_SEP, EMPTY_KEYS, EMPTY_NOTE, UNMAPPED_ID, edgeMarks, g
 import type { GraphCard, GraphDrop, GraphLayout, Seg } from './graph-layout'
 import { FAILED, fmtTokens, spinnerFrame } from './rail'
 import { cellWidth, clip, glyphs, plainCells } from './text'
-import { ACCENT, ACTIVE, FADED, GLYPH, PHASE_GROUND, RULE } from './theme'
+import { ACCENT, ACTIVE, FADED, GLYPH, RULE } from './theme'
 
 /** How a run of cells is drawn while the pointer is on it, or on any other of its `scope`. */
 export type Hover = { scope: string; color: string; bold: true; inverse?: true }
 
-/** `ground` is the colour behind the cells where it is not the pane's own: a phase's. */
+/** `ground` is the colour behind the cells where it is not the pane's own. */
 export type Span = { text: string; color?: string; bold?: true; inverse?: true; hover?: Hover; ground?: string }
 
 type Look = Omit<Span, 'text' | 'ground'>
@@ -87,18 +87,17 @@ export type GraphPaintOptions = {
 
 type Frame = readonly [string, string, string, string, string, string]
 
-/** A chain's line is dashed, a stack's dotted; a phase has none at rest. A cell is twice as tall as wide, so a horizontal glyph has half the dashes of its vertical one: the pitch is the same along both sides. */
-const FRAMES: Record<'leaf' | 'chain' | 'stack' | 'phase', { rest: Frame; selected: Frame }> = {
+/** A chain's line is dashed, a stack's dotted. A cell is twice as tall as wide, so a horizontal glyph has half the dashes of its vertical one: the pitch is the same along both sides. */
+const FRAMES: Record<'leaf' | 'chain' | 'stack', { rest: Frame; selected: Frame }> = {
   leaf: { rest: ['╭', '─', '╮', '│', '╰', '╯'], selected: ['┏', '━', '┓', '┃', '┗', '┛'] },
   chain: { rest: ['┌', '╴', '┐', '╎', '└', '┘'], selected: ['┏', '╸', '┓', '╏', '┗', '┛'] },
   stack: { rest: ['┌', '╌', '┐', '┊', '└', '┘'], selected: ['┏', '╍', '┓', '┋', '┗', '┛'] },
-  phase: { rest: [' ', ' ', ' ', ' ', ' ', ' '], selected: ['┏', '━', '┓', '┃', '┗', '┛'] },
 }
 /** A leaf in the pointer's hand. */
 const LIFTED: Frame = ['╭', '╴', '╮', '╎', '╰', '╯']
 
 function shapeOf(card: Pick<GraphCard, 'type' | 'flow'>): keyof typeof FRAMES {
-  return card.type === 'phase' ? 'phase' : (card.flow ?? 'leaf')
+  return card.flow ?? 'leaf'
 }
 
 /** `↓` hands each result on as it arrives, `all ⇓` waits for all of them. */
@@ -153,7 +152,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
   const panY = Math.trunc(options.panY) || 0
   const chars: string[][] = Array.from({ length: height }, () => new Array<string>(width).fill(' '))
   const looks: number[][] = Array.from({ length: height }, () => new Array<number>(width).fill(0))
-  const grounds: boolean[][] = Array.from({ length: height }, () => new Array<boolean>(width).fill(false))
   const table: Look[] = [{}]
   const known = new Map<string, number>([['{}', 0]])
   const look = (wanted: Look): number => {
@@ -204,15 +202,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     if (bound === null) return write(x, row + top, text, style)
     if (y < bound.y || y >= bound.y + bound.h) return
     write(x, row + top, text, style, bound.x, bound.x + bound.w)
-  }
-  const shade = (x: number, y: number, w: number, h: number, on: boolean): void => {
-    for (let line = y; line < y + h; line++) {
-      const row = line - panY
-      if (row < 0 || row >= room || (bound !== null && (line < bound.y || line >= bound.y + bound.h))) continue
-      const cells = grounds[row + top]
-      const to = Math.min(width, x + w, bound === null ? Infinity : bound.x + bound.w)
-      if (cells) for (let column = Math.max(0, x, bound?.x ?? 0); column < to; column++) cells[column] = on
-    }
   }
 
   const runs = options.run ? graphRuns(layout, options.run) : undefined
@@ -286,16 +275,12 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
 
   // A card on the move is drawn inside its container's border only, as that one is inside its own (parents come before their children).
   const insides = new Map<string, { x: number; y: number; w: number; h: number }>()
-  // Whether a card's cells stand on the phase ground: a phase turns it over, every other card has its container's.
-  const shaded = new Map<string, boolean>()
   for (const card of layout.cards) {
     const offset = offsets[card.id]
     const x = card.x + (offset?.dx ?? 0)
     const y = card.y + (offset?.dy ?? 0)
     // A card growing or shrinking to its size is drawn at the height it has reached.
     const h = Math.max(2, card.h + (offset?.dh ?? 0))
-    const around = card.parentId !== undefined && shaded.get(card.parentId) === true
-    shaded.set(card.id, card.type === 'phase' ? !around : around)
     // A card with no row in the window has no cell to write. (While cards slide each is gone through: one may bound what it holds.)
     if (!moving && (y - panY >= room || y + h - panY <= 0)) continue
     const tone = toneOf(card)
@@ -306,7 +291,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
       const y0 = Math.max(y + 1, bound?.y ?? y + 1)
       insides.set(card.id, { x: x0, y: y0, w: Math.max(0, Math.min(x + card.w - 1, bound ? bound.x + bound.w : Infinity) - x0), h: Math.max(0, Math.min(y + h - 1, bound ? bound.y + bound.h : Infinity) - y0) })
     }
-    if (card.type === 'phase' && !options.plain) shade(x, y, card.w, h, !around)
     drawTop(card, x, y, tone)
     for (let row = 1; row < h - 1; row++) {
       put(x, y + row, frame[3], edge)
@@ -373,11 +357,10 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     const card = layout.cards.find(one => one.id === drag.id)
     if (card) {
       const chip = ` ${card.id} ${clip(card.title, 16)}${drag.hint ? ` · ${drag.hint}` : ''} `
-      // Kept inside the window: the words say what a release does. Over any card, on the pane's own ground.
+      // Kept inside the window: the words say what a release does.
       const wide = cellWidth(chip)
       const at = Math.max(0, Math.min(drag.x + 2, width - wide))
       write(at, drag.y, chip, look({ color: 'claude', bold: true, inverse: true }))
-      grounds[drag.y]?.fill(false, at, at + wide)
     }
   }
 
@@ -393,7 +376,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
       const first = pinned[0]
       if (!first) {
         put(0, panY, ' '.repeat(width), 0)
-        shade(0, panY, width, 1, false)
         put(1, panY, marks.above, faint)
       }
       for (const card of pinned) drawTop(card, card.x, panY, toneOf(card))
@@ -404,7 +386,6 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     }
     if (marks.below !== '') {
       put(0, panY + room - 1, ' '.repeat(width), 0)
-      shade(0, panY + room - 1, width, 1, false)
       put(1, panY + room - 1, marks.below, faint)
     }
   }
@@ -423,15 +404,14 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
 
   return chars.map((line, row) => {
     const tone = looks[row] ?? []
-    const ground = grounds[row] ?? []
     let end = line.length
-    while (end > 0 && line[end - 1] === ' ' && tone[end - 1] === 0 && !ground[end - 1]) end--
+    while (end > 0 && line[end - 1] === ' ' && tone[end - 1] === 0) end--
     const spans: Span[] = []
     let start = 0
     for (let at = 1; at <= end; at++) {
-      // The second cell of a wide grapheme goes with its first, whatever ground it stands on.
-      if (at < end && ((tone[at] === tone[start] && ground[at] === ground[start]) || line[at] === '')) continue
-      spans.push({ text: line.slice(start, at).join(''), ...table[tone[start] ?? 0], ...(ground[start] ? { ground: PHASE_GROUND } : {}) })
+      // The second cell of a wide grapheme goes with its first.
+      if (at < end && (tone[at] === tone[start] || line[at] === '')) continue
+      spans.push({ text: line.slice(start, at).join(''), ...table[tone[start] ?? 0] })
       start = at
     }
     return spans.length > 0 ? spans : [{ text: ' ' }]

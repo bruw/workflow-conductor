@@ -46,7 +46,7 @@ function producers(node: ProjectNode): ProjectNode[] {
 }
 
 /** Containers whose blocks run one after the other: a block in one receives what the block before it made. */
-const CHAINS: readonly string[] = ['pipeline', 'loop', 'phase']
+const CHAINS: readonly string[] = ['pipeline', 'loop']
 
 // Whether anything reaches `node` to work on: a block before it in a chain around it, a fan-out over items, or the
 // round before in a loop. The `start` block is no block before it: it makes no result to check.

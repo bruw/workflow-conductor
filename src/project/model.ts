@@ -10,9 +10,8 @@ export const NODE_TYPES = [
   'branch',
   'subworkflow',
   'code',
-  // frame: where the workflow starts (its goal and its args), and a group that only frames blocks
+  // frame: where the workflow starts (its goal and its args)
   'start',
-  'phase',
 ] as const
 
 export type NodeType = (typeof NODE_TYPES)[number]
@@ -79,7 +78,7 @@ export type Row = { node: ProjectNode; depth: number; parentId: string | undefin
 
 export type WalkInfo = { parent: ProjectNode | undefined; depth: number; index: number }
 
-export const CONTAINER_TYPES: readonly NodeType[] = ['pipeline', 'parallel', 'loop', 'branch', 'phase']
+export const CONTAINER_TYPES: readonly NodeType[] = ['pipeline', 'parallel', 'loop', 'branch']
 
 export function kindsOf(type: NodeType): readonly Kind[] {
   return (KINDS as Partial<Record<NodeType, readonly Kind[]>>)[type] ?? []

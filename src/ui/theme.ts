@@ -31,8 +31,5 @@ export const ACCENT = {
   subworkflow: 'merged',
   code: 'ide',
   start: 'bashBorder',
-  phase: 'text',
 } as const
 
-/** A theme key, so the ground follows the person's theme; not in `ThemeKey`, but the engine resolves it. */
-export const PHASE_GROUND = 'userMessageBackground'

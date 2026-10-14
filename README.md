@@ -84,9 +84,9 @@ Then press `r`. Claude confirms the design, asks what to run it on, writes a rea
 
 ## The parts
 
-Nine blocks to rule them all. 
+Eight blocks to rule them all. 
 Three do work: `agent`, `code`, `subworkflow`. 
-Five hold other blocks: `pipeline`, `parallel`, `loop`, `branch`, `phase`. 
+Four hold other blocks: `pipeline`, `parallel`, `loop`, `branch`. 
 And `start`, which carries the goal.
 
 A pattern is a **kind** of a block, and picking one fills in what the pattern needs:

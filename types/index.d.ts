@@ -3,7 +3,7 @@
 
 export type ConductorProjectNode = {
   id: string
-  type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'start' | 'phase'
+  type: 'agent' | 'pipeline' | 'parallel' | 'loop' | 'branch' | 'subworkflow' | 'code' | 'start'
   kind?:
     | 'task' | 'scout' | 'check' | 'verify' | 'judge' | 'critic' | 'merge' | 'classify'
     | 'custom' | 'count' | 'pass' | 'dry' | 'converged' | 'target' | 'budget'

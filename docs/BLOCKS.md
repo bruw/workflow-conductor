@@ -1,6 +1,6 @@
 # Blocks and kinds
 
-Nine blocks for creating workflows + **kinds** that represent useful patterns
+Eight blocks for creating workflows + **kinds** that represent useful patterns
 
 The source of truth is `KINDS` in `src/project/model.ts` and `KIND_TEACH` / `KNOBS_BY_TYPE` in `src/project/teach.ts`.
 
@@ -18,7 +18,6 @@ The same for every kind of a block: a kind adds no field. A field's key in the f
 | parallel | name · logic · once per | |
 | loop | name · logic · stop condition | |
 | branch | name · logic | |
-| phase | name | |
 
 - A block directly inside a branch is an arm and also has a condition, whatever its type.
 - Everything but `name` and `logic` sits under `knobs`, with `isolation` and `agentType`: those two have no control, Claude sets them and the pane shows them read-only.
@@ -52,7 +51,7 @@ Prefill is written into the field when the block is added; a hint shows while th
 | | guard | one arm: run it or skip it | | condition: when it runs; otherwise nothing runs |
 | | route | the arm whose label a classify chose | | condition: the label that picks this arm |
 
-`pipeline`, `phase`, `code`, `subworkflow` and `start` have no kinds. A `code` block's logic field hints at what it is for: dedup, filter, top-K, merge.
+`pipeline`, `code`, `subworkflow` and `start` have no kinds. A `code` block's logic field hints at what it is for: dedup, filter, top-K, merge.
 
 ## Rules
 

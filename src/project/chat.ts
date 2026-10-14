@@ -134,9 +134,9 @@ export function visualizeBrief(scriptPath: string, asked: boolean, name: string 
     `Conductor: ${asked ? 'the user chose to see' : 'the user chose Always visualize earlier, so they see'} this workflow run as a project on the Conductor board. The run goes on meanwhile: do not change, re-run or stop the script.`,
     '',
     `Draw the project OF the script that is running with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "attach", ${name === undefined ? 'a short kebab-case name' : `name "${name}" (the workflow's own name as a project's: the next run of this script is then shown on this project without a question)`} and the nodes, the start block first with the workflow's goal in its \`goal\` knob.`,
-    "- The nodes mirror the script's real structure: its phases, pipelines, parallels, loops, branches and agents, no more.",
+    "- The nodes mirror the script's real structure: its pipelines, parallels, loops, branches and agents, no more. A phase is no block: its blocks stand at the top level in its place.",
     '- `match` ties the run to the blocks. It goes on the INNERMOST block an agent belongs to, and a label on one block only (never also on the container around it): the exact `label` of each agent() the block stands for, or the fixed start of the label and a * ("review *") where the script builds it at runtime.',
-    "- Where the script groups its agents by `phase`, the top-level block of each phase gets that phase's exact title in `match`.",
+    "- Where the script groups its agents by `phase`, the first top-level block of each phase gets that phase's exact title in `match`.",
     `The script, if you do not hold its text: ${scriptPath}`,
     'The answer lists the agent labels no block took: fix `match` and call attach again under the same name. Afterwards tell the user in one or two lines what the board shows.',
   ].join('\n')

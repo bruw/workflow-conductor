@@ -135,19 +135,6 @@ export const TEACH: Record<NodeType, Teach> = {
       'Spawns no agent and costs no tokens.',
     ],
   },
-  phase: {
-    glyph: '▭',
-    name: 'phase',
-    hint: 'Named group, no logic',
-    when: 'a long project reads better in named parts: gather, check, write up',
-    card: [
-      'A frame with a name and nothing else: no knobs, no fan-out, no condition.',
-      'Its blocks run one after the other where the phase stands, exactly as if it were not there.',
-      'Holds any block. At the top level its name is also the name of that part of the run.',
-      'For steps that each item takes on its own, use a pipeline: a phase adds no behaviour.',
-      'Spawns no agent and costs no tokens.',
-    ],
-  },
 }
 
 export type BlockRef = { type: NodeType; kind?: Kind }
@@ -469,7 +456,6 @@ export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
   parallel: ['oncePer'],
   loop: ['stopCondition'],
   branch: [],
-  phase: [],
 }
 
 /** The kinds of agent whose name already says the task: they are not asked for a brief. */
@@ -483,9 +469,9 @@ export function offers(block: BlockRef, knob: keyof Knobs): boolean {
   return KNOBS_BY_TYPE[block.type].includes(knob)
 }
 
-/** A phase is its name and no more, and the start block its goal and args: only logic it already carries is shown. */
+/** The start block is its goal and args: only logic it already carries is shown. */
 export function hasLogic(node: { type: NodeType; logic?: string }): boolean {
-  return (node.type !== 'phase' && node.type !== 'start') || (node.logic ?? '').trim() !== ''
+  return node.type !== 'start' || (node.logic ?? '').trim() !== ''
 }
 
 /** The start block is named for what it is. */
@@ -550,7 +536,6 @@ export const PALETTE: PaletteEntry[] = [
   { type: 'parallel', group: 'holds' },
   { type: 'loop', group: 'holds' },
   { type: 'branch', group: 'holds' },
-  { type: 'phase', group: 'holds' },
 ]
 
 export function groupOf(type: NodeType): PaletteGroup {
