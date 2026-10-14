@@ -15,9 +15,13 @@ It costs like a Plan, and can save *millions of tokens* over a workflow done bad
 
 ## What you get
 Design: draw it yourself, start from a template, or let Claude draft it from a description and refine it in plain words.
+
 Check: common design mistakes are flagged on the graph before you run.
+
 Run: hands the spec to Claude to implement and run
+
 Monitor: progress, failures and token cost show up on the plan you made.
+
 Learn: block kinds are named multi-agent patterns, and you can compare each design with the script it produced. That makes it a practical way to learn how good workflows are built.
 
 
