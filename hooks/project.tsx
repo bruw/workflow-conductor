@@ -481,8 +481,7 @@ const home = async ($: EngineInterface): Promise<void> => {
 }
 
 /** Where the element cannot be reached at all the field is given up and `fallback` is said. */
-// A declaration, not a typed arrow: the plugin directory reads an arrow taking `$` with a return type as a hook.
-function landOn($: EngineInterface, target: () => string, fallback: string): void {
+const landOn = ($: EngineInterface, target: () => string, fallback: string): void => {
   const land = async (tries: number, last: string): Promise<void> => {
     const key = target()
     // Said before the move is asked: a letter that reaches the element before the answer does is its text.
