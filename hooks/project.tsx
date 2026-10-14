@@ -480,32 +480,32 @@ const home = async ($: EngineInterface): Promise<void> => {
   $.ui.invalidate('ui.render')
 }
 
+/** What to land on: its key is made anew on each try, as letters typed meanwhile draw it under another. */
+type Spot = { base: string; id: string } | 'rename' | 'picker'
+const spotKey = (spot: Spot): string => (spot === 'rename' ? renameKey() : spot === 'picker' ? pickerKey() : fieldKey(spot.base, spot.id))
+
 /** Where the element cannot be reached at all the field is given up and `fallback` is said. */
-// No return type: the plugin directory reads a typed arrow taking `$` as a hook, and does not follow `$` into a function declaration.
-const landOn = ($: EngineInterface, target: () => string, fallback: string) => {
-  const land = async (tries: number, last: string): Promise<void> => {
-    const key = target()
-    // Said before the move is asked: a letter that reaches the element before the answer does is its text.
-    ringTo = key
-    const moved = await $.ui.focus({ requestId: PROJECT_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
-    if (moved.deny === undefined && key === target()) {
-      ringOn = key
-      if (ringTo === key) ringTo = ''
-      $.ui.invalidate('ui.render')
-
-      return
-    }
-    // Refused: not drawn yet, or drawn anew under another address meanwhile (letters typed on the way do that): that one counts from the start.
-    const left = key === last ? tries - 1 : LAND_TRIES
-    if (left > 0) {
-      $.clock.after(left > LAND_TRIES - 2 ? FOCUS_DELAY_MS : FOCUS_DELAY_MS * 2, () => void land(left, key))
-
-      return
-    }
+const landOn = async ($: EngineInterface, spot: Spot, fallback: string, tries = LAND_TRIES, last = ''): Promise<void> => {
+  const key = spotKey(spot)
+  // Said before the move is asked: a letter that reaches the element before the answer does is its text.
+  ringTo = key
+  const moved = await $.ui.focus({ requestId: PROJECT_PANE_ID, key }).catch((error: unknown) => ({ deny: reason(error) }))
+  if (moved.deny === undefined && key === spotKey(spot)) {
+    ringOn = key
     if (ringTo === key) ringTo = ''
-    await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, renaming: null, notice: fallback }))
+    $.ui.invalidate('ui.render')
+
+    return
   }
-  void land(LAND_TRIES, '')
+  // Refused: not drawn yet, or drawn anew under another address meanwhile (letters typed on the way do that): that one counts from the start.
+  const left = key === last ? tries - 1 : LAND_TRIES
+  if (left > 0) {
+    $.clock.after(left > LAND_TRIES - 2 ? FOCUS_DELAY_MS : FOCUS_DELAY_MS * 2, () => void landOn($, spot, fallback, left, key))
+
+    return
+  }
+  if (ringTo === key) ringTo = ''
+  await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, renaming: null, notice: fallback }))
 }
 
 /** What `e` does, for the ways that are not a key: the Down arrow from the catcher, a click on a field at rest. */
@@ -515,7 +515,7 @@ const openFields = async ($: EngineInterface, base?: string): Promise<void> => {
   const node = project === null || ui.selectedId === null ? undefined : findNode(project, ui.selectedId)
   if (ui.status !== 'ready' || !node || ui.handed || (await lockedNow($))) return
   if (!ui.editing || ui.help > 0 || ui.picker !== null) await update($, uiAtom, held => ({ ...held, editing: true, help: 0, picker: null, detailHidden: false, confirmId: null }))
-  landOn($, () => fieldKey(base ?? firstField(node), node.id), `edit: ${EDIT_HINT}`)
+  void landOn($, { base: base ?? firstField(node), id: node.id }, `edit: ${EDIT_HINT}`)
 }
 
 /** After a click on the graph, until the ring is on the catcher: the engine gives a letter typed on a Button to the prompt box, and the keyboard with it (`prompt.edit` makes it a key). */
@@ -572,15 +572,15 @@ const tidySoon = ($: EngineInterface): void => {
     // Drawn anew, a field keeps the cursor of the one before it, short of the end by the letters added. The ring is
     // stepped off it and on again: landing puts the cursor at the end.
     const at = ringOn
-    const again = (target: () => string): void => {
+    const again = (spot: Spot): void => {
       const off = $.ui.focus({ requestId: PROJECT_PANE_ID, key: drawnCatcher })
-      void off.then(() => landOn($, target, `edit: ${EDIT_HINT}`)).catch(() => undefined)
+      void off.then(() => landOn($, spot, `edit: ${EDIT_HINT}`)).catch(() => undefined)
     }
     if (Object.entries(pins).some(([element, pin]) => pin.head !== '' && isField(element))) {
       redrawFields()
       tidied = true
       const [base = '', id = ''] = (at ?? '').replace(/#\d+$/, '').split('@')
-      if (at !== undefined && isField(at)) again(() => fieldKey(base, id))
+      if (at !== undefined && isField(at)) again({ base, id })
     }
     if (tidied) $.ui.invalidate('ui.render')
   })
@@ -868,7 +868,7 @@ const pick = async ($: EngineInterface, choice: Partial<PickRow>): Promise<void>
   // A block opened on its kinds: the filter is drawn anew, empty, for the kinds' list.
   if (step.ui.picker?.block !== undefined && step.ui.picker.query === '') pickGen++
   const fresh = step.changed && step.ui.editing ? step.ui.freshId : null
-  if (fresh !== null) landOn($, () => fieldKey(NAME_KEY, fresh), `edit: ${EDIT_HINT}`)
+  if (fresh !== null) void landOn($, { base: NAME_KEY, id: fresh }, `edit: ${EDIT_HINT}`)
   else if (!step.ui.picker) await home($)
 }
 
@@ -1162,7 +1162,7 @@ const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   } else if (op === 'edit' && marked) {
     renameGen++
     await update($, uiAtom, held => ({ ...held, renaming: marked.id, help: 0, notice: null }))
-    landOn($, renameKey, 'rename: click the name to type in it')
+    void landOn($, 'rename', 'rename: click the name to type in it')
 
     return false
   } else await say($, unboundNotice(key))
@@ -1237,10 +1237,10 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
     return false
   }
   const edited = op === 'edit' && step.ui.editing && step.project && step.ui.selectedId !== null ? findNode(step.project, step.ui.selectedId) : undefined
-  if (edited) landOn($, () => fieldKey(firstField(edited), edited.id), `edit: ${EDIT_HINT}`)
+  if (edited) void landOn($, { base: firstField(edited), id: edited.id }, `edit: ${EDIT_HINT}`)
   if ((op === 'add' || op === 'retype') && step.ui.picker) {
     pickGen++
-    landOn($, pickerKey, op === 'add' ? 'new block: click the filter to type in it' : 'block: click the filter to type in it')
+    void landOn($, 'picker', op === 'add' ? 'new block: click the filter to type in it' : 'block: click the filter to type in it')
   }
 
   return true
@@ -2439,7 +2439,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       const step = await commit($, (before, held, context) => openRetype(before, held, target.id, context))
       if (!step.ui.picker) return
       pickGen++
-      landOn($, pickerKey, 'block: click the filter to type in it')
+      void landOn($, 'picker', 'block: click the filter to type in it')
     }
 
     const thin: Item = { rows: 1, el: <Text color={RULE}>{'─'.repeat(detailW)}</Text> }
