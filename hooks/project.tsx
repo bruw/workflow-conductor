@@ -498,7 +498,11 @@ function landOn($: EngineInterface, target: () => string, fallback: string): voi
     }
     // Refused: not drawn yet, or drawn anew under another address meanwhile (letters typed on the way do that): that one counts from the start.
     const left = key === last ? tries - 1 : LAND_TRIES
-    if (left > 0) return void $.clock.after(left > LAND_TRIES - 2 ? FOCUS_DELAY_MS : FOCUS_DELAY_MS * 2, () => void land(left, key))
+    if (left > 0) {
+      $.clock.after(left > LAND_TRIES - 2 ? FOCUS_DELAY_MS : FOCUS_DELAY_MS * 2, () => void land(left, key))
+
+      return
+    }
     if (ringTo === key) ringTo = ''
     await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, renaming: null, notice: fallback }))
   }
@@ -795,7 +799,7 @@ const stopDraftTicker = (): void => {
 const draftBeat = async ($: EngineInterface): Promise<void> => {
   const ui = await read($, uiAtom)
   if ((ui.drafting ?? null) === null) return stopDraftTicker()
-  await update($, draftBeatAtom, beat => beat + 1)
+  await update($, draftBeatAtom, beats => beats + 1)
   const project = await read($, projectAtom)
   const shownSoFar = ui.reveal ?? null
   if (ui.drafting !== 'show' || shownSoFar === null || project === null) return

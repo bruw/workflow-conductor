@@ -7,17 +7,19 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION="${CONDUCTOR_SESSION:-conductor-dev}"
 COLS="${CONDUCTOR_COLS:-160}"
 ROWS="${CONDUCTOR_ROWS:-50}"
-# A fixed path lets capture.sh find the log: without --debug-file it goes to ~/.claude/debug/<session-id>.txt.
+# A fixed path lets capture.sh find the log: without --debug-file its name is the session id.
 DEBUG_LOG="$REPO/.capture/debug.log"
 
 # CONDUCTOR_EXTRA_PLUGIN_DIRS: more mods to load beside this one, as colon-separated paths.
-EXTRA=""
-IFS=':' read -ra EXTRA_DIRS <<< "${CONDUCTOR_EXTRA_PLUGIN_DIRS:-}"
-# An empty array is unbound under `set -u` before bash 4.4. Paths are quoted for the shell tmux runs the command in.
-for dir in ${EXTRA_DIRS[@]+"${EXTRA_DIRS[@]}"}; do
+# They collect in "$@", which `set -u` allows empty on any bash.
+set --
+rest="${CONDUCTOR_EXTRA_PLUGIN_DIRS:-}"
+while [ -n "$rest" ]; do
+  dir="${rest%%:*}"
+  case "$rest" in *:*) rest="${rest#*:}" ;; *) rest="" ;; esac
   [ -n "$dir" ] || continue
   case "$dir" in /*) ;; *) dir="$REPO/$dir" ;; esac
-  EXTRA="$EXTRA --plugin-dir $(printf '%q' "$dir")"
+  set -- "$@" --plugin-dir "$dir"
 done
 
 mkdir -p "$REPO/.capture"
@@ -25,8 +27,9 @@ mkdir -p "$REPO/.capture"
 
 # `=`: this session and no other whose name starts with its name.
 tmux kill-session -t "=$SESSION" 2>/dev/null || true
+# Given as separate arguments, the command runs with no shell, so no path needs quoting.
 tmux new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS" -c "$REPO" \
-  "claude --plugin-dir $(printf '%q' "$REPO")$EXTRA --debug --debug-file $(printf '%q' "$DEBUG_LOG")"
+  claude --plugin-dir "$REPO" "$@" --debug --debug-file "$DEBUG_LOG"
 
 echo "session:   $SESSION (${COLS}x${ROWS})"
 echo "debug log: $DEBUG_LOG"

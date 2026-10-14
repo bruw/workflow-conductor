@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Converts a real workflow transcript directory into a content-free fixture: nothing an agent read or wrote there reaches this repo.
-//   bun scripts/make-fixture.ts <transcriptDir> <name>   (<transcriptDir>: ~/.claude/projects/<proj>/<session>/subagents/workflows/wf_<id>)
+//   bun scripts/make-fixture.ts <transcriptDir> <name>   (<transcriptDir>: <session>/subagents/workflows/wf_<id> among Claude Code's project transcripts)
 
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
