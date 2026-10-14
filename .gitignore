@@ -5,3 +5,4 @@ node_modules/
 spikes/
 .claude/workflow-conductor/*
 !.claude/workflow-conductor/demo.json
+bun.lock
