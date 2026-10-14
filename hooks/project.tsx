@@ -117,7 +117,7 @@ const REST_KEY = 'project-rest:'
 const START_KEY = 'start:'
 const DRAFT_LABEL = '[Draft using claude]'
 const NAME_BUTTON_KEY = 'projects-button'
-const ACT_KEY = 'act:'
+const ACTION_BUTTON_KEY = 'act:'
 const MINIMIZE_BUTTON_KEY = 'project-minimize'
 const ARROWS_CHOOSE = 'the arrows choose a row'
 /** Saved projects the start screen lists at once where it is short of rows. */
@@ -322,6 +322,8 @@ const runScriptAtom = atom({ plugin: 'workflow-conductor', key: 'runScript' } as
 
 // Spelled whole, not built by `projectFile`, so that a reader of the call sees where every save lands.
 const saveProject = async ($: EngineInterface, name: string, project: Project): Promise<void> => {
+  // The name is spelled into the path: anything but kebab-case could reach outside the projects' directory.
+  if (!isProjectName(name)) throw new Error(`not a project name: ${name}`)
   const root = await $.session.root()
   await $.fs.write(`${root.replace(/\/+$/, '')}/.claude/workflow-conductor/${name}.json`, serializeProject(project))
 }
@@ -1864,7 +1866,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
             ...(index > 0 ? [<Box width={ACTION_GAP} flexShrink={0} />] : []),
             action.on ? (
               <Box flexShrink={0}>
-                <Button key={`${ACT_KEY}${action.key}`} plain onPress={() => queueKeys($, [action.key])}>
+                <Button key={`${ACTION_BUTTON_KEY}${action.key}`} plain onPress={() => queueKeys($, [action.key])}>
                   {label}
                 </Button>
               </Box>
