@@ -7,7 +7,7 @@ import type { History } from '../src/project/history'
 import { lint, preflightLine, problemFields } from '../src/project/lints'
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
-import { LAST_SCRIPTS_KEY, handoffPrompt, handoffTarget, noteScript, reviewPrompt } from '../src/project/handoff'
+import { LAST_SCRIPTS_STORE, handoffPrompt, handoffTarget, noteScript, reviewPrompt } from '../src/project/handoff'
 import { ASK_PREFIX, resetText } from '../src/project/offer'
 import { replayEvents } from '../src/run/replay'
 import type { ReplayFixture } from '../src/run/replay'
@@ -105,25 +105,25 @@ import { offerDrafted, offerHanded, offerPrompted, setOfferBoard, takeOffered } 
 // Keys are typed into the key catcher, an Input that is not drawn; the graph (./canvas.tsx) is a Client that posts here.
 
 const COMMAND = 'conductor'
-const CANVAS_KEY = 'canvas'
-const SPLASH_KEY = 'splash'
+const CANVAS_ELEMENT = 'canvas'
+const SPLASH_ELEMENT = 'splash'
 const SPLASH_NOTE = 'designed for full screen'
-const NAME_KEY = 'project-name'
-const LOGIC_KEY = 'project-logic'
+const NAME_FIELD = 'project-name'
+const LOGIC_FIELD = 'project-logic'
 /** Drawn under a new `n` (`project-add:<n>`) to empty it of the keys it took. */
-const PICKER_KEY = 'project-add'
-const TYPE_KEY = 'project-type'
-const REST_KEY = 'project-rest:'
-const START_KEY = 'start:'
+const PICKER_ELEMENT = 'project-add'
+const TYPE_ELEMENT = 'project-type'
+const REST_PREFIX = 'project-rest:'
+const START_PREFIX = 'start:'
 const DRAFT_LABEL = '[Draft using claude]'
-const NAME_BUTTON_KEY = 'projects-button'
+const NAME_BUTTON = 'projects-button'
 const ACTION_BUTTON_PREFIX = 'act:'
-const MINIMIZE_BUTTON_KEY = 'project-minimize'
+const MINIMIZE_BUTTON = 'project-minimize'
 const ARROWS_CHOOSE = 'the arrows choose a row'
 /** Saved projects the start screen lists at once where it is short of rows. */
 const SAVED_ROWS = 8
 const SAVED_MAX = 60
-const KNOB_KEY = 'project-knob:'
+const KNOB_PREFIX = 'project-knob:'
 /** The engine keeps what was typed in an Input under its address, so a field's address names its block. */
 const fieldKey = (base: string, id: string): string => `${base}@${id}#${editGen}`
 const baseOf = (element: string): string => element.split('@')[0] ?? element
@@ -132,31 +132,31 @@ let editGen = 0
 let fieldsDrawn = false
 const isField = (element: string | undefined): boolean => {
   const base = baseOf(element ?? '')
-  return base === NAME_KEY || base === LOGIC_KEY || base.startsWith(KNOB_KEY)
+  return base === NAME_FIELD || base === LOGIC_FIELD || base.startsWith(KNOB_PREFIX)
 }
-const fieldWord = (base: string): string => fieldLabel(base === NAME_KEY ? 'name' : base === LOGIC_KEY ? 'logic' : base.slice(KNOB_KEY.length))
-const firstField = (node: { type: ProjectNode['type'] }): string => (hasName(node) ? NAME_KEY : `${KNOB_KEY}goal`)
+const fieldWord = (base: string): string => fieldLabel(base === NAME_FIELD ? 'name' : base === LOGIC_FIELD ? 'logic' : base.slice(KNOB_PREFIX.length))
+const firstField = (node: { type: ProjectNode['type'] }): string => (hasName(node) ? NAME_FIELD : `${KNOB_PREFIX}goal`)
 /**
  * Where the ring rests while no field is open: an Input (a Button's hotkey cannot see Shift), first among the stops, since the engine keeps the ring by its place.
  * Not drawn (`display: none`). Emptied by drawing it under a new key, once the typing has paused: a key typed in the frame it is drawn anew is dropped.
  */
-const CATCH_KEY = 'keys'
+const CATCH_ELEMENT = 'keys'
 /** This load, in the catcher's key: a module loaded again counts from 0, and the engine would bring back an old key's text. */
 const LOAD = Date.now().toString(36)
 let catchGen = 0
-const catcherKey = (): string => `${CATCH_KEY}:${LOAD}.${catchGen}`
-const isCatcher = (element: string | undefined): boolean => (element ?? '').startsWith(`${CATCH_KEY}:`)
+const catcherKey = (): string => `${CATCH_ELEMENT}:${LOAD}.${catchGen}`
+const isCatcher = (element: string | undefined): boolean => (element ?? '').startsWith(`${CATCH_ELEMENT}:`)
 /** '' where the last drawing drew none. */
 let drawnCatcher = ''
 let pickGen = 0
-const pickerKey = (): string => `${PICKER_KEY}:${LOAD}.${pickGen}`
-const isPickerField = (element: string | undefined): boolean => (element ?? '').startsWith(`${PICKER_KEY}:`)
-const restBase = (element: string | undefined): string | null => (element !== undefined && element.startsWith(REST_KEY) ? baseOf(element.slice(REST_KEY.length)) : null)
+const pickerKey = (): string => `${PICKER_ELEMENT}:${LOAD}.${pickGen}`
+const isPickerField = (element: string | undefined): boolean => (element ?? '').startsWith(`${PICKER_ELEMENT}:`)
+const restBase = (element: string | undefined): string | null => (element !== undefined && element.startsWith(REST_PREFIX) ? baseOf(element.slice(REST_PREFIX.length)) : null)
 /** The door: an Input right after the catcher while a block's fields are shown. Down or Tab from the catcher lands on it, which opens the fields; a step back onto it returns to the graph. */
-const DOOR_KEY = 'door'
+const DOOR_ELEMENT = 'door'
 let doorGen = 0
-const doorKey = (): string => `${DOOR_KEY}:${LOAD}.${doorGen}`
-const isDoor = (element: string | undefined): boolean => (element ?? '').startsWith(`${DOOR_KEY}:`)
+const doorKey = (): string => `${DOOR_ELEMENT}:${LOAD}.${doorGen}`
+const isDoor = (element: string | undefined): boolean => (element ?? '').startsWith(`${DOOR_ELEMENT}:`)
 const isDetailStop = (element: string | undefined): boolean => element !== undefined && (isField(element) || isPickerField(element) || restBase(element) !== null)
 /** How long after the command's answer the handoff prompt is submitted. */
 export const SUBMIT_DELAY_MS = 64
@@ -236,7 +236,7 @@ const noDrafts = (): Drafts => ({ name: '', id: null, values: {} })
 let drafts: Drafts = noDrafts()
 const hasDrafts = (): boolean => drafts.id !== null && Object.keys(drafts.values).length > 0
 const fieldPatch = (node: { name: string }, base: string, value: string): NodePatch =>
-  base === NAME_KEY ? { name: value.trim() || node.name } : base === LOGIC_KEY ? { logic: value.trim() } : ({ knobs: { [base.slice(KNOB_KEY.length)]: value.trim() } } as NodePatch)
+  base === NAME_FIELD ? { name: value.trim() || node.name } : base === LOGIC_FIELD ? { logic: value.trim() } : ({ knobs: { [base.slice(KNOB_PREFIX.length)]: value.trim() } } as NodePatch)
 let paneShape = ''
 /** When the focus stops change under a ring at rest, the ring is put back on the catcher. */
 let ringStops = ''
@@ -655,9 +655,9 @@ const watchBox = ($: EngineInterface): void => {
 const MINIMIZE_WORDS: readonly string[] = ['min', 'minimize']
 const EXPAND_WORDS: readonly string[] = ['max', 'expand']
 /** A Button's hotkey has no case, so `M` presses it too. */
-const EXPAND_KEY = 'conductor-expand'
+const EXPAND_ELEMENT = 'conductor-expand'
 const EXPAND_HOTKEY = 'm'
-const BAND_PROJECT_KEY = 'conductor-project:'
+const BAND_PROJECT_PREFIX = 'conductor-project:'
 /** The band lists the saved projects again when its listing is older than this. */
 const LISTING_MS = 4000
 let bandListing: { at: number; names: string[] } = { at: 0, names: [] }
@@ -855,7 +855,7 @@ const pick = async ($: EngineInterface, choice: Partial<PickRow>): Promise<void>
   // A block opened on its kinds: the filter is drawn anew, empty, for the kinds' list.
   if (step.ui.picker?.block !== undefined && step.ui.picker.query === '') pickGen++
   const fresh = step.changed && step.ui.editing ? step.ui.freshId : null
-  if (fresh !== null) void landOn($, { base: NAME_KEY, id: fresh }, `edit: ${EDIT_HINT}`)
+  if (fresh !== null) void landOn($, { base: NAME_FIELD, id: fresh }, `edit: ${EDIT_HINT}`)
   else if (!step.ui.picker) await home($)
 }
 
@@ -1067,7 +1067,7 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
     if (ui.editing && node) {
       const mine = drafts.id === node.id && drafts.name === ui.name
       const first = firstField(node)
-      const text = (mine ? drafts.values[first] : undefined) ?? (first !== NAME_KEY ? (node.knobs?.goal ?? '') : ui.freshId === node.id ? '' : node.name)
+      const text = (mine ? drafts.values[first] : undefined) ?? (first !== NAME_FIELD ? (node.knobs?.goal ?? '') : ui.freshId === node.id ? '' : node.name)
       if (key === ENTER) await saveField($, node.id, first, text)
       else {
         // The field may be drawn already, without this letter: it is kept beside it until the typing pauses.
@@ -1500,7 +1500,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         return { deny: `Project ${name} could not be saved, nothing was changed: ${reason(error)}` }
       }
       // The script the run is of is the one the next handoff starts from.
-      if (ran !== null) await $.store.set(LAST_SCRIPTS_KEY, noteScript(await $.store.get(LAST_SCRIPTS_KEY).catch(() => undefined), name, ran.path, scriptFile(root, name))).catch(() => undefined)
+      if (ran !== null) await $.store.set(LAST_SCRIPTS_STORE, noteScript(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined), name, ran.path, scriptFile(root, name))).catch(() => undefined)
       // Undone like any edit made by hand; and Claude has seen what it just wrote.
       const said = changeWords(edit)
       if (said !== '') record(name, project, `Claude ${said}`)
@@ -1584,7 +1584,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     return answer
   })
 
-  on('ui.message', { requestId: PROJECT_PANE_ID, element: CANVAS_KEY }, async ($, e, next) => {
+  on('ui.message', { requestId: PROJECT_PANE_ID, element: CANVAS_ELEMENT }, async ($, e, next) => {
     const message = parseGraphMessage(e.data)
     if (!message) return next(e)
 
@@ -1647,7 +1647,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const stray = person && (before.status === 'ready' || before.status === 'pick') && drawnCatcher !== '' && !isCatcher(e.element) && !isDetailStop(e.element) && !door
     // On the start screen the arrows choose, as in the add list: a step onto a row was Down, any other Up.
     if (stray && before.status === 'pick') {
-      await update($, uiAtom, held => ({ ...moveStartMark(held, (e.element ?? '').startsWith(START_KEY) ? 1 : -1), help: 0 }))
+      await update($, uiAtom, held => ({ ...moveStartMark(held, (e.element ?? '').startsWith(START_PREFIX) ? 1 : -1), help: 0 }))
       $.ui.invalidate('ui.render')
 
       return { deny: ARROWS_CHOOSE }
@@ -1780,7 +1780,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           ...(index > 0 ? [<Box width={LEGEND_GAP} flexShrink={0} />] : []),
           <Box flexShrink={0}>
             {item.keys === MINIMIZE_KEYS ? (
-              <Button key={MINIMIZE_BUTTON_KEY} plain onPress={() => minimize($, 'person')}>
+              <Button key={MINIMIZE_BUTTON} plain onPress={() => minimize($, 'person')}>
                 {label}
               </Button>
             ) : (
@@ -1800,7 +1800,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           <Text bold color="claude">{COMMAND}</Text>
           <Text color={FADED}>{' / '}</Text>
           {pressable ? (
-            <Button key={NAME_BUTTON_KEY} plain onPress={() => queueKeys($, ['p'])}>
+            <Button key={NAME_BUTTON} plain onPress={() => queueKeys($, ['p'])}>
               {name}
               <Text color={focused ? 'claude' : FADED}>{nameMark}</Text>
             </Button>
@@ -2011,7 +2011,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     }
     const graphBoxOf = (width: number, rows: number, props: unknown, fallback: RenderChildren) => (
       <Box key="project-graph" flexDirection="column" width={width} height={rows} flexShrink={0}>
-        {rows < 1 ? null : 'Client' in els ? <els.Client key={CANVAS_KEY} module="./canvas.tsx" width="100%" height={rows} props={props as never} /> : fallback}
+        {rows < 1 ? null : 'Client' in els ? <els.Client key={CANVAS_ELEMENT} module="./canvas.tsx" width="100%" height={rows} props={props as never} /> : fallback}
       </Box>
     )
 
@@ -2027,7 +2027,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         return (
           <Box flexDirection="column" paddingLeft={1} paddingRight={1} height={bodyRows} justifyContent="center">
             <Box key="project-splash" flexDirection="column" alignItems="center" height={sceneRows} flexShrink={0}>
-              {'Client' in els ? <els.Client key={SPLASH_KEY} module="./splash.tsx" width="100%" height={sceneRows} props={(waiting ? { rows: sceneRows, beat: draftBeats } : { rows: sceneRows }) as never} /> : spanRows((waiting ? waitScene(draftBeats, columns, sceneRows) : splashScene(2, columns, sceneRows)).lines)}
+              {'Client' in els ? <els.Client key={SPLASH_ELEMENT} module="./splash.tsx" width="100%" height={sceneRows} props={(waiting ? { rows: sceneRows, beat: draftBeats } : { rows: sceneRows }) as never} /> : spanRows((waiting ? waitScene(draftBeats, columns, sceneRows) : splashScene(2, columns, sceneRows)).lines)}
             </Box>
             <Text color={TEXT}> </Text>
             <Box flexDirection="column" alignItems="center" flexShrink={0}>
@@ -2075,7 +2075,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           rows: 1,
           el: (
             <Box flexDirection="row" height={1}>
-              <Button key={`${START_KEY}${entry.kind}:${entry.id}`} plain onPress={() => press($, () => openEntry($, at))}>
+              <Button key={`${START_PREFIX}${entry.kind}:${entry.id}`} plain onPress={() => press($, () => openEntry($, at))}>
                 <Text color="claude" bold>{lit ? '▸ ' : '  '}</Text>
                 <Text color={lit ? 'claude' : TEXT} bold>{padCells(clip(oneLine(entry.title), nameW), nameW)}</Text>
                 <Text color={FADED}>{`  ${(isProjectEntry(entry) ? blocksWord(entry.blocks) : '').padEnd(countW)}`}</Text>
@@ -2089,7 +2089,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         rows: 1,
         el: (
           <Box flexDirection="row" height={1}>
-            <Button key={`${START_KEY}draft`} plain onPress={() => press($, () => request($, 'draft'))}>
+            <Button key={`${START_PREFIX}draft`} plain onPress={() => press($, () => request($, 'draft'))}>
               <Text color="claude" bold>{DRAFT_LABEL}</Text>
             </Button>
           </Box>
@@ -2218,14 +2218,14 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const texts: { key: string; knob: string; label: string; value: string; placeholder: string }[] = node
       ? [
           // A block just added opens with its name field empty: the default name shows dim and stays if nothing is typed.
-          ...(hasName(node) ? [{ key: NAME_KEY, knob: 'name', label: FIELD_LABEL.name, value: typed(NAME_KEY, ui.freshId === node.id ? '' : node.name), placeholder: node.name }] : []),
+          ...(hasName(node) ? [{ key: NAME_FIELD, knob: 'name', label: FIELD_LABEL.name, value: typed(NAME_FIELD, ui.freshId === node.id ? '' : node.name), placeholder: node.name }] : []),
           // The start block has a logic field only for logic it already carries.
-          ...(hasLogic(node) ? [{ key: LOGIC_KEY, knob: 'logic', label: FIELD_LABEL.logic, value: typed(LOGIC_KEY, node.logic ?? ''), placeholder: placeholderOf(node, 'logic') }] : []),
+          ...(hasLogic(node) ? [{ key: LOGIC_FIELD, knob: 'logic', label: FIELD_LABEL.logic, value: typed(LOGIC_FIELD, node.logic ?? ''), placeholder: placeholderOf(node, 'logic') }] : []),
           ...textKnobs.map((knob: TextKnob) => ({
-            key: `${KNOB_KEY}${knob}`,
+            key: `${KNOB_PREFIX}${knob}`,
             knob,
             label: FIELD_LABEL[knob],
-            value: typed(`${KNOB_KEY}${knob}`, node.knobs?.[knob] ?? ''),
+            value: typed(`${KNOB_PREFIX}${knob}`, node.knobs?.[knob] ?? ''),
             placeholder: placeholderOf(node, knob, around),
           })),
         ]
@@ -2332,7 +2332,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
                 <Box flexShrink={0}>
                   {/* The start block has no type to pick: it becomes no other block. */}
                   {editable && node.type !== 'start' ? (
-                    <Button key={TYPE_KEY} plain onPress={() => press($, () => retype(node))}>
+                    <Button key={TYPE_ELEMENT} plain onPress={() => press($, () => retype(node))}>
                       <Text color={ACCENT[node.type]} bold>{`${typeWord} ▾`}</Text>
                     </Button>
                   ) : (
@@ -2361,7 +2361,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         rows: 1 + Math.max(1, rows.length),
         el: (
           <Box flexDirection="column" flexShrink={0}>
-            <Button key={`${REST_KEY}${fieldKey(one.key, node?.id ?? '')}`} plain onPress={() => press($, () => openFields($, one.key))}>
+            <Button key={`${REST_PREFIX}${fieldKey(one.key, node?.id ?? '')}`} plain onPress={() => press($, () => openFields($, one.key))}>
               {[<Text color="suggestion">{cap(one.label)}</Text>, ...required(one), '\n', ...body]}
             </Button>
           </Box>
@@ -2648,7 +2648,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const terminal = e.viewport?.columns
     const expandButton = (
       <Box flexDirection="row" flexShrink={0}>
-        <Button key={EXPAND_KEY} plain onPress={() => press($, () => expand($, true, terminal))}>
+        <Button key={EXPAND_ELEMENT} plain onPress={() => press($, () => expand($, true, terminal))}>
           <Text>
             <Text color="claude">{`[${EXPAND_HOTKEY}]`}</Text>
             <Text color={TEXT}>{` ${EXPAND_WORD}`}</Text>
@@ -2656,7 +2656,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         </Button>
         {/* The key itself: a Button with a hotkey writes it before its label (`m: `), so this one is in the tree and not drawn. */}
         <Box key="conductor-expand-key" display="none">
-          <Button key={`${EXPAND_KEY}:key`} hotkey={EXPAND_HOTKEY} onPress={() => press($, () => expand($, true, terminal))}>
+          <Button key={`${EXPAND_ELEMENT}:key`} hotkey={EXPAND_HOTKEY} onPress={() => press($, () => expand($, true, terminal))}>
             {EXPAND_WORD}
           </Button>
         </Box>
@@ -2711,7 +2711,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
               {view.list.names.map(name => (
                 <Box flexDirection="row" flexShrink={0}>
                   <Text>{' '.repeat(LIST_GAP)}</Text>
-                  <Button key={`${BAND_PROJECT_KEY}${name}`} plain onPress={() => press($, () => showSaved($, name))}>
+                  <Button key={`${BAND_PROJECT_PREFIX}${name}`} plain onPress={() => press($, () => showSaved($, name))}>
                     <Text color={name === view.list?.current ? 'claude' : TEXT} bold={name === view.list?.current ? true : undefined}>{name}</Text>
                   </Button>
                 </Box>

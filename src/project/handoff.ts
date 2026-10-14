@@ -54,7 +54,7 @@ export function reviewPrompt(name: string): string {
 }
 
 /** `$.store` key: per project, the script its last run ran where that is not the file beside the project. */
-export const LAST_SCRIPTS_KEY = 'lastScripts'
+export const LAST_SCRIPTS_STORE = 'lastScripts'
 
 export function lastScripts(value: unknown): Record<string, string> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return {}

@@ -1,13 +1,13 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { offerBrief } from '../src/project/chat'
-import { LAST_SCRIPTS_KEY, buildHandoff, lastScripts } from '../src/project/handoff'
+import { LAST_SCRIPTS_STORE, buildHandoff, lastScripts } from '../src/project/handoff'
 import type { HandoffScript } from '../src/project/handoff'
 import { isBlank, parseProject } from '../src/project/model'
 import {
   DISMISSED_RESULT,
   OFFER_HEADER,
-  OFFER_KEY,
+  OFFER_STORE,
   OFFER_OPTIONS,
   OFFER_QUESTION,
   OFFER_TOOL_DESCRIPTION,
@@ -27,7 +27,7 @@ import type { Tracker } from '../src/run/tracker'
 /** A script a run left elsewhere is newer than the one beside the project: a run of that one forgets it. */
 const scriptOf = async ($: EngineInterface, root: string, name: string): Promise<HandoffScript> => {
   const path = scriptFile(root, name)
-  const last = lastScripts(await $.store.get(LAST_SCRIPTS_KEY).catch(() => undefined))[name]
+  const last = lastScripts(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined))[name]
   if (last !== undefined && (await $.fs.exists(last).catch(() => false))) return { path, from: last }
 
   return { path, from: (await $.fs.exists(path).catch(() => false)) ? path : null }
@@ -131,7 +131,7 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
       }
     }
     waiting = null
-    const kept = storedChoice(await $.store.get(OFFER_KEY).catch(() => undefined))
+    const kept = storedChoice(await $.store.get(OFFER_STORE).catch(() => undefined))
     if (kept !== null) return kept === 'conductor' ? conductor(false) : { result: standardResult('always') }
 
     let answer: string
@@ -143,7 +143,7 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
     const picked = offerChoice(answer)
     if (picked === null) return { result: answer.trim() === '' ? DISMISSED_RESULT : typedResult(answer) }
     if (picked.always) {
-      await $.store.set(OFFER_KEY, picked.choice).catch(() => undefined)
+      await $.store.set(OFFER_STORE, picked.choice).catch(() => undefined)
       $.ui.toast(keptToast(picked.choice))
     }
 

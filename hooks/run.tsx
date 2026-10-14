@@ -2,9 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import { visualizeBrief } from '../src/project/chat'
-import { LAST_SCRIPTS_KEY, noteScript } from '../src/project/handoff'
+import { LAST_SCRIPTS_STORE, noteScript } from '../src/project/handoff'
 import { parseProject } from '../src/project/model'
-import { VISUALIZE_HEADER, VISUALIZE_KEY, VISUALIZE_OPTIONS, VISUALIZE_QUESTION, reusedToast, storedVisualize, visualizeChoice, visualizeToast, visualizeTyped } from '../src/project/offer'
+import { VISUALIZE_HEADER, VISUALIZE_STORE, VISUALIZE_OPTIONS, VISUALIZE_QUESTION, reusedToast, storedVisualize, visualizeChoice, visualizeToast, visualizeTyped } from '../src/project/offer'
 import { PROJECT_PANE_ID, bareTarget, projectFile, projectName, endRun, followRun, handoffOf, initialTimes, initialUi, isSaved, scriptFile, stampTimes } from '../src/project/session'
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
@@ -153,7 +153,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         // A run that has only the project's name never stands in for the script the project has: that one may be newer.
         if (script !== undefined && isSaved(claimed)) {
           const beside = scriptFile(await $.session.root(), claimed)
-          if (tracker.handedOff() || !(await $.fs.exists(beside).catch(() => true))) await $.store.set(LAST_SCRIPTS_KEY, noteScript(await $.store.get(LAST_SCRIPTS_KEY).catch(() => undefined), claimed, script, beside)).catch(() => undefined)
+          if (tracker.handedOff() || !(await $.fs.exists(beside).catch(() => true))) await $.store.set(LAST_SCRIPTS_STORE, noteScript(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined), claimed, script, beside)).catch(() => undefined)
         }
         // Where nobody handed the project off, a toast says where the run went.
         if (own !== null) {
@@ -171,7 +171,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       if (surfaces !== undefined && surfaces.length === 0) return answer
       // With no script file there is nothing to draw a project of.
       if (script === undefined) return answer
-      const kept = storedVisualize(await $.store.get(VISUALIZE_KEY).catch(() => undefined))
+      const kept = storedVisualize(await $.store.get(VISUALIZE_STORE).catch(() => undefined))
       let choice = kept
       if (choice === null) {
         let said: string
@@ -183,7 +183,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         const picked = visualizeChoice(said)
         if (picked === null) return said.trim() === '' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeTyped(said)] }
         if (picked.always) {
-          await $.store.set(VISUALIZE_KEY, picked.choice).catch(() => undefined)
+          await $.store.set(VISUALIZE_STORE, picked.choice).catch(() => undefined)
           $.ui.toast(visualizeToast(picked.choice))
         }
         choice = picked.choice
