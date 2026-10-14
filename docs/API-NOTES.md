@@ -18,7 +18,9 @@ The task's output file (the notification's output-file) is empty while the run g
 A workflow agent's own rows raise session.append with its agentId (door prompt, response, tool-result, attachment); nothing is raised while one tool call runs.
 $.agent.list() never lists a workflow's agents, and there is no TaskOutput tool for $.tool.call.
 validate refuses a telemetry.log hook on the anthropic stream (one with no `to` stands on it): that stream is for plugins built into the CLI.
-$.fs has no append, and validate refuses $ passed to a helper.
+$.fs has no append, and validate refuses $ passed to an imported function.
+The plugin directory checks $ beyond validate, which passes what it refuses. It follows $ into a top-level const arrow with a return type that takes values and retries by calling itself with $. The same helper taking a function parameter and retrying through a closure holding $ is not followed, whether written as that arrow, an untyped arrow or a function declaration, and each call passing it $ is a finding; which of the two traits counts is not known.
+As a typed arrow, that helper is also read as a hook the mod does not register.
 A command.run answer's context starts no turn; it is read on the next prompt, where it outweighs what was typed.
 SGR mouse sequences sent with tmux send-keys -l reach a Client (down, move, up, hover) in 1-based screen cells, one event per frame: space them 0.3 s.
 A click gives the Client the keyboard: text sent after it arrives as one key event holding the whole string, and Escape gives the keys back to the prompt with the pane left open.
