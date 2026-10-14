@@ -8,6 +8,7 @@
   "homepage": "https://github.com/bruw/workflow-conductor",
   "repository": "https://github.com/bruw/workflow-conductor",
   "license": "MIT",
+  "types": "./types/index.d.ts",
   "keywords": [
     "workflow",
     "agents",
