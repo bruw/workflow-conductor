@@ -1,19 +1,27 @@
 ![Conductor in Claude Code: open the board, build a workflow by keys and mouse, watch the run on the graph, minimize it](https://github.com/bruw/workflow-conductor/releases/download/media/demo.gif)
 
-There's a thing that happens when you ask Claude for a workflow. It writes two hundred lines of orchestration, tells you it'll start nine agents, and asks if that's all right. You say yes. Most everybody says yes. Nobody reads the script.
+Full TUI for planning, running and understanding multi-agent Workflows in Claude Code.
 
+Claude writes a long orchestration script and proposes to execute. You say yes. Most everybody says yes. Nobody reads the script.
 Then the agents go off somewhere you can't see, and you sit watching a counter, hoping that what's burning your tokens is the thing you meant.
 
-Conductor is a Claude Code mod for people who got tired of hoping. The workflow is a graph, in a pane beside your transcript. You draw it, or you tell Claude to and fix what it got wrong. When the plan is good, hand it over for build and run. The run comes back onto the same graph, block by block, so you know which agent failed, where, and what it cost you.
+Conductor adds an option to create a **visual plan** first. You can read it in 10 sec, verify the logic before handing off to Claude to write the script.
+It costs like a Plan, and can save *millions of tokens* over a workflow done badly.
 
 ```
 /plugin install workflow-conductor --marketplace bruw/workflow-conductor
 ```
 
 
-
 ## What you get
+Design: draw it yourself, start from a template, or let Claude draft it from a description and refine it in plain words.
+Check: common design mistakes are flagged on the graph before you run.
+Run: hands the spec to Claude to implement and run
+Monitor: progress, failures and token cost show up on the plan you made.
+Learn: block kinds are named multi-agent patterns, and you can compare each design with the script it produced. That makes it a practical way to learn how good workflows are built.
 
+
+## How to use
 Type `/conductor review this PR thoroughly`. Claude drafts this and puts it on the board:
 
 ```
@@ -45,7 +53,7 @@ Type `/conductor review this PR thoroughly`. Claude drafts this and puts it on t
 ╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
-You can read that in ten seconds. That's the whole point of it.
+You can read that in ten seconds.
 
 Don't like it? Say so, in plain words: *"add a verify with 3 votes after n3"*, *"set this block to low effort"*.
 
