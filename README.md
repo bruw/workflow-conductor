@@ -131,6 +131,23 @@ The mouse works too: click to select, drag the selected card to move it, wheel t
 - A terminal 110 columns wide, in the fullscreen layout. Narrower than that, you get the compact strip and no designer; widen it and the designer opens by itself.
 - Fullscreen for the mouse. The keys work without it.
 
+## What it touches
+
+Conductor makes no network requests and reads no settings or credentials.
+
+- **Files.** It writes only `.claude/workflow-conductor/<name>.json` and `<name>.workflow.js` under the session's root, and `<name>` is always kebab-case. The `.workflow.js` file is a copy of the script the Workflow tool last ran for that project, kept for the next run. Conductor never writes settings, `CLAUDE.md`, build or start-up files.
+- **Programs.** It runs `rm -- <file>` to delete a saved project and `mv -- <file> <file>` to rename one, and only on those two files: the mod API has no delete or rename. They are given file paths, nothing else. It runs no other program.
+- **Prompts.** It submits a prompt in two cases, to your own session:
+  - `r`: `Implement and run the "<name>" workflow project (Conductor hands it off: call mcp__conductor__before_workflow first).`
+  - `/conductor <description>`: `Draft a workflow project: <description>`, your own words.
+
+  `q` and the draft key only put a sentence in the prompt box for you to send. Conductor reads the prompt box only to see whether it is empty.
+- **Tools.** It adds two tools to Claude and answers their calls itself:
+  - `mcp__conductor__before_workflow`: Claude calls it before writing or running a Workflow script. Conductor asks you whether to design the workflow on the board first and answers with your choice. Subagents and `-p` runs get the standard answer without a question.
+  - `mcp__conductor__project`: Claude reads and edits a project with it (`read`, `apply`, `write`, `attach`). The project's goal, blocks and file paths reach Claude this way and in notes on the prompts you send while the board is open.
+
+  Claude's own `Write`, `Edit` and `Workflow` calls run as usual. Conductor refreshes the board after a project file is written and tracks a started run. The only change: a project file cannot be edited while that project is running.
+
 ## Hack it
 
 MIT. Get busy designing.

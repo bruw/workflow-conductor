@@ -36,7 +36,7 @@ Beside a docked pane the ask dialog is drawn in the transcript's 24 columns.
 A Workflow call carries script, name or scriptPath (scriptPath wins), absent when not passed; after next(e), r.result.scriptPath holds the full script in all three forms, and workflowName is meta.name.
 An open from a tool.call hook is unasked even right after a yes in $.ui.ask: placed from 144 columns, below that it waits (isPlaced false) and the person sees nothing, no ui.render raised.
 A waiting pane seats itself when the terminal reaches 144 columns and stays when narrowed, inline under 110; an open from the person's own command is placed at any width.
-The dock's width is the person's once they dragged it (dockColumns in ~/.claude.json): the mod's columns is only a request.
+The dock's width is the person's once they dragged it (the dockColumns setting): the mod's columns is only a request.
 Claude does not find a deferred mod tool from a plain workflow request (0 of 2); named in hidden context it loads and calls it, but only when it is heading for Workflow (2 of 3).
 A non-deferred tool whose description says to call it before authoring or running any Workflow script is the turn's first call (3 of 3), ahead of the workflow-authoring skill; a request for one subagent does not trigger it.
 $.store (get, set, delete, keys) is the plugin's own JSON store kept between sessions, untyped, 4 MiB in all; read from the types, never run.

@@ -481,8 +481,9 @@ const home = async ($: EngineInterface): Promise<void> => {
   $.ui.invalidate('ui.render')
 }
 
-/** Where the element cannot be reached at all the field is given up and `hint` is said. */
-const landOn = ($: EngineInterface, target: () => string, hint: string): void => {
+/** Where the element cannot be reached at all the field is given up and `fallback` is said. */
+// A declaration, not a typed arrow: the plugin directory reads an arrow taking `$` with a return type as a hook.
+function landOn($: EngineInterface, target: () => string, fallback: string): void {
   const land = async (tries: number, last: string): Promise<void> => {
     const key = target()
     // Said before the move is asked: a letter that reaches the element before the answer does is its text.
@@ -499,7 +500,7 @@ const landOn = ($: EngineInterface, target: () => string, hint: string): void =>
     const left = key === last ? tries - 1 : LAND_TRIES
     if (left > 0) return void $.clock.after(left > LAND_TRIES - 2 ? FOCUS_DELAY_MS : FOCUS_DELAY_MS * 2, () => void land(left, key))
     if (ringTo === key) ringTo = ''
-    await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, renaming: null, notice: hint }))
+    await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, renaming: null, notice: fallback }))
   }
   void land(LAND_TRIES, '')
 }
@@ -569,10 +570,8 @@ const tidySoon = ($: EngineInterface): void => {
     // stepped off it and on again: landing puts the cursor at the end.
     const at = ringOn
     const again = (target: () => string): void => {
-      void $.ui
-        .focus({ requestId: PROJECT_PANE_ID, key: drawnCatcher })
-        .then(() => landOn($, target, `edit: ${EDIT_HINT}`))
-        .catch(() => undefined)
+      const off = $.ui.focus({ requestId: PROJECT_PANE_ID, key: drawnCatcher })
+      void off.then(() => landOn($, target, `edit: ${EDIT_HINT}`)).catch(() => undefined)
     }
     if (Object.entries(pins).some(([element, pin]) => pin.head !== '' && isField(element))) {
       redrawFields()
@@ -767,10 +766,8 @@ const request = async ($: EngineInterface, kind: 'run' | 'ask' | 'draft'): Promi
     // From a clock callback, never from inside the chain of keys, which it would hold for the turn.
     // Refused (the prompt box holds text): the request is left there for the person to send.
     $.clock.after(SUBMIT_DELAY_MS, () => {
-      void $.prompt
-        .submit({ text: line, asUser: true })
-        .then(entered => (entered.drop === undefined ? undefined : fill()))
-        .catch(() => fill())
+      const submitted = $.prompt.submit({ text: line, asUser: true })
+      void submitted.then(entered => (entered.drop === undefined ? undefined : fill())).catch(() => fill())
     })
     await $.ui.close({ id: PROJECT_PANE_ID }).catch(() => undefined)
     await $.ui.open(paneArgs(false)).catch(() => undefined)
@@ -782,8 +779,8 @@ const request = async ($: EngineInterface, kind: 'run' | 'ask' | 'draft'): Promi
   await $.ui.open(paneArgs(false)).catch(() => undefined)
   // The ring can be moved only in a site that holds the keyboard: if it still can, the keys did not go.
   $.clock.after(FOCUS_DELAY_MS * 2, () => {
-    void $.ui
-      .focus({ requestId: PROJECT_PANE_ID, key: drawnCatcher })
+    const focused = $.ui.focus({ requestId: PROJECT_PANE_ID, key: drawnCatcher })
+    void focused
       .catch(() => ({ deny: 'no' }))
       .then(moved => (moved.deny === undefined ? update($, uiAtom, held => ({ ...held, handed: true, notice: HANDED_NOTICE })) : undefined))
       .then(() => watchBox($))
@@ -1396,10 +1393,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           const filled = await $.prompt.fill({ text: prompt }).catch(() => ({ isFilled: false }))
           $.ui.toast(filled.isFilled ? 'conductor: press Enter to start the draft' : `conductor: type "${prompt}" to start the draft`)
         }
-        void $.prompt
-          .submit({ text: prompt })
-          .then(entered => (entered.drop === undefined ? undefined : fill()))
-          .catch(() => fill())
+        const submitted = $.prompt.submit({ text: prompt })
+        void submitted.then(entered => (entered.drop === undefined ? undefined : fill())).catch(() => fill())
       })
 
       return { text: 'drafting a workflow project', context: draftBrief(words) }
@@ -1510,7 +1505,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     }
     const pass = context === (e.context ?? []) ? e : { ...e, context }
     // A change said in full counts as read once the prompt has entered with it: an edit made from it is not refused as stale.
-    const next = async (input: typeof e): Promise<Awaited<ReturnType<typeof enter>>> => {
+    const submit = async (input: typeof e): Promise<Awaited<ReturnType<typeof enter>>> => {
       const answer = await enter(input)
       if (told !== null && answer.drop === undefined && (revisions[shown.name] ?? 0) === revision) sawProject(shown.name, told)
 
@@ -1521,7 +1516,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     // Never a throw: the prompt goes in all the same.
     if (name !== null && isSaved(name)) await handOff($, name).catch(() => false)
 
-    return next(pass)
+    return submit(pass)
   })
 
   // A draft still awaited stays so where the turn ended on a question; given up with Escape, it is over. From a clock callback: the pane is not opened inside this hook.
