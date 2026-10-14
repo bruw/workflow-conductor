@@ -5,7 +5,7 @@ Claude Code mod: design a workflow as a graph of blocks, hand the project to Cla
 ## Paradigm
 
 - The project is a **spec, not a program**: JSON plus free text. Claude reads it and writes the real script. There is no JSON → JS compiler and no JS → JSON import.
-- **No field is mined.** `oncePer`, a stop condition, the votes in a logic are words for Claude; nothing parses them for a count or a meaning. Lints and the agent count go by type, kind and whether a field is empty. The two places that do read text are wiring: the node id at the start of an agent's label, and the hand-off sentence.
+- **No field is mined.** `oncePer`, a stop condition, the votes in a logic are words for Claude; nothing parses them for a count or a meaning. Lints go by type, kind and whether a field is empty. The two places that do read text are wiring: the node id at the start of an agent's label, and the hand-off sentence.
 - A pattern is a **kind** of the block it is made of, never a block type of its own; a kind adds presets (filled knobs, a filled logic, starter blocks, hints), never a field. A pattern that spans several blocks is a template.
 - Text the person reads says "block" and "problem"; identifiers and what Claude is sent say "node" and "lint".
 
@@ -20,7 +20,7 @@ hooks/canvas.tsx       Client: draws the graph from props, posts pointer message
 hooks/splash.tsx       Client: the splash and the draft's waiting scene
 src/run/               events (types) · reducer (events → RunState, label → block) · tracker (which run is whose, timers, run end)
                        journal (on-disk journal → events, phases, usage) · replay (events from a fixture or a project)
-src/project/           model (types, parse, serialize) · ops (add, move, update, retype, remove) · lints (problems, agent count, preflight)
+src/project/           model (types, parse, serialize) · ops (add, move, update, retype, remove) · lints (problems, preflight)
                        teach (per type and kind: hints, cards, fields, presets, palette) · templates
                        session (ProjectUi and every step on it, the view, graph props, help pages, start screen)
                        chat (the project tool: schema, description, ops, reports, change notes, briefs)
@@ -83,7 +83,7 @@ scripts/render-graph.ts  layout + paint as text with no session (--list names th
 
 ## The designer
 
-One screen: header (name as the project list's button, state, agent count; the legend on its second row), the graph and the detail pane side by side, a rule that holds what was just said, a last row of buttons. With no room for it (`fitsFull`) the pane draws nothing and the compact view takes the band above the prompt.
+One screen: header (name as the project list's button, state; the legend on its second row), the graph and the detail pane side by side, a rule that holds what was just said, a last row of buttons. With no room for it (`fitsFull`) the pane draws nothing and the compact view takes the band above the prompt.
 
 **State.** `ProjectUi` in `$.state` is the single source of truth for selection, view, picker, help, carousels. The Client keeps only pan, a drag in flight, hover and motion. What a keystroke must not redraw is a module variable in `hooks/project.tsx`: typed drafts, the ring's bookkeeping, undo histories, revisions, snapshots. Module variables survive `/reload-plugins` only while the source is unchanged.
 

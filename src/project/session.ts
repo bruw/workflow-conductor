@@ -12,7 +12,7 @@ import type { KeyOp } from '../ui/keys'
 import { fmtDuration, fmtTokens } from '../ui/rail'
 import { clip, wrapText } from '../ui/text'
 import { REDO_HINT, UNDO_HINT } from './history'
-import { agentsCount, lint, preflight } from './lints'
+import { lint } from './lints'
 import { NODE_TYPES, blockCount, canHoldChildren, emptyProject, findNode, flatten, goalOf, isBlank, isProjectName, kindsOf, parseProject, toKebab, typeName } from './model'
 import type { ParseResult, Project, ProjectNode, NodeType } from './model'
 import { addNode, addPlace, moveNode, placeFor, removeNode, retypeNode, stepKnob, updateNode } from './ops'
@@ -855,12 +855,6 @@ export const DETAIL_MAX_W = 52
 
 export function detailWidth(columns: number): number {
   return Math.max(DETAIL_MIN_W, Math.min(DETAIL_MAX_W, Math.floor(columns * DETAIL_SHARE)))
-}
-
-/** The footer's first row: `agents = 18`, or `agents ≥ 12` where the count is open. */
-export function factsLine(project: Project): string {
-  const { agents, unknowns } = preflight(project)
-  return agentsCount(agents, unknowns)
 }
 
 // The help pages, the run's summary, following the run, the dock's width

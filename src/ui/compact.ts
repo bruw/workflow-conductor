@@ -55,8 +55,6 @@ export type CompactInput = {
   rows: number
   shell: Shell
   name: string | null
-  /** `agents ≥ 8`, where the project has blocks to count. */
-  facts: string | null
   goal: string
   run: { bar: string; text: string; color: 'claude' | 'success' | 'error' } | null
   saved: readonly string[]
@@ -67,7 +65,6 @@ export type CompactList = { names: string[]; current: string | null; more: numbe
 export type CompactView = {
   oneLine: boolean
   name: string
-  facts: string | null
   state: string
   /** The last row: the run, else the goal, else what to do with no project open. */
   status: { bar: string | null; text: string; color: 'claude' | 'success' | 'error' | null }
@@ -113,5 +110,5 @@ export function compactView(input: CompactInput): CompactView {
   // The projects have a row once the border has its two: under the name's, over the run's.
   const list = rows >= BORDER_ROWS + 1 ? compactList(input.saved, input.name, columns - SMALL_W - BORDER_CELLS) : null
   const taken = oneLine ? 1 : SMALL_ROWS + (list === null ? 0 : 1) + (bordered ? 2 : 0)
-  return { oneLine, name, facts: input.facts, state, status, list, bordered, taken }
+  return { oneLine, name, state, status, list, bordered, taken }
 }

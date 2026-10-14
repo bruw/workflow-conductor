@@ -461,9 +461,6 @@ export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
 /** The kinds of agent whose name already says the task: they are not asked for a brief. */
 export const SELF_BRIEFED: readonly Kind[] = ['verify', 'judge', 'critic']
 
-/** The kinds of agent that vote: how many is said in their logic, as plain words nothing reads. */
-export const VOTING_KINDS: readonly Kind[] = ['verify', 'judge']
-
 /** By its type, whatever the block carries. */
 export function offers(block: BlockRef, knob: keyof Knobs): boolean {
   return KNOBS_BY_TYPE[block.type].includes(knob)

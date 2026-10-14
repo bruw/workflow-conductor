@@ -1,9 +1,9 @@
 // Advisory lints over a Project. Every rule is structural: it reads what blocks there are, where they stand and
 // which fields are empty, never the words or the numbers typed into a field. Lints never block anything.
 
-import { KINDS, blockCount, typeName, canHoldChildren, flatten, kindOf, walk } from './model'
+import { KINDS, typeName, flatten, kindOf, walk } from './model'
 import type { Project, ProjectNode } from './model'
-import { KIND_TEACH, SELF_BRIEFED, VOTING_KINDS, placeholderOf } from './teach'
+import { KIND_TEACH, SELF_BRIEFED, placeholderOf } from './teach'
 
 export type LintRule =
   | 'loop-unbounded'
@@ -163,59 +163,6 @@ export function lint(project: Project): Lint[] {
   return lints
 }
 
-// Preflight: what a project implies before it is handed off
-
-/** A floor: nothing typed into a field is read for a count, so a block that may run more than once counts once (`unknownsOf`). */
-function leastAgents(node: ProjectNode): number {
-  if (canHoldChildren(node.type)) {
-    const kids = (node.children ?? []).map(leastAgents)
-    if (node.type === 'branch') return kids.length > 1 ? Math.min(...kids) : 0
-    return kids.reduce((sum, one) => sum + one, 0)
-  }
-  return node.type === 'agent' ? 1 : 0
-}
-
-/** Why the count of agents is only a floor: the blocks that may run their agents more than once, by type. */
-export type Unknowns = { fanouts: number; loops: number; votes: number; subworkflows: number; branches: number }
-
-/** A branch counts when its arms do not all start as many agents (its one arm, against none). */
-function unknownsOf(project: Project): Unknowns {
-  const out: Unknowns = { fanouts: 0, loops: 0, votes: 0, subworkflows: 0, branches: 0 }
-  for (const { node } of flatten(project)) {
-    if (node.type === 'pipeline' || node.type === 'parallel') out.fanouts++
-    if (node.type === 'loop') out.loops++
-    if (node.type === 'agent' && node.kind !== undefined && VOTING_KINDS.includes(node.kind)) out.votes++
-    if (node.type === 'subworkflow') out.subworkflows++
-    const arms = node.type === 'branch' ? (node.children ?? []).map(leastAgents) : []
-    if (arms.length === 1 ? (arms[0] ?? 0) > 0 : new Set(arms).size > 1) out.branches++
-  }
-  return out
-}
-
-export type Preflight = { blocks: number; agents: number; lintIds: string[]; unknowns: Unknowns }
-
-export function preflight(project: Project): Preflight {
-  return { blocks: blockCount(project), agents: project.nodes.reduce((sum, node) => sum + leastAgents(node), 0), lintIds: lintIds(lint(project)), unknowns: unknownsOf(project) }
-}
-
-/** `agents = 3` where every block runs once, `agents ≥ 12` where the number is only the fewest. */
-export function agentsCount(agents: number, unknowns: Unknowns): string {
-  return `agents ${unknowns.fanouts + unknowns.loops + unknowns.votes + unknowns.subworkflows + unknowns.branches > 0 ? '≥' : '='} ${agents}`
-}
-
-/** `agents ≥ 12 (more: 2 blocks may fan out, 1 loop repeats)`. */
-export function agentsText(agents: number, unknowns: Unknowns): string {
-  const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`
-  const why = [
-    unknowns.fanouts > 0 ? `${plural(unknowns.fanouts, 'block', 'blocks')} may fan out` : '',
-    unknowns.loops > 0 ? `${plural(unknowns.loops, 'loop repeats', 'loops repeat')}` : '',
-    unknowns.votes > 0 ? `${plural(unknowns.votes, 'block votes', 'blocks vote')}` : '',
-    unknowns.subworkflows > 0 ? `${plural(unknowns.subworkflows, 'subworkflow starts', 'subworkflows start')} its own` : '',
-    unknowns.branches > 0 ? `${plural(unknowns.branches, 'branch picks', 'branches pick')} an arm` : '',
-  ].filter(part => part !== '')
-  return `${agentsCount(agents, unknowns)}${why.length === 0 ? '' : ` (more: ${why.join(', ')})`}`
-}
-
 /** The detail pane marks the ones that are not set. */
 export function problemFields(rule: LintRule): string[] {
   if (rule === 'agent-no-brief') return ['logic', 'prompt']
@@ -233,9 +180,9 @@ export function lintIds(lints: readonly Lint[]): string[] {
 /** How many block ids a preflight line names before it says `…`. */
 export const LINT_IDS_MAX = 6
 
-/** `agents = 3 · problems in n3, n5`; nothing is said of problems where there are none. */
-export function preflightLine(project: Project): string {
-  const { agents, lintIds: ids, unknowns } = preflight(project)
-  const named = `${ids.slice(0, LINT_IDS_MAX).join(', ')}${ids.length > LINT_IDS_MAX ? ', …' : ''}`
-  return [agentsText(agents, unknowns), ...(ids.length === 0 ? [] : [`problems in ${named}`])].join(' · ')
+/** `problems in n3, n5`, or null where there are none: said when a project is handed off. */
+export function preflightLine(project: Project): string | null {
+  const ids = lintIds(lint(project))
+  if (ids.length === 0) return null
+  return `problems in ${ids.slice(0, LINT_IDS_MAX).join(', ')}${ids.length > LINT_IDS_MAX ? ', …' : ''}`
 }

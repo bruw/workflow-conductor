@@ -1,4 +1,4 @@
-All seen on Claude Code 2.1.296, terminal surface, fullscreen, inside tmux; nothing here was tried elsewhere.
+All seen on Claude Code 2.1.296 to 2.1.299, terminal surface, fullscreen, inside tmux; nothing here was tried elsewhere.
 agent.spawn's description is the workflow script's label, exactly.
 agentId is not on agent.spawn: it is on what await next(e) resolves to ({ model, agentId }).
 agent.spawn has no phase: e.workflow holds only runId and agentIndex.
@@ -10,7 +10,14 @@ A tool's input is flat on the tool.call event (e.script, no e.input); the Workfl
 The Workflow tool result arrives before the first agent.spawn: the run is in the background.
 transcriptDir is <projects>/<session id>/subagents/workflows/<runId>; $.fs reads it by absolute path with no permission prompt.
 journal.jsonl gets an agent's started line (label, phase) only once next(e) of its agent.spawn has resolved; agent-*.meta.json repeats it (description, workflowPhase).
-Nothing signals a run's end: no journal line, no hook event.
+The journal has no line for a run's end. A run that completes or fails queues a task notification about 2 s after its last agent: session.append (door queue, agent main) at once, then prompt.submit (origin task-notification) and ui.render UserMessage (props.task: id, status, toolUseId, durationMs) only once the main loop is idle, 25 s later behind a held turn.
+The Workflow result carries taskId and taskType local_workflow; the notification's task id is that taskId, its toolUseId the Workflow call's, which every agent.spawn of the run carries as tool_use_id.
+A run stopped with TaskStop raises no notification: its agents' turn.complete come at once with reason aborted, and the journal and the task's output file stay as they were.
+ui.render UserMessage is raised again for an old notification row whenever the transcript redraws it.
+The task's output file (the notification's output-file) is empty while the run goes on and is written once at the end, with workflowProgress (per agent: state, attempt, tokens, toolCalls, durationMs) and logs; neither its path nor its format is in the types.
+A workflow agent's own rows raise session.append with its agentId (door prompt, response, tool-result, attachment); nothing is raised while one tool call runs.
+$.agent.list() never lists a workflow's agents, and there is no TaskOutput tool for $.tool.call.
+validate refuses a telemetry.log hook on the anthropic stream (one with no `to` stands on it): that stream is for plugins built into the CLI.
 $.fs has no append, and validate refuses $ passed to a helper.
 A command.run answer's context starts no turn; it is read on the next prompt, where it outweighs what was typed.
 SGR mouse sequences sent with tmux send-keys -l reach a Client (down, move, up, hover) in 1-based screen cells, one event per frame: space them 0.3 s.

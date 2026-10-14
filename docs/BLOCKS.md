@@ -59,4 +59,3 @@ Prefill is written into the field when the block is added; a hint shows while th
 - Changing a block's kind keeps every value that was typed; a value still as the old kind filled it in is replaced by the new kind's. An empty container gets the new kind's starter blocks.
 - A loop of kind pass or dry is added with its starter blocks in one edit (one undo).
 - No field is read for a count or a meaning: `once per`, a stop condition and the votes in a logic are words for Claude.
-- The agent count is a floor: one per agent block, the cheapest arm of a branch (none for a single arm). It says `≥` when the project holds a pipeline, a parallel, a loop, a verify, a judge, a subworkflow, or a branch whose arms differ in agents.

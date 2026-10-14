@@ -44,7 +44,6 @@ import {
   detailWidth,
   dockColumns,
   elapsedOf,
-  factsLine,
   fitHelp,
   freeName,
   graphProps,
@@ -766,7 +765,8 @@ const request = async ($: EngineInterface, kind: 'run' | 'ask' | 'draft'): Promi
   if (kind === 'run') {
     // The mod's own prompt does not come by its `prompt.submit` hook: the hand-off is made here.
     if (!(await handOff($, ui.name))) return say($, `run: ${ui.name} could not be handed off`)
-    if (now !== null) $.ui.toast(`conductor: ${ui.name} handed to Claude · ${preflightLine(now)}`)
+    const problems = now === null ? null : preflightLine(now)
+    if (now !== null) $.ui.toast(`conductor: ${ui.name} handed to Claude${problems === null ? '' : ` · ${problems}`}`)
     // From a clock callback, never from inside the chain of keys, which it would hold for the turn.
     // Refused (the prompt box holds text): the request is left there for the person to send.
     $.clock.after(SUBMIT_DELAY_MS, () => {
@@ -1914,13 +1914,12 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           </Box>,
         ]
       })
-    // Short of room the facts go first, then the state; the name keeps eight cells at the least.
-    const headOf = (facts: string | null, keys: readonly LegendItem[] = []) => {
+    // Short of room the state goes first; the name keeps eight cells at the least.
+    const headOf = (keys: readonly LegendItem[] = []) => {
       const room = headColumns - COMMAND.length - 3 - nameMark.length
       const said = room - cellWidth(state.text) - 3 >= 8 ? state : null
       const left = room - (said === null ? 0 : cellWidth(said.text) + 3)
-      const count = said !== null && facts !== null && left - cellWidth(facts) - 3 >= 8 ? facts : null
-      const name = <Text bold color={TEXT}>{clip(shownName, Math.max(8, left - (count === null ? 0 : cellWidth(count) + 3)))}</Text>
+      const name = <Text bold color={TEXT}>{clip(shownName, Math.max(8, left))}</Text>
       return [
         <Box flexDirection="row" height={1} flexShrink={0}>
           <Text bold color="claude">{COMMAND}</Text>
@@ -1935,8 +1934,6 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           )}
           {said !== null && <Text color={FADED}>{' / '}</Text>}
           {said !== null && <Text key="project-state" color={said.color}>{said.text}</Text>}
-          {count !== null && <Text color={FADED}>{' / '}</Text>}
-          {count !== null && <Text key="project-facts" color="suggestion">{count}</Text>}
         </Box>,
         <Box key="project-legend" flexDirection="row" height={1} flexShrink={0}>
           {keys.length > 0 ? headLegend(legendRows(keys, headColumns, 1)[0] ?? []) : <Text color={TEXT}> </Text>}
@@ -2027,7 +2024,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       fieldsDrawn = false
       return (
         <Box flexDirection="column" paddingLeft={1}>
-          {headOf(null, [{ keys: 'p', word: 'Projects', core: true }])}
+          {headOf([{ keys: 'p', word: 'Projects', core: true }])}
           {catcher()}
           <Text color="error">{oneLine(`${file} could not be used: ${ui.error ?? 'unknown reason'}`)}</Text>
           <Text color={FADED}>{`The file was left as it is. Fix or remove it, then run /${COMMAND} again.`}</Text>
@@ -2278,7 +2275,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       const preview = graphBoxOf(graphW, graphRows, shown ? { ...previewProps(shown, box), wheel: { from: LOAD, rows: wheelRows } } : null, null)
       return frame(
         true,
-        headOf(shown !== null && !isBlank(shown) ? factsLine(shown) : null, keys.header),
+        headOf(keys.header),
         shown ? preview : <Box key="project-graph" width={graphW} height={graphRows} flexShrink={0} />,
         detailBox(detailRows, hints, content, 1 + graphW + 3),
         message === null ? null : { text: message, color: focused ? 'warning' : FADED },
@@ -2723,7 +2720,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
             )),
     )
 
-    return frame(catching, headOf(factsLine(project), keys.header), graph, hidden ? null : detailBox(detailRows, hints, content, detailLeft), message, actionsOf(keys.actions))
+    return frame(catching, headOf(keys.header), graph, hidden ? null : detailBox(detailRows, hints, content, detailLeft), message, actionsOf(keys.actions))
   })
 
   // The compact view, drawn in the band above the prompt while the designer is minimized. Nothing while the pane is on screen:
@@ -2783,7 +2780,6 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       rows: e.props.maxRows,
       shell,
       name: project === null ? null : ui.name,
-      facts: project !== null && !isBlank(project) ? factsLine(project) : null,
       goal: project === null ? '' : oneLine(goalOf(project)),
       run: summary === null ? null : { bar: bar(settled, agents.length, COMPACT_BAR_W), text: `${runName}${summary.text.replace(/^[a-z]+/, word => word.toUpperCase())}`, color: summary.color },
       saved: bandListing.names,
@@ -2825,8 +2821,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     }
 
     const stateW = view.state.length
-    const factsW = view.facts === null ? 0 : view.facts.length + 3
-    const nameW = Math.max(8, room - COMMAND.length - 3 - stateW - 2 - factsW)
+    const nameW = Math.max(8, room - COMMAND.length - 3 - stateW - 2)
     const rows = view.taken - (view.bordered ? 2 : 0)
     const body = (
       <Box flexDirection="row" height={rows}>
@@ -2845,8 +2840,6 @@ export const registerProject = (on: On, tracker: Tracker): void => {
               <Text bold color="claude">{COMMAND}</Text>
               <Text color={FADED}>{' / '}</Text>
               <Text bold color={TEXT}>{clip(view.name, nameW)}</Text>
-              {view.facts !== null && <Text color={FADED}>{' / '}</Text>}
-              {view.facts !== null && <Text color="suggestion">{view.facts}</Text>}
             </Text>
             <Box flexShrink={0}>
               <Text color={FADED}>{view.state}</Text>
