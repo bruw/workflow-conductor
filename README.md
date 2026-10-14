@@ -1,4 +1,4 @@
-![Conductor in Claude Code: open the board, build a workflow by keys and mouse, watch the run on the graph, minimize it](docs/demo.gif)
+![Conductor in Claude Code: open the board, build a workflow by keys and mouse, watch the run on the graph, minimize it](https://github.com/bruw/workflow-conductor/releases/download/media/demo.gif)
 
 There's a thing that happens when you ask Claude for a workflow. It writes two hundred lines of orchestration, tells you it'll start nine agents, and asks if that's all right. You say yes. Most everybody says yes. Nobody reads the script.
 
