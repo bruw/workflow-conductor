@@ -8,7 +8,7 @@ import { CRUMB_PAD, CRUMB_SEP, EMPTY_KEYS, EMPTY_NOTE, UNMAPPED_ID, edgeMarks, g
 import type { GraphCard, GraphDrop, GraphLayout, Seg } from './graph-layout'
 import { FAILED, fmtTokens, spinnerFrame } from './rail'
 import { cellWidth, clip, glyphs, plainCells } from './text'
-import { ACCENT, ACTIVE, FADED, GLYPH, RULE } from './theme'
+import { ACCENT, ACTIVE, FADED, GLYPH, GRAY, GRAY_FADED, RULE } from './theme'
 
 /** How a run of cells is drawn while the pointer is on it, or on any other of its `scope`. */
 export type Hover = { scope: string; color: string; bold: true; inverse?: true }
@@ -105,8 +105,8 @@ export const ARROW = { stream: '↓', barrier: '⇓' } as const
 export const ARROW_ALL = 'all '
 export const GUTTER_GLYPH = { left: '◀', right: '▶' } as const
 
-function accentOf(type: NodeType | 'unmapped'): string {
-  return type === 'unmapped' ? FADED : ACCENT[type]
+function accentOf(type: NodeType | 'unmapped', gray: boolean): string {
+  return type === 'unmapped' ? FADED : (gray ? GRAY : ACCENT)[type]
 }
 
 /** What can be pressed (a chip, a crumb, a gutter) is inverse in `claude` under the pointer. */
@@ -211,6 +211,9 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
   const faint = look({ color: FADED })
   const flashIds = new Set(options.flash?.ids ?? [])
   const flashStrong = options.flash?.strong === true
+  // While a run is drawn only it keeps colour (and `claude`, what can be pressed): the graph is in grays, a dimmer one for what it never reached.
+  const gray = options.run !== undefined
+  const gone = gray ? GRAY_FADED : 'inactive'
 
   type Tone = { faded: boolean; loud: boolean; tint: string; frame: Frame; edge: number; run: CardRun | undefined }
   const toneOf = (card: GraphCard): Tone => {
@@ -220,37 +223,37 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     const faded = lifted || run?.reached === false
     // A block an edit just touched borrows `claude` for a moment, whatever its type.
     const flashed = !faded && flashIds.has(card.id)
-    const tint = faded ? 'inactive' : accentOf(card.type)
+    const tint = faded ? gone : accentOf(card.type, gray)
     // The selection is the heavy border in `claude`; at rest a leaf's border is quiet and a container's has its type's colour.
-    const border = faded ? 'inactive' : card.selected || flashed ? 'claude' : card.kind === 'leaf' ? RULE : tint
+    const border = faded ? gone : card.selected || flashed ? 'claude' : card.kind === 'leaf' ? RULE : tint
     const shape = shapeOf(card)
     const frame = lifted ? (shape === 'leaf' ? LIFTED : FRAMES[shape].rest) : card.selected ? FRAMES[shape].selected : FRAMES[shape].rest
     return { faded, loud: flashed && flashStrong, tint, frame, edge: look(card.selected && !faded ? { color: border, bold: true } : { color: border }), run }
   }
 
   const segLook = (seg: Seg, tone: Tone): Look => {
-    const dim = { color: tone.faded ? 'inactive' : FADED }
+    const dim = { color: tone.faded ? gone : FADED }
     const loud = tone.loud ? { inverse: true as const } : {}
     switch (seg.role) {
       case 'type':
         return { color: tone.tint, ...loud }
       case 'title':
-        return tone.faded ? { color: 'inactive', bold: true } : { bold: true, ...loud }
+        return tone.faded ? { color: gone, bold: true } : { bold: true, ...loud }
       case 'arm':
-        return { color: tone.faded ? 'inactive' : ACCENT.branch, bold: true }
+        return { color: tone.faded ? gone : accentOf('branch', gray), bold: true }
       case 'error':
-        return { color: tone.faded ? 'inactive' : 'error' }
+        return { color: tone.faded ? gone : gray ? 'text' : 'error' }
       case 'badge':
-        return { color: tone.faded ? 'inactive' : 'error', bold: true, inverse: true }
+        return { color: tone.faded ? gone : gray ? 'text' : 'error', bold: true, inverse: true }
       case 'key':
-        return { color: tone.faded ? 'inactive' : 'claude', ...(seg.chip && !options.locked ? { hover: pressed(`conductor-chip-${seg.chip}`) } : {}) }
+        return { color: tone.faded ? gone : 'claude', ...(seg.chip && !options.locked ? { hover: pressed(`conductor-chip-${seg.chip}`) } : {}) }
       case 'value':
-        return { ...(tone.faded ? { color: 'inactive' } : {}), ...(seg.chip && !options.locked ? { hover: pressed(`conductor-chip-${seg.chip}`) } : {}) }
+        return { ...(tone.faded ? { color: gone } : {}), ...(seg.chip && !options.locked ? { hover: pressed(`conductor-chip-${seg.chip}`) } : {}) }
       case 'unset':
         return { color: 'inactive', ...(seg.chip && !options.locked ? { hover: pressed(`conductor-chip-${seg.chip}`) } : {}) }
       case 'meta':
       case 'text':
-        return tone.faded ? { color: 'inactive' } : {}
+        return tone.faded ? { color: gone } : {}
       default:
         return dim
     }

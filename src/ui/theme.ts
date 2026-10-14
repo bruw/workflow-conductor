@@ -33,3 +33,15 @@ export const ACCENT = {
   start: 'bashBorder',
 } as const
 
+/** `ACCENT` while a run is drawn, so only the run is in colour: an accent light on the default dark theme stays `text`, a darker one is `inactive`, a block the run never reached `subtle`. Theme keys follow any theme, but one that orders its accents otherwise keeps this order. */
+export const GRAY: Record<keyof typeof ACCENT, string> = {
+  agent: 'text',
+  pipeline: 'text',
+  parallel: 'inactive',
+  loop: 'inactive',
+  branch: 'text',
+  subworkflow: 'inactive',
+  code: 'inactive',
+  start: 'inactive',
+}
+export const GRAY_FADED = 'subtle'
