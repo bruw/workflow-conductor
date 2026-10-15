@@ -102,28 +102,3 @@ function count(value: unknown): number {
 
 /** The usage counts that make up the token figure shown: prompt tokens mostly arrive as cache writes and reads. */
 export const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'] as const
-
-/** One API message is several lines repeating its `message.id` and usage: counted once per id, the largest seen. */
-export function sumUsage(transcriptText: string): number {
-  if (typeof transcriptText !== 'string') return 0
-
-  const byMessage = new Map<string, number>()
-  let total = 0
-
-  for (const line of transcriptText.split('\n')) {
-    const message = parseLine(line)?.message
-    if (message === null || typeof message !== 'object') continue
-
-    const { id, usage } = message as { id?: unknown; usage?: unknown }
-    if (usage === null || typeof usage !== 'object') continue
-
-    const counts = usage as Record<string, unknown>
-    const tokens = USAGE_KEYS.reduce((sum, key) => sum + count(counts[key]), 0)
-
-    if (typeof id === 'string') byMessage.set(id, Math.max(byMessage.get(id) ?? 0, tokens))
-    else total += tokens
-  }
-
-  for (const tokens of byMessage.values()) total += tokens
-  return total
-}

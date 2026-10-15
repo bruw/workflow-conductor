@@ -113,8 +113,8 @@ test('state writes are coalesced: full changes per tick, token counts twice a se
   expect(Object.keys(log.writes[0]?.agents ?? {})).toEqual(['a1', 'a2'])
 
   const before = log.writes.length
-  for (let i = 0; i < 40; i++) {
-    tracker.agentUsage('a1', 10)
+  for (let i = 1; i <= 40; i++) {
+    tracker.agentUsage('a1', 10 * i)
     await advance(50)
   }
   const usageWrites = log.writes.length - before
@@ -124,6 +124,24 @@ test('state writes are coalesced: full changes per tick, token counts twice a se
 
   await advance(1000)
   expect(log.writes.at(-1)?.agents.a1?.tokens).toBe(400)
+})
+
+test("an agent's tokens are its latest request's count, kept at its end", async () => {
+  const { host, advance } = fakeHost()
+  const tracker = createTracker()
+  tracker.attach(host)
+  tracker.runStarted({ runId: 'wf_1' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'a1' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a2', label: 'a2' })
+  for (const tokens of [34_000, 35_000, 35_500]) tracker.agentUsage('a1', tokens)
+  tracker.agentUsage('a2', 20_000)
+  tracker.agentUsage('a1', 0)
+  expect(tracker.state().agents.a1?.tokens).toBe(35_500)
+
+  tracker.agentEnded('a1', { ok: true })
+  await advance(200)
+  expect(tracker.state().agents.a1).toMatchObject({ status: 'done', tokens: 35_500 })
+  expect(Object.values(tracker.state().agents).reduce((sum, agent) => sum + agent.tokens, 0)).toBe(55_500)
 })
 
 test('the tick runs only while something is running, and the spinner only while the pane shows', async () => {
@@ -143,7 +161,7 @@ test('the tick runs only while something is running, and the spinner only while 
   expect(log.frames.length).toBeGreaterThan(5)
   expect(log.statuses.at(-1)).toBe(undefined)
 
-  tracker.agentEnded('a1', { ok: true, tokens: 50 })
+  tracker.agentEnded('a1', { ok: true })
   await advance(500)
   const frames = log.frames.length
   // Nothing is pending while the run waits for the engine's notice of its end.
@@ -255,7 +273,7 @@ test('a stored run is picked up after a reload', async () => {
   const two = fakeHost()
   const second = createTracker()
   second.attach(two.host, one.log.writes.at(-1))
-  second.agentUsage('a1', 100)
+  second.agentUsage('a1', 400)
   second.agentEnded('a1', { ok: true })
   // The task the run is, kept in the stored state, is what the notice names.
   second.taskEnded('t1', 'completed')

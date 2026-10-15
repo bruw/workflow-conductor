@@ -63,10 +63,11 @@ test("a workflow run is followed from launch to the engine's notice of its end",
 
     return { model: 'claude-haiku-5-5', agentId }
   })
+  // A request's prompt grows with each one before it: its count is the messages it was sent over.
   on('turn.step', async function* (_$, e) {
-    yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: usage(100, 20) }
+    yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: usage(100 * e.messageCount, 20) }
 
-    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn' as const, usage: usage(100, 20) }
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn' as const, usage: usage(100 * e.messageCount, 20) }
   })
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
   on('ui.render', { component: 'UserMessage' }, async (_$, e) => ({ type: 'Text' as const, props: {}, children: [e.props.text] }))
@@ -79,8 +80,8 @@ test("a workflow run is followed from launch to the engine's notice of its end",
     return next(e)
   })
   const stored = async (): Promise<RunState> => written as RunState
-  const step = async (agentId: string | undefined) => {
-    for await (const chunk of $.turn.step({ turnId: 't', index: 0, model: 'claude-haiku-5-5', messageCount: 1, agentId })) void chunk
+  const step = async (agentId: string | undefined, messageCount = 1) => {
+    for await (const chunk of $.turn.step({ turnId: 't', index: 0, model: 'claude-haiku-5-5', messageCount, agentId })) void chunk
   }
   const complete = (agentId: string | undefined, isAborted = false) =>
     $.turn.complete({
@@ -126,13 +127,14 @@ test("a workflow run is followed from launch to the engine's notice of its end",
   expect(typeof statuses.at(-1)).toBe('string')
 
   await step(a)
-  await step(a)
+  await step(a, 3)
   await step(undefined)
   await step(stray.agentId)
   await clock.advance(600)
   state = await stored()
-  expect(state.agents[a]?.tokens).toBe(256)
-  expect(state.byPhase.Alpha?.tokens).toBe(256)
+  // The latest request's count, as the built-in workflow row shows it: each request re-reads the prompt, so a sum would count it twice.
+  expect(state.agents[a]?.tokens).toBe(328)
+  expect(state.byPhase.Alpha?.tokens).toBe(328)
   expect(Object.keys(state.agents).length).toBe(3)
 
   await complete(a)
@@ -141,7 +143,8 @@ test("a workflow run is followed from launch to the engine's notice of its end",
   await complete(stray.agentId)
   await clock.advance(200)
   state = await stored()
-  expect(state.agents[a]).toMatchObject({ status: 'done', tokens: 248, durationMs: 1136 })
+  // The turn's own usage is its requests summed: the end keeps the latest request's count.
+  expect(state.agents[a]).toMatchObject({ status: 'done', tokens: 328, durationMs: 1136 })
   expect(state.agents[b]).toMatchObject({ status: 'failed' })
   expect(state.status).toBe('running')
   expect(typeof statuses.at(-1)).toBe('string')

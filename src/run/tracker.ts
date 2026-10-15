@@ -57,7 +57,7 @@ const claimOf = (from: Handoff): Claim => ({ name: from.name, ids: new Set(from.
 /** `project`: the saved project the run's workflow is named as; the run is that project's, handed off or not. */
 export type RunStarted = { runId: string; name?: string; transcriptDir?: string; taskId?: string; project?: Handoff }
 export type AgentSpawned = { runId: string; agentId: string; label: string; index?: number }
-export type AgentEnded = { ok: boolean; aborted?: boolean; durationMs?: number; tokens?: number }
+export type AgentEnded = { ok: boolean; aborted?: boolean; durationMs?: number }
 
 export type Tracker = ReturnType<typeof createTracker>
 
@@ -92,8 +92,8 @@ export function createTracker() {
   let ends = 0
   let abortedOnly = true
 
-  /** Agents of the tracked run still running, with their token total so far. */
-  const totals = new Map<string, number>()
+  /** Agents of the tracked run still running, with their latest request's token count: its context, which the built-in workflow row shows. */
+  const latest = new Map<string, number>()
   /** Agents waiting for a phase, with the journal reads that missed them. */
   const noPhase = new Map<string, number>()
   /** The tick each agent was last heard from: its spawn, or a usage count. */
@@ -163,7 +163,7 @@ export function createTracker() {
     const close = (results: Map<string, boolean>): void => {
       if (state.runId !== runId) return
       const open = Object.values(state.agents).filter(agent => agent.status === 'running')
-      for (const agent of open) totals.delete(agent.agentId)
+      for (const agent of open) latest.delete(agent.agentId)
       noPhase.clear()
       apply([
         ...open.map((agent): RunEvent => ({ kind: 'agent-end', agentId: agent.agentId, ok: results.get(agent.agentId) ?? false })),
@@ -232,7 +232,7 @@ export function createTracker() {
     if (stale.length === 0) return
     ends += stale.length
     abortedOnly = false
-    for (const agent of stale) totals.delete(agent.agentId)
+    for (const agent of stale) latest.delete(agent.agentId)
     apply(stale.map(agent => ({ kind: 'agent-end', agentId: agent.agentId, ok: false })))
   }
 
@@ -309,7 +309,7 @@ export function createTracker() {
     replayed = false
     ends = 0
     abortedOnly = true
-    totals.clear()
+    latest.clear()
     noPhase.clear()
     heard.clear()
     if (own !== undefined) {
@@ -354,7 +354,7 @@ export function createTracker() {
         if (claim && state.status !== 'idle') active = claimOf(claim)
         for (const agent of Object.values(state.agents)) {
           if (agent.status !== 'running') continue
-          totals.set(agent.agentId, agent.tokens)
+          latest.set(agent.agentId, agent.tokens)
           heard.set(agent.agentId, ticks)
         }
       }
@@ -417,27 +417,26 @@ export function createTracker() {
       cancelStopWait()
       ends = 0
       abortedOnly = true
-      totals.set(agent.agentId, 0)
+      latest.set(agent.agentId, 0)
       noPhase.set(agent.agentId, 0)
       apply([{ kind: 'agent-start', runId: agent.runId, agentId: agent.agentId, label: agent.label, index: agent.index }])
       if (ticks - lastRead >= JOURNAL_EVERY) readJournal()
     },
 
+    /** `tokens`: one request's four usage counts. Each request re-reads the whole prompt, so a sum would count it once per request. */
     agentUsage(agentId: string, tokens: number): void {
-      const total = totals.get(agentId)
-      if (total === undefined || !Number.isFinite(tokens) || tokens <= 0) return
-      totals.set(agentId, total + tokens)
-      apply([{ kind: 'agent-usage', agentId, tokens: total + tokens }])
+      if (!latest.has(agentId) || !Number.isFinite(tokens) || tokens <= 0) return
+      latest.set(agentId, tokens)
+      apply([{ kind: 'agent-usage', agentId, tokens }])
     },
 
     agentEnded(agentId: string, end: AgentEnded): void {
-      const total = totals.get(agentId)
-      if (total === undefined) return
-      totals.delete(agentId)
+      const tokens = latest.get(agentId)
+      if (tokens === undefined) return
+      latest.delete(agentId)
       ends++
       abortedOnly &&= end.aborted === true
-      // The end's own count is the agent's total; one that says none (absent, or 0) never takes away what was counted.
-      apply([{ kind: 'agent-end', agentId, ok: end.ok, durationMs: end.durationMs, tokens: end.tokens !== undefined && end.tokens > 0 ? end.tokens : total }])
+      apply([{ kind: 'agent-end', agentId, ok: end.ok, durationMs: end.durationMs, tokens }])
     },
 
     /**

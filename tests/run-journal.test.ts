@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { NodeRun, RunState } from '../src/run/events'
-import { journalPhases, journalToEvents, sumUsage } from '../src/run/journal'
+import { journalPhases, journalToEvents } from '../src/run/journal'
 import type { AgentMeta } from '../src/run/journal'
 import { reduce, reduceAll } from '../src/run/reducer'
 // The runner loads code files only, so each fixture has a generated .ts mirror.
@@ -212,44 +212,6 @@ test('fixtures carry no result payloads', async () => {
       expect(Object.keys(meta).sort()).toEqual(['description', 'workflowPhase'])
     }
   }
-})
-
-test('sumUsage totals all four usage counts once per message', async () => {
-  const usage = (input_tokens: number, output_tokens: number) => ({ input_tokens, output_tokens, cache_read_input_tokens: 9000, cache_creation_input_tokens: 500 })
-  const text = jsonl(
-    { type: 'user', message: { role: 'user', content: 'hi' } },
-    { type: 'attachment' },
-    // One API message written as three lines repeating the same usage.
-    { type: 'assistant', message: { id: 'msg_1', usage: usage(10, 5) } },
-    { type: 'assistant', message: { id: 'msg_1', usage: usage(10, 5) } },
-    { type: 'assistant', message: { id: 'msg_1', usage: usage(10, 40) } },
-    { type: 'assistant', message: { id: 'msg_2', usage: usage(3, 7) } },
-    { type: 'assistant', message: { usage: usage(1, 1) } },
-    { type: 'assistant', message: { usage: usage(1, 1) } },
-  )
-
-  // Each counted message also carries 9500 cache tokens.
-  expect(sumUsage(text)).toBe(50 + 10 + 2 + 2 + 4 * 9500)
-})
-
-test('sumUsage survives malformed transcripts', async () => {
-  const text = [
-    'garbage',
-    '{"type":"assistant","message":{"id":"m","usage":{"input_tokens":4',
-    'null',
-    '[]',
-    JSON.stringify({ type: 'assistant' }),
-    JSON.stringify({ type: 'assistant', message: null }),
-    JSON.stringify({ type: 'assistant', message: 'text' }),
-    JSON.stringify({ type: 'assistant', message: { id: 'a', usage: null } }),
-    JSON.stringify({ type: 'assistant', message: { id: 'b', usage: { input_tokens: '12', output_tokens: -3 } } }),
-    JSON.stringify({ type: 'assistant', message: { id: 'c', usage: { output_tokens: 6 } } }),
-    JSON.stringify({ type: 'assistant', message: { id: 'd', usage: { input_tokens: 2, output_tokens: 3 } } }),
-  ].join('\n')
-
-  expect(sumUsage(text)).toBe(11)
-  expect(sumUsage('')).toBe(0)
-  expect(sumUsage(undefined as unknown as string)).toBe(0)
 })
 
 test('journalPhases maps each started agent to its phase, or null when it has none', async () => {

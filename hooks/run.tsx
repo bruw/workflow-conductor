@@ -45,7 +45,7 @@ const text = (value: unknown): string | undefined => (typeof value === 'string' 
 
 const count = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0)
 
-/** The figure shown for a request or a turn: all four usage counts, as the built-in workflow row totals them. */
+/** One request's figure: all four usage counts, as the built-in workflow row counts an agent's latest request. */
 const usageTotal = (usage: unknown): number | undefined => {
   if (usage === null || typeof usage !== 'object') return undefined
   const counts = usage as Record<string, unknown>
@@ -220,7 +220,6 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         ok: !e.isAborted && e.reason !== 'error' && e.reason !== 'refusal',
         aborted: e.isAborted,
         durationMs: e.durationMs,
-        tokens: usageTotal(e.usage),
       })
     }
 

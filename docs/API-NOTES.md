@@ -3,9 +3,9 @@ agent.spawn's description is the workflow script's label, exactly.
 agentId is not on agent.spawn: it is on what await next(e) resolves to ({ model, agentId }).
 agent.spawn has no phase: e.workflow holds only runId and agentIndex.
 The spawns of one parallel batch arrive out of order.
-A workflow agent raises one turn.complete with its agentId and usage; the main loop's turn.complete has no agentId.
-The engine's token figure is the sum of all four usage counts: input, output, cache read, cache creation.
-turn.step is a streaming hook raised per model request, main loop too; its last chunk (kind stop) carries that request's usage, so the stops summed per agentId are a live total.
+A workflow agent raises one turn.complete with its agentId and its requests' usage summed; the main loop's turn.complete has no agentId.
+The workflow's token figure (the row, subagent_tokens in the task notification) is, per agent, its latest request's four usage counts (input, output, cache read, cache creation) summed: its context, not what it processed. Every request re-reads the whole prompt from the cache, so a sum over requests grows with their number.
+turn.step is a streaming hook raised per model request, main loop too; its last chunk (kind stop) carries that request's usage.
 A tool's input is flat on the tool.call event (e.script, no e.input); the Workflow result's fields are under r.result.
 The Workflow tool result arrives before the first agent.spawn: the run is in the background.
 transcriptDir is <projects>/<session id>/subagents/workflows/<runId>; $.fs reads it by absolute path with no permission prompt.
