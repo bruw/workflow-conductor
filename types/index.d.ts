@@ -92,10 +92,10 @@ declare module 'claude-code' {
       project: ConductorProject | null
       projectUi: ConductorProjectUi
       splashed: boolean
-      /** Beats counted since a draft was asked for: the splash that waits for it and the header's persona move on them. */
+      /** Beats counted since a draft was asked for: the splash that waits for it moves on them. */
       draftBeat: number
-      /** The gesture the header's persona holds (Pose in src/ui/persona.ts); `idle` at rest. */
-      persona: 'idle' | 'ready' | 'conducting' | 'complete'
+      /** Keys that moved the selection, counted: each steps the header's mark on at once. */
+      markNudge: number
       /** Where the designer is: in its pane (`no`), or minimized into the band above the prompt (Shell in src/ui/compact.ts). */
       shell: { minimized: 'no' | 'person' | 'auto'; why: 'narrow' | 'screen' | 'dock' | 'short' | null }
     }

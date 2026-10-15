@@ -93,8 +93,9 @@ import type { CompactWhy, Minimized } from '../src/ui/compact'
 import { ENTER, KEY_OPS, MINIMIZE_KEYS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
 import { FAILED, bar, fmtCount } from '../src/ui/rail'
-import { BEAT_MS, GESTURE_MS, SCENE_COLUMNS, SCENE_ROWS, SMALL_ROWS, SMALL_SVG_H, SMALL_SVG_W, SMALL_W, SOLO_ROWS, SPLASH_MS, draftPose, gestureOf, nextPose, runPose, smallPersona, smallPersonaSvg, splashScene, waitScene } from '../src/ui/persona'
-import type { PersonaSpan, Pose } from '../src/ui/persona'
+import { BEAT_MS, SCENE_COLUMNS, SCENE_ROWS, SOLO_ROWS, SPLASH_MS, splashScene, waitScene } from '../src/ui/persona'
+import type { PersonaSpan } from '../src/ui/persona'
+import { MARK_ROWS, MARK_W, markFrame, markPalette } from '../src/ui/mark'
 import { cellWidth, clip, cutCells, firstLines, oneLine, padCells, sanitize, wrapText } from '../src/ui/text'
 import { ACCENT, FADED, GLYPH, PANE_ID, PANE_TITLE, RULE, TEXT } from '../src/ui/theme'
 import { wordmark } from '../src/ui/wordmark'
@@ -165,7 +166,7 @@ const LAND_TRIES = 5
 /** A redraw's worth of wait before the ring moves to an element just drawn. */
 export const FOCUS_DELAY_MS = 48
 export const BOX_POLL_MS = 600
-/** The persona's two rows. */
+/** The mark's two rows. */
 const HEAD_ROWS = 2
 const EDIT_HINT = 'click a field of the block, or press the Down arrow to reach the name'
 const MAIN_LEAST_ROWS = 5
@@ -178,7 +179,9 @@ const SAID_RULE_W = 3
 export const PANE_ROWS = 28
 /** A command's `e.presentation.columns` is the only place a hook is told the terminal's width: undefined until one has run. */
 let terminalColumns: number | undefined
-let restPersona: { cancel: () => void } | null = null
+/** The person's theme setting, for the mark's raw colours; read again once it is this old. */
+const THEME_MS = 5000
+let themeRead: { at: number; theme: string | undefined } = { at: -THEME_MS, theme: undefined }
 let splashing = false
 /** The splash stays on its last beat this long before the designer is drawn. */
 const SPLASH_REST_MS = 150
@@ -315,7 +318,8 @@ const projectAtom = atom({ plugin: 'workflow-conductor', key: 'project' } as con
 const uiAtom = atom({ plugin: 'workflow-conductor', key: 'projectUi' } as const, initialUi())
 const splashedAtom = atom({ plugin: 'workflow-conductor', key: 'splashed' } as const, false)
 const draftBeatAtom = atom({ plugin: 'workflow-conductor', key: 'draftBeat' } as const, 0)
-const personaAtom = atom({ plugin: 'workflow-conductor', key: 'persona' } as const, 'idle')
+/** Grows by one on each key that moves the selection: the mark steps on at once. */
+const nudgeAtom = atom({ plugin: 'workflow-conductor', key: 'markNudge' } as const, 0)
 const timesAtom = atom({ plugin: 'workflow-conductor', key: 'runTimes' } as const, initialTimes())
 const shellAtom = atom({ plugin: 'workflow-conductor', key: 'shell' } as const, initialShell())
 const runScriptAtom = atom({ plugin: 'workflow-conductor', key: 'runScript' } as const, null)
@@ -594,19 +598,17 @@ const store = async ($: EngineInterface, step: Step, before: Project | null): Pr
   return step.ui
 }
 
-const gesture = ($: EngineInterface, pose: Pose): void => {
-  restPersona?.cancel()
-  void update($, personaAtom, () => pose)
-  restPersona = $.clock.after(GESTURE_MS, () => {
-    restPersona = null
-    void update($, personaAtom, () => 'idle' as const)
-  })
+const beat = ($: EngineInterface): void => {
+  void update($, nudgeAtom, nudge => nudge + 1)
 }
 
-const beat = ($: EngineInterface): void => {
-  restPersona?.cancel()
-  restPersona = null
-  void update($, personaAtom, pose => nextPose(pose))
+const themeOf = async ($: EngineInterface): Promise<string | undefined> => {
+  const now = Date.now()
+  if (now - themeRead.at < THEME_MS) return themeRead.theme
+  const row = (await $.config.list().catch(() => [])).find(one => one.key === 'theme')
+  themeRead = { at: now, theme: typeof row?.value === 'string' ? row.value : undefined }
+
+  return themeRead.theme
 }
 
 /** Started by the drawing that shows the splash; a reload in the middle of it starts it again. */
@@ -627,8 +629,6 @@ const commit = async ($: EngineInterface, make: (project: Project | null, held: 
   const nextUi = await store($, step, before)
   if (step.project !== before) await update($, projectAtom, () => step.project)
   if (nextUi !== held) await update($, uiAtom, () => nextUi)
-  const pose = step.changed ? gestureOf(before, step.project) : null
-  if (pose !== null) gesture($, pose)
 
   return { ...step, ui: nextUi }
 }
@@ -1704,14 +1704,12 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const Input = 'Input' in els ? els.Input : null
-    // The terminal draws no picture (its table's `Svg` is a fragment: nothing): there the header's persona is blocks of a font, elsewhere one picture.
-    const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
     const ui = await read($, uiAtom)
     const project = await read($, projectAtom)
     const file = `${PROJECT_DIR}/${ui.name}.json`
     const bodyColumns = e.props.bodyColumns || 80
     const columns = Math.max(20, bodyColumns - 2)
-    const headColumns = columns - SMALL_W
+    const headColumns = columns - MARK_W
     const run = await read($, runAtom)
     const runProject = await read($, runProjectAtom)
     const over = overlaysProject(run, runProject, ui)
@@ -1719,9 +1717,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     // The tick clock is read only while it matters, so an idle pane is not redrawn by it.
     const clock = locked ? await read($, clockAtom) : 0
     const overlay = over ? runOverlay(run, clock) : undefined
-    const asked = await read($, personaAtom)
     const draftBeats = (ui.drafting ?? null) !== null ? await read($, draftBeatAtom) : 0
-    const pose: Pose = ui.drafting === 'show' ? draftPose(draftBeats) : asked !== 'idle' ? asked : ((over ? runPose(run.status, clock) : null) ?? 'idle')
+    const cycle = { nudge: await read($, nudgeAtom), theme: await themeOf($) }
     const splashed = await read($, splashedAtom)
     // Whether the pane holds the keyboard: Escape hands it to the prompt, and a field left open then is closed to the eye.
     const focused = e.props.isFocused !== false
@@ -1955,8 +1952,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const frame = (catching: boolean, head: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, said: Said, actions: RenderChildren) => (
       <Box flexDirection="column" position="relative">
         <Box flexDirection="row" paddingLeft={1} paddingRight={1}>
-          <Box key="project-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
-            {Svg ? <Svg source={smallPersonaSvg(pose)} alt={`the conductor, ${pose}`} width={SMALL_SVG_W} height={SMALL_SVG_H} /> : spanRows(smallPersona(pose))}
+          <Box key="project-mark" flexDirection="column" width={MARK_W} flexShrink={0}>
+            {'Client' in els ? <els.Client key="project-mark-cycle" module="./mark.tsx" width={MARK_W} height={MARK_ROWS} props={cycle} /> : spanRows(markFrame(0, 0, markPalette(cycle.theme)))}
           </Box>
           <Box flexDirection="column" width={headColumns} height={HEAD_ROWS} flexShrink={0}>
             {head}
@@ -2630,11 +2627,10 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const tracked = run.status === 'running' || (run.status !== 'idle' && project !== null && runProject === ui.name && !ui.runCleared)
     // The tick clock is read only while a run is on, so a band at rest is not redrawn by it.
     const clock = run.status === 'running' ? await read($, clockAtom) : 0
-    const asked = await read($, personaAtom)
-    const pose: Pose = asked !== 'idle' ? asked : ((tracked ? runPose(run.status, clock) : null) ?? 'idle')
+    const cycle = { nudge: await read($, nudgeAtom), theme: await themeOf($) }
     const columns = e.props.bodyColumns
     // The border and its padding take their cells from every row.
-    const room = Math.max(8, columns - SMALL_W - (e.props.maxRows >= BORDER_ROWS ? BORDER_CELLS : 0))
+    const room = Math.max(8, columns - MARK_W - (e.props.maxRows >= BORDER_ROWS ? BORDER_CELLS : 0))
     const agents = Object.values(run.agents)
     const settled = agents.filter(agent => agent.status !== 'running').length
     const summary = tracked ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, room - COMPACT_BAR_W - 2)) : null
@@ -2689,14 +2685,18 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const rows = view.taken - (view.bordered ? 2 : 0)
     const body = (
       <Box flexDirection="row" height={rows}>
-        <Box key="conductor-persona" flexDirection="column" width={SMALL_W} flexShrink={0}>
-          {smallPersona(pose).map(row => (
-            <Box flexDirection="row" height={1} flexShrink={0}>
-              {row.map(span => (
-                <Text color={span.color ?? TEXT} backgroundColor={span.ground}>{span.text}</Text>
-              ))}
-            </Box>
-          ))}
+        <Box key="conductor-mark" flexDirection="column" width={MARK_W} flexShrink={0}>
+          {'Client' in els ? (
+            <els.Client key="conductor-mark-cycle" module="./mark.tsx" width={MARK_W} height={MARK_ROWS} props={cycle} />
+          ) : (
+            markFrame(0, 0, markPalette(cycle.theme)).map(row => (
+              <Box flexDirection="row" height={1} flexShrink={0}>
+                {row.map(span => (
+                  <Text color={span.color ?? TEXT}>{span.text}</Text>
+                ))}
+              </Box>
+            ))
+          )}
         </Box>
         <Box flexDirection="column" width={room} flexShrink={0}>
           <Box flexDirection="row" justifyContent="space-between" height={1}>

@@ -4,7 +4,7 @@
 import { DOCK_MIN_TERMINAL, FULL_MIN_COLUMNS, FULL_MIN_ROWS } from '../project/session'
 
 import { MINIMIZE_KEYS } from './keys'
-import { SMALL_ROWS, SMALL_W } from './persona'
+import { MARK_ROWS, MARK_W } from './mark'
 import { clip } from './text'
 
 export type Minimized = 'no' | 'person' | 'auto'
@@ -44,7 +44,7 @@ export const COMPACT_BAR_W = 12
 export const LIST_GAP = 2
 export const LIST_LABEL = 'Projects'
 /** The rows the band must give for a border, and the cells the border and its padding take of a row. */
-export const BORDER_ROWS = SMALL_ROWS + 2
+export const BORDER_ROWS = MARK_ROWS + 2
 export const BORDER_CELLS = 4
 export const EXPAND_WORD = 'Expand'
 export const EXPAND_W = `[${MINIMIZE_KEYS}] ${EXPAND_WORD}`.length
@@ -105,10 +105,10 @@ export function compactView(input: CompactInput): CompactView {
   const why = shell.minimized === 'auto' && shell.why !== null ? WHY_TEXT[shell.why] : null
   const text = run !== null ? run.text : why !== null ? why : input.name === null ? 'pick one above · /conductor <what you want> has Claude draft one' : input.goal === '' ? 'Goal: not said yet' : `Goal: ${input.goal}`
   const status = { bar: run?.bar ?? null, text, color: run?.color ?? null }
-  const oneLine = rows < SMALL_ROWS
+  const oneLine = rows < MARK_ROWS
   const bordered = rows >= BORDER_ROWS
   // The projects have a row once the border has its two: under the name's, over the run's.
-  const list = rows >= BORDER_ROWS + 1 ? compactList(input.saved, input.name, columns - SMALL_W - BORDER_CELLS) : null
-  const taken = oneLine ? 1 : SMALL_ROWS + (list === null ? 0 : 1) + (bordered ? 2 : 0)
+  const list = rows >= BORDER_ROWS + 1 ? compactList(input.saved, input.name, columns - MARK_W - BORDER_CELLS) : null
+  const taken = oneLine ? 1 : MARK_ROWS + (list === null ? 0 : 1) + (bordered ? 2 : 0)
   return { oneLine, name, state, status, list, bordered, taken }
 }
