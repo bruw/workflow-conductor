@@ -1,6 +1,6 @@
 ![Conductor in Claude Code: open the board, build a workflow by keys and mouse, watch the run on the graph, minimize it](https://github.com/bruw/workflow-conductor/releases/download/media/demo.gif)
 
-Claude Code Mod that adds a UI for planning, running and understanding multi-agent Workflows in Claude Code.
+Claude Code Mod that adds a UI for planning, running and understanding agent Workflows.
 
 Claude writes a long orchestration script and proposes to execute. You say yes. Most everybody says yes. Nobody reads the script.
 Then the agents go off somewhere you can't see, and you sit watching a counter, hoping that what's burning your tokens is the thing you meant.
