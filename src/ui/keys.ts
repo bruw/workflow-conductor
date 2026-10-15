@@ -133,12 +133,12 @@ export function legendItems(state: LegendState): Legend {
   const save: LegendItem = { keys: 'Enter', word: 'Save, back to the graph', core: true }
   const pages: LegendItem[] = [{ keys: '? h', word: 'Next page', core: true }, { keys: 'x', word: 'Close help', core: true }]
   const help: LegendItem = { keys: '?', word: 'Help', core: true }
-  const minimize: LegendItem = { keys: MINIMIZE_KEYS, word: 'Minimize', core: false }
+  const minimize: LegendAction = { key: MINIMIZE_KEYS, word: 'Minimize', on: true }
   if (state.ring === 'start') {
     const choose: LegendItem[] = [{ keys: '↑ ↓', word: 'Choose', core: true }, { keys: 'Enter', word: 'Open', core: true }]
     const back: LegendItem[] = state.back ? [{ keys: 'p', word: 'Back', core: true }] : []
     // A help page has the detail pane in place of the list: the keys that walk the list still act, and are the header's.
-    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, minimize, help], actions: [], detail: choose }
+    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, help], actions: [minimize], detail: choose }
   }
   const edits = !state.locked
   // In a field and in the add list the letters are text, so the actions wait.
@@ -164,6 +164,7 @@ export function legendItems(state: LegendState): Legend {
     }
   }
   if (state.helping) return { header: [{ keys: 'WASD', word: 'Navigate', core: true }], actions, detail: pages }
+  actions.push(minimize)
   const moves = edits && state.selected && !state.fixed
   const header: (LegendItem | false)[] = [
     // First, so it is the last to go where the room is short.
@@ -178,7 +179,6 @@ export function legendItems(state: LegendState): Legend {
     state.nested && { keys: 'b', word: 'Back', core: true },
     edits && state.undo && { keys: 'u', word: 'Undo', core: false },
     edits && state.redo && { keys: 'y', word: 'Redo', core: false },
-    minimize,
     help,
   ]
   // Enter opens the selected block's fields (the Down arrow does too: the help page says so).

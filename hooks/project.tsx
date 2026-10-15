@@ -1795,28 +1795,16 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         ])}
       </Text>
     )
-    // Minimize is a button, so a click minimizes while the keys are in the prompt.
     const headLegend = (row: readonly LegendItem[]) =>
-      row.flatMap((item, index) => {
-        const label = (
+      row.flatMap((item, index) => [
+        ...(index > 0 ? [<Box width={LEGEND_GAP} flexShrink={0} />] : []),
+        <Box flexShrink={0}>
           <Text>
-            <Text color={focused || item.keys === MINIMIZE_KEYS ? 'claude' : FADED}>{`[${item.keys}]`}</Text>
-            <Text color={item.keys === MINIMIZE_KEYS ? TEXT : FADED}>{` ${item.word}`}</Text>
+            <Text color={focused ? 'claude' : FADED}>{`[${item.keys}]`}</Text>
+            <Text color={FADED}>{` ${item.word}`}</Text>
           </Text>
-        )
-        return [
-          ...(index > 0 ? [<Box width={LEGEND_GAP} flexShrink={0} />] : []),
-          <Box flexShrink={0}>
-            {item.keys === MINIMIZE_KEYS ? (
-              <Button key={MINIMIZE_BUTTON} plain onPress={() => minimize($, 'person')}>
-                {label}
-              </Button>
-            ) : (
-              label
-            )}
-          </Box>,
-        ]
-      })
+        </Box>,
+      ])
     // Short of room the state goes first; the name keeps eight cells at the least.
     const headOf = (keys: readonly LegendItem[] = []) => {
       const room = headColumns - COMMAND.length - 3 - nameMark.length
