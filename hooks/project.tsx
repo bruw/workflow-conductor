@@ -88,9 +88,9 @@ import { replayProjectEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
 import { NOT_SET, UNMAPPED_ID, canOpen } from '../src/ui/graph-layout'
 import { parseGraphMessage } from '../src/ui/graph-model'
-import { BORDER_CELLS, BORDER_ROWS, COMPACT_BAR_W, EXPAND_W, EXPAND_WORD, LIST_GAP, LIST_LABEL, compactView, initialShell, whyCompact, wouldDock } from '../src/ui/compact'
+import { BORDER_CELLS, BORDER_ROWS, COMPACT_BAR_W, EXPAND_W, EXPAND_WORD, LIST_GAP, LIST_LABEL, WHY_TEXT, compactView, initialShell, whyCompact, wouldDock } from '../src/ui/compact'
 import type { CompactWhy, Minimized } from '../src/ui/compact'
-import { ENTER, KEY_OPS, MINIMIZE_KEYS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
+import { ENTER, FOCUS_HINT, KEY_OPS, MINIMIZE_KEYS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
 import { FAILED, bar, fmtCount } from '../src/ui/rail'
 import { BEAT_MS, SCENE_COLUMNS, SCENE_ROWS, SOLO_ROWS, SPLASH_MS, splashScene, waitScene } from '../src/ui/persona'
@@ -668,11 +668,14 @@ let autoTried = ''
 let minimizing = false
 /** The pane is given this long to be drawn with the room it has before a pane short of room is minimized. */
 const MINIMIZE_DELAY_MS = 32
+/** Opened by the person from the band: short of room it stays and says why, since a dock can be widened only while it is on screen. */
+let heldOpen = false
 
 /** From a clock callback: a drawing asks for it too, and a drawing closes nothing. */
 const minimize = ($: EngineInterface, by: Exclude<Minimized, 'no'>, why: CompactWhy | null = null): void => {
   if (minimizing) return
   minimizing = true
+  heldOpen = false
   $.clock.after(by === 'auto' ? MINIMIZE_DELAY_MS : 0, () => {
     void (async (): Promise<void> => {
       await flushDrafts($)
@@ -691,6 +694,7 @@ const minimize = ($: EngineInterface, by: Exclude<Minimized, 'no'>, why: Compact
 /** `asked` opens the pane with the keyboard (a key or a click), else without (the terminal was widened); a pane still short of room minimizes itself anew. */
 const expand = async ($: EngineInterface, asked: boolean, columns?: number): Promise<void> => {
   terminalColumns = columns ?? terminalColumns
+  heldOpen = asked
   const opened = await $.ui.open(paneArgs(asked)).catch(() => undefined)
   if (opened?.isPlaced === false) return
   // A press in the band holds the keyboard: the pane is shown without it and takes the keys once drawn, as after a click on the graph.
@@ -1726,10 +1730,33 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     // A pane with no room for the screen draws none of it: the designer goes into the band, which says why.
     const shell = await read($, shellAtom)
     if (!fitsFull(bodyColumns, bodyRows)) {
-      if (!minimizing) minimize($, 'auto', whyCompact({ dock: e.props.placement !== 'inline', bodyColumns, bodyRows, fullscreen: e.viewport?.isFullscreen === true }))
+      const why = whyCompact({ dock: e.props.placement !== 'inline', bodyColumns, bodyRows, fullscreen: e.viewport?.isFullscreen === true })
+      if (heldOpen)
+        return (
+          <Box flexDirection="column">
+            <Text color={FADED} wrap="truncate-end">{`${GLYPH.diamond} ${WHY_TEXT[why]}`}</Text>
+            <Box flexDirection="row" justifyContent="space-between">
+              <Button key={`${MINIMIZE_BUTTON}:held`} plain onPress={() => minimize($, 'person')}>
+                <Text>
+                  <Text color="claude">{`[${MINIMIZE_KEYS}]`}</Text>
+                  <Text color={TEXT}> Minimize</Text>
+                </Text>
+              </Button>
+              {/* A Button with a hotkey writes it before its label, so the key is this one, not drawn. */}
+              <Box key="project-minimize-key" display="none">
+                <Button key={`${MINIMIZE_BUTTON}:key`} hotkey={MINIMIZE_KEYS} onPress={() => minimize($, 'person')}>
+                  Minimize
+                </Button>
+              </Box>
+              <Text color={FADED}>{FOCUS_HINT}</Text>
+            </Box>
+          </Box>
+        )
+      if (!minimizing) minimize($, 'auto', why)
 
       return <Text color={FADED}>{`${GLYPH.diamond} ${PROJECT_PANE_TITLE}: no room here for the designer, it goes to the band above the prompt`}</Text>
     }
+    heldOpen = false
     // Drawn in its pane again: the band has nothing to show. Asked of the engine, not taken from this drawing: one
     // that was on its way when the pane closed is of a pane that is gone. Written from a clock callback: a drawing changes no state.
     if (shell.minimized !== 'no' && !minimizing && (await $.ui.panes()).some(pane => pane.id === PROJECT_PANE_ID && pane.isPlaced)) {
@@ -1853,29 +1880,36 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     }
     const rule = () => <Text color={RULE}>{'─'.repeat(columns)}</Text>
     // One row always, blank where there is none to press, so the pane keeps its shape.
+    // The actions centred between two sides as wide as the focus hint, which is in the right one.
     const actionsOf = (actions: readonly LegendAction[]) => (
-      <Box key="project-actions" flexDirection="row" justifyContent="center" height={1} flexShrink={0}>
-        {actions.length === 0 && <Text color={TEXT}> </Text>}
-        {actions.flatMap((action, index) => {
-          const label = (
-            <Text>
-              <Text color={action.on && focused ? 'claude' : FADED}>{`[${action.key}]`}</Text>
-              <Text color={action.on ? TEXT : FADED}>{` ${action.word}`}</Text>
-            </Text>
-          )
-          return [
-            ...(index > 0 ? [<Box width={ACTION_GAP} flexShrink={0} />] : []),
-            action.on ? (
-              <Box flexShrink={0}>
-                <Button key={`${ACTION_BUTTON_PREFIX}${action.key}`} plain onPress={() => queueKeys($, [action.key])}>
-                  {label}
-                </Button>
-              </Box>
-            ) : (
-              label
-            ),
-          ]
-        })}
+      <Box key="project-actions" flexDirection="row" height={1} flexShrink={0}>
+        <Box width={FOCUS_HINT.length} flexShrink={0} />
+        <Box flexDirection="row" flexGrow={1} justifyContent="center">
+          {actions.length === 0 && <Text color={TEXT}> </Text>}
+          {actions.flatMap((action, index) => {
+            const label = (
+              <Text>
+                <Text color={action.on && focused ? 'claude' : FADED}>{`[${action.key}]`}</Text>
+                <Text color={action.on ? TEXT : FADED}>{` ${action.word}`}</Text>
+              </Text>
+            )
+            return [
+              ...(index > 0 ? [<Box width={ACTION_GAP} flexShrink={0} />] : []),
+              action.on ? (
+                <Box flexShrink={0}>
+                  <Button key={`${ACTION_BUTTON_PREFIX}${action.key}`} plain onPress={() => queueKeys($, [action.key])}>
+                    {label}
+                  </Button>
+                </Box>
+              ) : (
+                label
+              ),
+            ]
+          })}
+        </Box>
+        <Box width={FOCUS_HINT.length} flexShrink={0}>
+          <Text color={FADED}>{FOCUS_HINT}</Text>
+        </Box>
       </Box>
     )
     // Less the header, the rule under it, the rule above the buttons and their row.
@@ -2648,6 +2682,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const terminal = e.viewport?.columns
     const expandButton = (
       <Box flexDirection="row" flexShrink={0}>
+        <Text color={FADED}>{`${FOCUS_HINT}  `}</Text>
         <Button key={EXPAND_ELEMENT} plain onPress={() => press($, () => expand($, true, terminal))}>
           <Text>
             <Text color="claude">{`[${EXPAND_HOTKEY}]`}</Text>
@@ -2674,7 +2709,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       return (
         <Box flexDirection="row" height={1}>
           <Text bold color="claude">{`${clip(lead, Math.max(8, Math.floor(columns / 3)))}  `}</Text>
-          <Box flexGrow={1} flexShrink={1}>{statusRow(columns - lead.length - EXPAND_W - 4)}</Box>
+          <Box flexGrow={1} flexShrink={1}>{statusRow(columns - lead.length - EXPAND_W - FOCUS_HINT.length - 6)}</Box>
           <Box flexShrink={0}>{expandButton}</Box>
         </Box>
       )
@@ -2724,7 +2759,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
             </Box>
           )}
           <Box flexDirection="row" justifyContent="space-between" height={1}>
-            <Box flexGrow={1} flexShrink={1}>{statusRow(room - EXPAND_W - 2)}</Box>
+            <Box flexGrow={1} flexShrink={1}>{statusRow(room - EXPAND_W - FOCUS_HINT.length - 4)}</Box>
             <Box flexShrink={0}>{expandButton}</Box>
           </Box>
         </Box>

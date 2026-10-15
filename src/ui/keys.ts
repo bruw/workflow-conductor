@@ -68,6 +68,9 @@ export const KEY_OPS: Record<string, KeyOp> = {
 /** One key both minimizes the pane and expands the band. */
 export const MINIMIZE_KEYS = 'm'
 
+/** Letter keys act only once the band or the pane holds the keys, which this engine chord (`abovePrompt:focus`) gives them. */
+export const FOCUS_HINT = 'Ctrl+x tab: focus'
+
 /** Characters that arrive at once are keys up to this many; more is a paste. */
 export const BURST_MAX = 8
 
