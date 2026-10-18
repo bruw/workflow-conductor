@@ -2,8 +2,7 @@
 
 Claude Code Mod that adds a UI for planning, running and understanding agent Workflows.
 
-Claude writes a long orchestration script and proposes to execute. You say yes. Most everybody says yes. Nobody reads the script.
-Then the agents go off somewhere you can't see, and you sit watching a counter, hoping that what's burning your tokens is the thing you meant.
+Claude writes a long orchestration script and proposes to execute. You say yes and hope that what's burning your tokens is the thing you meant.
 
 Conductor adds an option to create a **visual plan** first. You can read it in 10 sec, verify the logic before handing off to Claude to write the script.
 It costs like a Plan, and can save *millions of tokens* over a workflow done badly.
