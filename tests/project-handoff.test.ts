@@ -1,14 +1,14 @@
 import { expect, test } from 'claude-code/testing'
 
-import { OUTLINE_MAX, buildHandoff, handoffPrompt, handoffTarget, lastScripts, noteScript, outline } from '../src/project/handoff'
+import { OUTLINE_MAX, buildHandoff, handoffPrompt, handoffTarget, lastScripts, newestScript, noteScript, outline, saveAsk, savedWorkflowFile } from '../src/project/handoff'
 import { flatten } from '../src/project/model'
 import type { Project, ProjectNode } from '../src/project/model'
+import { KIND_TEACH } from '../src/project/teach'
 import { TEMPLATES, review } from '../src/project/templates'
 
 const PATH = '/project/.claude/workflow-conductor/demo.json'
-const SCRIPT = '/project/.claude/workflow-conductor/demo.workflow.js'
 const RAN = '/sessions/s1/workflows/wf_1/script.js'
-const FRESH = { path: SCRIPT, from: null }
+const FRESH = { path: null }
 
 test('handoff: one visible line, one context entry that names the file, the name and the phases', () => {
   const project = { ...review(), name: 'demo' }
@@ -27,29 +27,89 @@ test('handoff: one visible line, one context entry that names the file, the name
   expect(context).toContain(project.nodes[0]?.knobs?.goal ?? '?')
 })
 
-test('handoff: the script is always to be at the file beside the project, started from the newest one there is', () => {
+test('handoff: with a remembered script it is updated from that one, without one it is written fresh, never into a file of its own', () => {
   const project = { ...review(), name: 'demo' }
   const fresh = buildHandoff(project, PATH, FRESH).context[0] ?? ''
-  const there = buildHandoff(project, PATH, { path: SCRIPT, from: SCRIPT }).context[0] ?? ''
-  const elsewhere = buildHandoff(project, PATH, { path: SCRIPT, from: RAN }).context[0] ?? ''
+  const update = buildHandoff(project, PATH, { path: RAN }).context[0] ?? ''
 
-  expect(fresh).toContain(SCRIPT)
   expect(fresh).toMatch(/implement and run/)
-  expect(there).toMatch(/update and run/)
-  expect(there).toContain(SCRIPT)
-  expect(elsewhere).toMatch(/update and run/)
-  expect(elsewhere).toContain(RAN)
-  expect(elsewhere).toContain(SCRIPT)
+  expect(fresh).not.toContain(RAN)
+  expect(update).toMatch(/update and run/)
+  expect(update).toContain(RAN)
+  for (const context of [fresh, update]) expect(context).not.toContain('.workflow.js')
 })
 
-test('the script a project last ran is remembered only where it is not the file beside it', () => {
-  const noted = noteScript(undefined, 'demo', RAN, SCRIPT)
+test("handoff: the last run's id and journal are named only where it was in this session and its script is there", () => {
+  const project = { ...review(), name: 'demo' }
+  const run = { runId: 'wf_7', transcriptDir: '/sessions/s1/workflows/wf_7' }
+  const resumable = buildHandoff(project, PATH, { path: RAN, run }).context[0] ?? ''
+  const elsewhere = buildHandoff(project, PATH, { path: RAN }).context[0] ?? ''
+  const gone = buildHandoff(project, PATH, { path: null, run }).context[0] ?? ''
+
+  expect(resumable).toContain('wf_7')
+  expect(resumable).toContain(`${run.transcriptDir}/journal.jsonl`)
+  for (const context of [elsewhere, gone]) expect(context).not.toContain('wf_7')
+})
+
+test('handoff: each kind the project uses is explained once, and no other kind is', () => {
+  const project: Project = {
+    version: 1,
+    name: 'demo',
+    nodes: [
+      { id: 'n1', type: 'start', name: 'start' },
+      { id: 'n2', type: 'agent', kind: 'verify', name: 'verify one' },
+      { id: 'n3', type: 'loop', kind: 'pass', name: 'fix', children: [{ id: 'n4', type: 'agent', kind: 'verify', name: 'verify two' }] },
+      { id: 'n5', type: 'agent', name: 'plain task' },
+    ],
+  }
+  const context = buildHandoff(project, PATH, FRESH).context[0] ?? ''
+
+  expect(context.split(KIND_TEACH.verify.script)).toHaveLength(2)
+  expect(context).toContain(KIND_TEACH.pass.script)
+  for (const kind of ['task', 'judge', 'dry', 'each'] as const) expect(context).not.toContain(KIND_TEACH[kind].script)
+})
+
+test('the script a project last ran is remembered, and a run only named as the project does not replace one that is', () => {
+  const noted = noteScript(undefined, 'demo', RAN, false)
+  const NEWER = '/sessions/s1/workflows/wf_2/script.js'
 
   expect(noted).toEqual({ demo: RAN })
-  expect(noteScript(noted, 'demo', SCRIPT, SCRIPT)).toEqual({})
-  expect(noteScript({ other: RAN }, 'demo', SCRIPT, SCRIPT)).toEqual({ other: RAN })
+  expect(noteScript(noted, 'demo', NEWER, false)).toEqual({ demo: RAN })
+  expect(noteScript(noted, 'demo', NEWER, true)).toEqual({ demo: NEWER })
+  expect(noteScript({ other: RAN }, 'demo', NEWER, false)).toEqual({ other: RAN, demo: NEWER })
   expect(lastScripts(['x'])).toEqual({})
   expect(lastScripts({ demo: RAN, bad: 3 })).toEqual({ demo: RAN })
+})
+
+test("a saved workflow is the project's name as a .js file in Claude Code's own folder under the root", () => {
+  expect(savedWorkflowFile('/repo', 'demo')).toBe('/repo/.claude/workflows/demo.js')
+  expect(savedWorkflowFile('/repo/', 'demo')).toBe('/repo/.claude/workflows/demo.js')
+})
+
+test("the handoff starts from the newer of the last run's script and the saved copy, and from whichever is there", () => {
+  const COPY = '/repo/.claude/workflows/demo.js'
+  const ran = { path: RAN, mtimeMs: 100 }
+
+  expect(newestScript(null, null)).toBeNull()
+  expect(newestScript(ran, null)).toBe(RAN)
+  expect(newestScript(null, { path: COPY, mtimeMs: 1 })).toBe(COPY)
+  expect(newestScript(ran, { path: COPY, mtimeMs: 200 })).toBe(COPY)
+  expect(newestScript(ran, { path: COPY, mtimeMs: 50 })).toBe(RAN)
+  expect(newestScript(ran, { path: COPY, mtimeMs: 100 })).toBe(RAN)
+})
+
+test("a run's end asks to save its script only when a saved project's run ended done, someone can answer, and the repo lacks that script", () => {
+  const done = { ending: 'done' as const, project: 'demo', script: 'export const meta = { name: "demo" }', copy: null, answerable: true }
+
+  expect(saveAsk(done)).toBe('save')
+  expect(saveAsk({ ...done, copy: 'export const meta = { name: "demo" } // older' })).toBe('update')
+  expect(saveAsk({ ...done, copy: done.script })).toBeNull()
+  expect(saveAsk({ ...done, ending: 'failed' })).toBeNull()
+  expect(saveAsk({ ...done, ending: 'stopped' })).toBeNull()
+  expect(saveAsk({ ...done, project: undefined })).toBeNull()
+  expect(saveAsk({ ...done, project: 'replay-review' })).toBeNull()
+  expect(saveAsk({ ...done, answerable: false })).toBeNull()
+  expect(saveAsk({ ...done, script: null })).toBeNull()
 })
 
 test('the prompt that hands a project off names it, and only that prompt does', () => {

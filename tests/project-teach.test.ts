@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import { KINDS, NODE_TYPES, kindsOf } from '../src/project/model'
-import type { Kind } from '../src/project/model'
-import { HINT_MAX, KIND_TEACH, PALETTE, TEACH, allBlocks, searchBlocks, startsName } from '../src/project/teach'
+import type { Kind, KindedType } from '../src/project/model'
+import { HINT_MAX, KIND_TEACH, KNOBS_BY_TYPE, PALETTE, TEACH, allBlocks, searchBlocks, startsName } from '../src/project/teach'
 
 const KIND_LIST = Object.values(KINDS).flat() as Kind[]
 
@@ -15,6 +15,13 @@ test('every node type and every kind has a hint that fits its room, and a card',
     expect(teach.hint.length).toBeLessThanOrEqual(HINT_MAX)
     expect(teach.hint).not.toContain('\n')
     expect(teach.card.length).toBeGreaterThan(0)
+  }
+})
+
+test('a kind hints only at fields its block has; a branch hints at its arms\' condition', async () => {
+  for (const [type, kinds] of Object.entries(KINDS) as [KindedType, readonly Kind[]][]) {
+    const fields: string[] = ['logic', ...KNOBS_BY_TYPE[type], ...(type === 'branch' ? ['condition'] : [])]
+    for (const kind of kinds) for (const field of Object.keys(KIND_TEACH[kind].hints ?? {})) expect(fields).toContain(field)
   }
 })
 

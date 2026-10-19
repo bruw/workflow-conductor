@@ -19,6 +19,7 @@ export const GLYPH = {
   railBranch: '├',
   railEnd: '╰',
   done: '✓',
+  elbow: '⎿',
 } as const
 
 /** Theme keys. `claude` is left to the selection and to what can be pressed, `success` and `error` to run outcomes; no type is `FADED`, which is a block a run never reached. */

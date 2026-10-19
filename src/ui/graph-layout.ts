@@ -194,11 +194,9 @@ export function childFlow(type: NodeType | undefined): Flow {
   return type === 'parallel' || type === 'branch' ? 'stack' : 'chain'
 }
 
-/** What a card says under its name: the block's notes, or with none what its prompt asks; the start block's goal. */
+/** What a card says under its name: the block's logic; the start block's goal. */
 function cardText(node: ProjectNode): string {
-  if (node.type === 'start') return (node.knobs?.goal ?? '').trim()
-  const notes = (node.logic ?? '').trim()
-  return notes !== '' ? notes : (node.knobs?.prompt ?? '').trim()
+  return (node.type === 'start' ? (node.knobs?.goal ?? '') : (node.logic ?? '')).trim()
 }
 
 export function armWord(type: NodeType | undefined): string {

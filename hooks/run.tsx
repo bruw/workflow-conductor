@@ -2,21 +2,34 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import { visualizeBrief } from '../src/project/chat'
-import { LAST_SCRIPTS_STORE, noteScript } from '../src/project/handoff'
+import { LAST_SCRIPTS_STORE, lastScripts, noteScript, saveAsk, savedWorkflowFile } from '../src/project/handoff'
 import { parseProject } from '../src/project/model'
-import { VISUALIZE_HEADER, VISUALIZE_STORE, VISUALIZE_OPTIONS, VISUALIZE_QUESTION, reusedToast, storedVisualize, visualizeChoice, visualizeToast, visualizeTyped } from '../src/project/offer'
-import { PROJECT_PANE_ID, bareTarget, projectFile, projectName, endRun, followRun, handoffOf, initialTimes, initialUi, isSaved, scriptFile, stampTimes } from '../src/project/session'
+import {
+  SAVE_HEADER,
+  SAVE_OPTIONS,
+  VISUALIZE_HEADER,
+  VISUALIZE_OPTIONS,
+  VISUALIZE_QUESTION,
+  reusedToast,
+  saveChoice,
+  saveFailedToast,
+  saveQuestion,
+  savedToast,
+  visualizeChoice,
+  visualizeTyped,
+} from '../src/project/offer'
+import { PROJECT_PANE_ID, bareTarget, projectFile, projectName, endRun, followRun, handoffOf, initialTimes, initialUi, isSaved, stampTimes } from '../src/project/session'
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
 import { USAGE_KEYS } from '../src/run/journal'
-import type { Handoff, Tracker } from '../src/run/tracker'
+import type { Handoff, RunEnded, Tracker } from '../src/run/tracker'
 import { buildRunRows, togglePhase } from '../src/ui/rail'
 import type { Part, Row } from '../src/ui/rail'
 import { initialShell } from '../src/ui/compact'
 import { FADED, GLYPH, PANE_ID, PANE_TITLE, TEXT } from '../src/ui/theme'
 
 import { paneArgs, runBoardOf } from './project'
-import { offerSettled } from './offer'
+import { offerRan, offerSettled } from './offer'
 
 const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
@@ -51,6 +64,44 @@ const usageTotal = (usage: unknown): number | undefined => {
   const counts = usage as Record<string, unknown>
 
   return USAGE_KEYS.reduce((sum, key) => sum + count(counts[key]), 0)
+}
+
+/** Runs the main conversation started: a subagent's run is not the person's to be asked about. */
+const ownRuns = new Set<string>()
+/** A run that ended, held until the main loop's turn ends, so the question does not cut into Claude's reply to the notice. */
+let saveDue: RunEnded | undefined
+
+const textOf = ($: EngineInterface, path: string): Promise<string | null> =>
+  $.fs.read(path).then(
+    body => (typeof body === 'string' ? body : null),
+    () => null,
+  )
+
+/** Asks whether a project's run's script goes into the repository; on yes the mod copies it itself, so no tool of Claude's writes there. Never throws. */
+const offerSave = async ($: EngineInterface, end: RunEnded): Promise<void> => {
+  const name = end.project
+  const ran = await read($, runScriptAtom)
+  if (name === undefined || ran === null || ran.runId !== end.runId) return
+  const root = await $.session.root()
+  const file = savedWorkflowFile(root, name)
+  const surfaces = await $.session.surfaces().catch(() => undefined)
+  const answerable = ownRuns.has(end.runId) && (surfaces === undefined || surfaces.length > 0)
+  const script = await textOf($, ran.path)
+  const ask = saveAsk({ ending: end.ending, project: name, script, copy: await textOf($, file), answerable })
+  if (ask === null || script === null) return
+  let said: string
+  try {
+    said = await $.ui.ask(saveQuestion(name, ask === 'update'), { options: SAVE_OPTIONS, header: SAVE_HEADER })
+  } catch {
+    return
+  }
+  if (saveChoice(said) !== 'save') return
+  try {
+    await $.fs.write(file, script)
+    $.ui.toast(savedToast(name, file.startsWith(`${root}/`) ? file.slice(root.length + 1) : file))
+  } catch (error) {
+    $.ui.toast(saveFailedToast(error instanceof Error ? error.message : String(error)))
+  }
 }
 
 export const registerRun = (on: On, tracker: Tracker): void => {
@@ -106,6 +157,9 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         // Either pane shows the run: the run view, or the designer with the run laid over it.
         paneShown: async () => (await $.ui.panes()).some(pane => (pane.id === PANE_ID || pane.id === PROJECT_PANE_ID) && pane.isShown && pane.isPlaced),
         project: name => update($, runProjectAtom, () => name),
+        ended: end => {
+          saveDue = end
+        },
         status: line => $.ui.status(line),
         toast: line => $.ui.toast(line),
       },
@@ -137,6 +191,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     const id = text(runId)
     if (id === undefined) return answer
     const workflow = text(workflowName)
+    if (e.agentId === undefined) ownRuns.add(id)
     // The board is on the run's project before the tracker places an agent on it. Never a throw: a run is tracked all the same.
     const board = runBoardOf()
     const own = (await board?.projectOfRun(workflow).catch(() => null)) ?? null
@@ -150,10 +205,13 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       if (claimed !== undefined) {
         offerSettled(claimed)
         // Out of a handoff the script is the project's as of now, for the next handoff to start from.
-        // A run that has only the project's name never stands in for the script the project has: that one may be newer.
         if (script !== undefined && isSaved(claimed)) {
-          const beside = scriptFile(await $.session.root(), claimed)
-          if (tracker.handedOff() || !(await $.fs.exists(beside).catch(() => true))) await $.store.set(LAST_SCRIPTS_STORE, noteScript(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined), claimed, script, beside)).catch(() => undefined)
+          const stored = await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined)
+          const kept = lastScripts(stored)[claimed]
+          const replace = tracker.handedOff() || (kept !== undefined && !(await $.fs.exists(kept).catch(() => true)))
+          const noted = noteScript(stored, claimed, script, replace)
+          if (noted[claimed] === script) offerRan(claimed, { runId: id, transcriptDir: text(transcriptDir) })
+          await $.store.set(LAST_SCRIPTS_STORE, noted).catch(() => undefined)
         }
         // Where nobody handed the project off, a toast says where the run went.
         if (own !== null) {
@@ -171,25 +229,16 @@ export const registerRun = (on: On, tracker: Tracker): void => {
       if (surfaces !== undefined && surfaces.length === 0) return answer
       // With no script file there is nothing to draw a project of.
       if (script === undefined) return answer
-      const kept = storedVisualize(await $.store.get(VISUALIZE_STORE).catch(() => undefined))
-      let choice = kept
-      if (choice === null) {
-        let said: string
-        try {
-          said = await $.ui.ask(VISUALIZE_QUESTION, { options: VISUALIZE_OPTIONS, header: VISUALIZE_HEADER })
-        } catch {
-          return answer
-        }
-        const picked = visualizeChoice(said)
-        if (picked === null) return said.trim() === '' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeTyped(said)] }
-        if (picked.always) {
-          await $.store.set(VISUALIZE_STORE, picked.choice).catch(() => undefined)
-          $.ui.toast(visualizeToast(picked.choice))
-        }
-        choice = picked.choice
+      let said: string
+      try {
+        said = await $.ui.ask(VISUALIZE_QUESTION, { options: VISUALIZE_OPTIONS, header: VISUALIZE_HEADER })
+      } catch {
+        return answer
       }
+      const choice = visualizeChoice(said)
+      if (choice === null) return said.trim() === '' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeTyped(said)] }
 
-      return choice === 'skip' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeBrief(script, kept === null, workflow === undefined ? undefined : (projectName(workflow) ?? undefined))] }
+      return choice === 'skip' ? answer : { ...answer, context: [...(answer.context ?? []), visualizeBrief(script, workflow === undefined ? undefined : (projectName(workflow) ?? undefined))] }
     } catch {
       return answer
     }
@@ -214,7 +263,13 @@ export const registerRun = (on: On, tracker: Tracker): void => {
     }
   })
 
-  on('turn.complete', async (_$, e, next) => {
+  on('turn.complete', async ($, e, next) => {
+    // The main loop's turn after a run's end: the question, from a timer so the turn's end is not held while it is up.
+    if (e.agentId === undefined && saveDue !== undefined) {
+      const end = saveDue
+      saveDue = undefined
+      $.clock.after(0, () => void offerSave($, end))
+    }
     if (e.agentId !== undefined) {
       tracker.agentEnded(e.agentId, {
         ok: !e.isAborted && e.reason !== 'error' && e.reason !== 'refusal',

@@ -1,36 +1,48 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { offerBrief } from '../src/project/chat'
-import { LAST_SCRIPTS_STORE, buildHandoff, lastScripts } from '../src/project/handoff'
-import type { HandoffScript } from '../src/project/handoff'
+import { LAST_SCRIPTS_STORE, buildHandoff, lastScripts, newestScript, savedWorkflowFile } from '../src/project/handoff'
+import type { HandoffScript, LastRun, ScriptFile } from '../src/project/handoff'
 import { isBlank, parseProject } from '../src/project/model'
 import {
   DISMISSED_RESULT,
   OFFER_HEADER,
-  OFFER_STORE,
   OFFER_OPTIONS,
   OFFER_QUESTION,
   OFFER_TOOL_DESCRIPTION,
   OFFER_TOOL_FULL_NAME,
   OFFER_TOOL_NAME,
   handedResult,
-  keptToast,
   offerChoice,
   standardResult,
-  storedChoice,
   typedResult,
   waitingResult,
 } from '../src/project/offer'
-import { projectFile, scriptFile } from '../src/project/session'
+import { projectFile } from '../src/project/session'
 import type { Tracker } from '../src/run/tracker'
 
-/** A script a run left elsewhere is newer than the one beside the project: a run of that one forgets it. */
-const scriptOf = async ($: EngineInterface, root: string, name: string): Promise<HandoffScript> => {
-  const path = scriptFile(root, name)
-  const last = lastScripts(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined))[name]
-  if (last !== undefined && (await $.fs.exists(last).catch(() => false))) return { path, from: last }
+/** Per project, its last run in this session, whose script is the one remembered: a resume works only in the session that ran it. */
+const lastRuns: Record<string, LastRun> = {}
 
-  return { path, from: (await $.fs.exists(path).catch(() => false)) ? path : null }
+export const offerRan = (name: string, run: LastRun): void => {
+  lastRuns[name] = run
+}
+
+const fileOf = async ($: EngineInterface, path: string | undefined): Promise<ScriptFile | null> => {
+  if (path === undefined) return null
+  const stat = await $.fs.stat(path).catch(() => undefined)
+
+  return stat?.kind === 'file' ? { path, mtimeMs: stat.mtimeMs } : null
+}
+
+/** The last run's script in the session folder, or the copy saved in the repository: the newer, as the session's is cleared after a while. */
+const scriptOf = async ($: EngineInterface, name: string): Promise<HandoffScript> => {
+  const last = lastScripts(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined))[name]
+  const path = newestScript(await fileOf($, last), await fileOf($, savedWorkflowFile(await $.session.root(), name)))
+  // The run is named only with the script it ran: the saved copy may be another.
+  if (path === null) return { path: null }
+
+  return path === last ? { path, run: lastRuns[name] } : { path }
 }
 
 /** "Conductor" was answered and the draft it asks Claude for has not landed yet. A module variable: it lasts a turn. */
@@ -91,16 +103,15 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
 
     return next(e)
   })
+  // A cleared or resumed conversation is another session: no run of it can be resumed from there.
+  on('session.end', { reason: ['clear', 'resume'] }, async (_$, e, next) => {
+    for (const name of Object.keys(lastRuns)) delete lastRuns[name]
+
+    return next(e)
+  })
 
   // Claude always gets a result to act on, never a throw and never a deny: it does not take instructions from a refusal.
   on('tool.call', { tool: OFFER_TOOL_FULL_NAME }, async ($, e) => {
-    const conductor = async (asked: boolean): Promise<{ result: string }> => {
-      offered = true
-      // project.tsx shows the splash until the project lands.
-      await offerBoard?.drafting().catch(() => undefined)
-
-      return { result: offerBrief(asked) }
-    }
     // A workflow's own agents, and any subagent: the person is asked by the conversation, once.
     if (e.agentId !== undefined) return { result: standardResult('subagent') }
     // The project the person just handed off on the board: its hand-off, once.
@@ -111,7 +122,7 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
       const path = projectFile(root, name)
       const parsed = parseProject(await $.fs.read(path).catch(() => ''))
       if (parsed.ok && !isBlank(parsed.project)) {
-        return { result: handedResult(buildHandoff({ ...parsed.project, name }, path, await scriptOf($, root, name)).context.join('\n')) }
+        return { result: handedResult(buildHandoff({ ...parsed.project, name }, path, await scriptOf($, name)).context.join('\n')) }
       }
     }
     // The script being written is the project the person approved on the board: that was their answer.
@@ -127,12 +138,10 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
       const parsed = parseProject(await $.fs.read(path).catch(() => ''))
       if (parsed.ok && !isBlank(parsed.project)) {
         answered = true
-        return { result: waitingResult(waiting, buildHandoff({ ...parsed.project, name: waiting }, path, await scriptOf($, root, waiting)).context.join('\n')) }
+        return { result: waitingResult(waiting, buildHandoff({ ...parsed.project, name: waiting }, path, await scriptOf($, waiting)).context.join('\n')) }
       }
     }
     waiting = null
-    const kept = storedChoice(await $.store.get(OFFER_STORE).catch(() => undefined))
-    if (kept !== null) return kept === 'conductor' ? conductor(false) : { result: standardResult('always') }
 
     let answer: string
     try {
@@ -142,11 +151,11 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
     }
     const picked = offerChoice(answer)
     if (picked === null) return { result: answer.trim() === '' ? DISMISSED_RESULT : typedResult(answer) }
-    if (picked.always) {
-      await $.store.set(OFFER_STORE, picked.choice).catch(() => undefined)
-      $.ui.toast(keptToast(picked.choice))
-    }
+    if (picked === 'standard') return { result: standardResult('chosen') }
+    offered = true
+    // project.tsx shows the splash until the project lands.
+    await offerBoard?.drafting().catch(() => undefined)
 
-    return picked.choice === 'conductor' ? conductor(true) : { result: standardResult('chosen') }
+    return { result: offerBrief() }
   })
 }

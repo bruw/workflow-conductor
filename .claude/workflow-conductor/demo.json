@@ -24,9 +24,8 @@
           "id": "n2",
           "type": "agent",
           "name": "searchs",
-          "logic": "One agent per search angle",
+          "logic": "One agent per search angle. Search for sources on the question using only this angle",
           "knobs": {
-            "prompt": "Search for sources on the question using only this angle",
             "output": "{ sources: [{ ref, why }] }",
             "model": "opus",
             "effort": "low"
@@ -42,9 +41,8 @@
           "id": "n6",
           "type": "agent",
           "name": "check claims",
-          "logic": "Drop claims the source does not actually support.",
+          "logic": "Drop claims the source does not actually support. Try to refute each claim against the quoted source",
           "knobs": {
-            "prompt": "Try to refute each claim against the quoted source",
             "model": "sonnet",
             "effort": "low"
           }
@@ -70,9 +68,8 @@
           "id": "n5",
           "type": "agent",
           "name": "read source",
-          "logic": "One reader per source.",
+          "logic": "One reader per source. Read the source in full and extract the claims that bear on the question, with quotes",
           "knobs": {
-            "prompt": "Read the source in full and extract the claims that bear on the question, with quotes",
             "output": "{ claims: [{ claim, quote, confidence }] }"
           }
         }

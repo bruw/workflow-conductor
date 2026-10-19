@@ -9,6 +9,7 @@ import type { Project, ProjectNode, Kind, Row } from './model'
 import { addNode, moveNode, nextIdNumber, removeNode, retypeNode, updateNode } from './ops'
 import type { NodePatch, Place } from './ops'
 import { FLASH_MS } from '../ui/graph-model'
+import { clip, oneLine } from '../ui/text'
 import { UNDO_HINT } from './history'
 import { PROJECT_DIR, carryUi, initialUi } from './session'
 import type { ProjectUi } from './session'
@@ -16,6 +17,7 @@ import { KIND_TEACH, KNOB_HELP, TEACH, defaultName, fillOf, logicOf } from './te
 
 export const TOOL_NAME = 'project'
 export const TOOL_FULL_NAME = 'mcp__workflow-conductor__project'
+export const TOOL_TITLE = 'Conductor'
 export const PROJECT_DIR_HINT = `${PROJECT_DIR}/<name>.json`
 
 export const ACTIONS = ['read', 'apply', 'write', 'attach'] as const
@@ -116,10 +118,9 @@ export function draftBrief(description: string): string[] {
   ]
 }
 
-/** `asked` is false when an "Always Conductor" kept earlier answered. */
-export function offerBrief(asked: boolean): string {
+export function offerBrief(): string {
   return [
-    `${asked ? 'The user chose Conductor' : 'The user chose Always Conductor earlier, so they were not asked'}: they want this workflow as a project on the Conductor board, to review and edit before anything is written or run.`,
+    `The user chose Conductor: they want this workflow as a project on the Conductor board, to review and edit before anything is written or run.`,
     '',
     `Make it with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "write", a short kebab-case name of your choosing and the nodes, the start block first with the goal of the workflow in its \`goal\` knob.`,
     ...DRAFT_RULES,
@@ -129,9 +130,9 @@ export function offerBrief(asked: boolean): string {
 }
 
 /** Added to the Workflow tool's result. Under `name` the next run of the same script finds the project, and is shown on it with no question. */
-export function visualizeBrief(scriptPath: string, asked: boolean, name: string | undefined): string {
+export function visualizeBrief(scriptPath: string, name: string | undefined): string {
   return [
-    `Conductor: ${asked ? 'the user chose to see' : 'the user chose Always visualize earlier, so they see'} this workflow run as a project on the Conductor board. The run goes on meanwhile: do not change, re-run or stop the script.`,
+    `Conductor: the user chose to see this workflow run as a project on the Conductor board. The run goes on meanwhile: do not change, re-run or stop the script.`,
     '',
     `Draw the project OF the script that is running with the ${TOOL_FULL_NAME} tool (it is deferred: load it by that name): one call with action "attach", ${name === undefined ? 'a short kebab-case name' : `name "${name}" (the workflow's own name as a project's: the next run of this script is then shown on this project without a question)`} and the nodes, the start block first with the workflow's goal in its \`goal\` knob.`,
     "- The nodes mirror the script's real structure: its pipelines, parallels, loops, branches and agents, no more. A phase is no block: its blocks stand at the top level in its place.",
@@ -445,10 +446,17 @@ export function applyOps(before: Project, ops: unknown): Edit {
 
 // What the tool answers with
 
+// The reports' fixed words, read back by `resultLine`.
+const NO_LINTS = 'Lints: none.'
+const LINTS_HEAD = 'Lints (advisory: fix them, or tell the user why they stand):'
+const READ_HEAD = 'as it is on the board now'
+const SAVED_HEAD = 'saved and shown on the board: '
+const NO_CHANGE = 'nothing differs from before'
+
 function lintLines(project: Project): string[] {
   const lints = lint(project)
-  if (lints.length === 0) return ['Lints: none.']
-  return ['Lints (advisory: fix them, or tell the user why they stand):', ...lints.map(one => `- ${one.nodeId} [${one.rule}]: ${one.message}`)]
+  if (lints.length === 0) return [NO_LINTS]
+  return [LINTS_HEAD, ...lints.map(one => `- ${one.nodeId} [${one.rule}]: ${one.message}`)]
 }
 
 /** `revision` counts every change to the project this session, by hand or from chat: an answer that names an older one is stale. */
@@ -462,7 +470,7 @@ export function readReport(project: Project, state: ReadState): string {
   const selected = state.selectedId === null ? undefined : findNode(project, state.selectedId)
   const where = state.open ? `open on the board; selected block ("this block"): ${selected ? `${selected.id} (${typeName(selected)} "${selected.name}")` : 'none'}` : 'not open on the board'
   return [
-    `Project "${project.name}" as it is on the board now (${where})${state.locked ? '. A run of it is in progress: editing is locked until it ends' : ''}.${revisionWords(state.revision)}`,
+    `Project "${project.name}" ${READ_HEAD} (${where})${state.locked ? '. A run of it is in progress: editing is locked until it ends' : ''}.${revisionWords(state.revision)}`,
     serializeProject(project).trimEnd(),
     ...lintLines(project),
   ].join('\n')
@@ -475,7 +483,7 @@ export function editReport(project: Project, change: Change, revision?: number):
     change.removed.length > 0 ? `removed ${change.removed.join(', ')}` : '',
   ].filter(Boolean)
   return [
-    `Project "${project.name}" saved and shown on the board: ${parts.length > 0 ? parts.join('; ') : 'nothing differs from before'}.${revisionWords(revision)}`,
+    `Project "${project.name}" ${SAVED_HEAD}${parts.length > 0 ? parts.join('; ') : NO_CHANGE}.${revisionWords(revision)}`,
     ...(change.notes ?? []).map(note => `Note: ${note}`),
     'Now:',
     ...outline(project),
@@ -523,6 +531,53 @@ export function projectOfPath(root: string, cwd: string, path: string): string |
 export function changeWords(change: Change): string {
   const list = (ids: string[]): string => (ids.length > 4 ? `${ids.slice(0, 4).join(', ')} and ${ids.length - 4} more` : ids.join(', '))
   return [change.added.length > 0 ? `added ${list(change.added)}` : '', change.changed.length > 0 ? `changed ${list(change.changed)}` : '', change.removed.length > 0 ? `removed ${list(change.removed)}` : ''].filter(Boolean).join('; ')
+}
+
+// The transcript draws these lines in place of the call's input and its report; Claude reads both whole.
+
+const LINE_MAX = 120
+
+function countBlocks(nodes: unknown): number {
+  return Array.isArray(nodes) ? nodes.reduce((sum: number, node: unknown) => sum + (isRecord(node) ? 1 + countBlocks(node.children) : 0), 0) : 0
+}
+
+const counted = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
+
+/** The call's row: `apply prep-revamp: 3 ops`. */
+export function callLine(input: unknown): string {
+  const call = isRecord(input) ? input : {}
+  const action = typeof call.action === 'string' && call.action !== '' ? oneLine(call.action) : 'call'
+  const name = typeof call.name === 'string' && call.name.trim() !== '' ? ` ${oneLine(call.name)}` : ''
+  const size = action === 'apply' && Array.isArray(call.ops) ? `: ${counted(call.ops.length, 'op')}` : (action === 'write' || action === 'attach') && Array.isArray(call.nodes) ? `: ${counted(countBlocks(call.nodes), 'block')}` : ''
+  return clip(`${action}${name}${size}`, LINE_MAX)
+}
+
+/** The result's row: the change and the problems the report names, or a refusal's reason. A text no report wrote gives its first line. */
+export function resultLine(text: string, isError: boolean): string {
+  const lines = text.replace(/<\/?tool_use_error>/g, '').trim().split('\n')
+  const head = lines[0] ?? ''
+  if (isError) return clip(oneLine(head.replace(/^Error: /, '').replace(/\s*Nothing was changed\..*$/, '')) || oneLine(head), LINE_MAX)
+  const at = lines.indexOf(LINTS_HEAD)
+  let problems = 0
+  if (at >= 0) while (lines[at + 1 + problems]?.startsWith('- ')) problems++
+  const lints = at >= 0 ? counted(problems, 'problem') : lines.includes(NO_LINTS) ? 'no problems' : ''
+  let words = ''
+  const saved = head.indexOf(SAVED_HEAD)
+  if (saved >= 0) {
+    const said = head.slice(saved + SAVED_HEAD.length).split('.')[0] ?? ''
+    const change: Change = { added: [], changed: [], removed: [] }
+    for (const part of said.split('; ')) {
+      const space = part.indexOf(' ')
+      const verb = part.slice(0, space)
+      if (verb === 'added' || verb === 'changed' || verb === 'removed') change[verb].push(...part.slice(space + 1).split(', '))
+    }
+    words = changeWords(change) || 'saved, nothing changed'
+  } else if (head.includes(READ_HEAD)) {
+    const end = lints === '' ? lines.length : lines.indexOf(at >= 0 ? LINTS_HEAD : NO_LINTS)
+    const parsed = parseProject(lines.slice(1, end).join('\n'))
+    words = parsed.ok ? counted(flatten(parsed.project).length, 'block') : 'read'
+  } else return clip(oneLine(head), LINE_MAX)
+  return clip([words, lints].filter(Boolean).join(' · '), LINE_MAX)
 }
 
 /** Sent, unseen, with a prompt when the board changed by hand and the change itself cannot be said (`changedNote`). */

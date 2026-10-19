@@ -14,7 +14,6 @@ export type ConductorProjectNode = {
   knobs?: {
     goal?: string
     args?: string
-    prompt?: string
     output?: string
     model?: string
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'

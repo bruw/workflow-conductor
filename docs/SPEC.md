@@ -13,7 +13,7 @@ Claude Code mod: design a workflow as a graph of blocks, hand the project to Cla
 
 ```
 hooks/register.tsx     composes the three below over one shared tracker
-hooks/run.tsx          run hooks (Workflow tool.call, agent.spawn, turn.step, turn.complete), the run view pane
+hooks/run.tsx          run hooks (Workflow tool.call, agent.spawn, turn.step, turn.complete), the save question, the run view pane
 hooks/project.tsx      the designer: /conductor, the screen, the key catcher and ring, saving, the project tool, the band
 hooks/offer.tsx        the before_workflow tool and its question
 hooks/canvas.tsx       Client: draws the graph from props, posts pointer messages
@@ -25,7 +25,7 @@ src/project/           model (types, parse, serialize) · ops (add, move, update
                        teach (per type and kind: hints, cards, fields, presets, palette) · templates
                        session (ProjectUi and every step on it, the view, graph props, help pages, start screen)
                        chat (the project tool: schema, description, ops, reports, change notes, briefs)
-                       handoff (the hand-off text and prompts) · offer (both questions' words and results) · history (undo)
+                       handoff (the hand-off text and prompts) · offer (every question's words and results) · history (undo)
 src/ui/                graph-layout (project → cells, hit tests, navigation walks) · graph-paint (layout → styled spans, run overlay)
                        graph-model (Client props, messages, reducer) · keys (the one key table, legends) · compact (the band's view)
                        rail (run view rows, status text) · text · theme · tween · persona · mark · wordmark
@@ -40,11 +40,11 @@ scripts/render-graph.ts  layout + paint as text with no session (--list names th
 
 ## Project file
 
-`.claude/workflow-conductor/<name>.json`; the script kept beside it is `<name>.workflow.js`, and that the file is there is the link.
+`.claude/workflow-conductor/<name>.json`, and no script beside it: Claude passes the script inline. Where the script lives is under "A run and its project".
 
 - Ids `n<k>` are never reused: `nextId` only grows, also across undo.
 - Exactly one `start` block, first at the top level; it cannot be added, moved, removed or retyped. It alone carries `goal` and `args`; a project with nothing else is blank, which is what "empty" means everywhere.
-- `parseProject` refuses any key, knob, type or kind it does not know, so nothing is read and then erased by the next save. Every edit, whoever made it, is serialized and parsed back before it counts.
+- `parseProject` refuses any key, knob, type or kind it does not know, so nothing is read and then erased by the next save; the one exception is a `prompt` knob, whose text is read into the block's logic. Every edit, whoever made it, is serialized and parsed back before it counts.
 - The plain kind of a type is never stored.
 - `match` (labels or phase titles; a trailing `*` is a prefix) ties a block to a script that existed before the project.
 - `replay-*` projects live in state only: never written, listed or handed off.
@@ -62,23 +62,27 @@ scripts/render-graph.ts  layout + paint as text with no session (--list names th
 - By name: a run whose `workflowName` is a saved project is that project's, with or without a handoff.
 - By handoff: a handoff claims the next run under any other name for `HANDOFF_MS`; each prompt the person sends while it waits restarts the wait.
 - Otherwise the run is nobody's: the Visualize question, and on yes Claude mirrors the script into a project with one `attach` call, after which the agents seen so far are placed again (`remap`).
-- A run out of a handoff copies its script beside the project; a run that only has the project's name copies only when the project has no script yet.
+- A run out of a handoff, or one `attach` drew the project of, is the project's last run: `$.store` keeps its script's path for the next handoff to start from, and a module variable its run id and `transcriptDir` until `/clear` or a resume, since a resume works only in the session that ran it. A run that only has the project's name is the last run only where no script is remembered or the one remembered is gone.
+
+**Where the script lives.** The Workflow tool keeps every run's script in the session folder (`<session>/workflows/scripts/<name>-<runId>.js`), which Claude Code clears after `cleanupPeriodDays`: that is the default. Saved, it is `.claude/workflows/<name>.js` under the session root, Claude Code's own folder of saved workflows, where every `*.js` runs by its `meta.name` with `Workflow({ name })`, Conductor or not (Claude Code reads that folder once and only its own save refreshes it, so a copy the mod writes runs by name after `/reload-plugins` or in a new session); such a run is the project's by name like any other. A handoff starts from the newer of the two by mtime (a copy can be changed by hand or pulled); Claude reads it and leaves the file as it is.
+
+**The save question.** A run that ended `done`, of a saved project, started by the main conversation, with a surface to ask on, and whose script is not already the saved copy, asks `Save to repo` / `Not now` (worded as an update where a copy differs). It is asked at the main loop's next `turn.complete` after the end, from a clock callback: the notice starts or joins a turn in which Claude answers it, and the question waits for that turn rather than holding it. On yes the mod writes the copy itself with `$.fs.write`, so none of Claude's tools writes under `.claude/`; a failed read or write is a toast.
 
 **On the board.** Run state overlays the project and locks editing while it runs (selection, views, help still work). The selection follows the running block until the person moves it; at the end it goes to the first failed block. Results stay until the first edit or `c`. Elapsed times are stamped into an atom by run.tsx: a drawing that reads the clock is invalidated by it.
 
 ## What Claude is sent
 
-**The project tool** (`mcp__workflow-conductor__project`, deferred, so every brief names it in full): `read`, `apply` (ops, all or nothing), `write` (the whole tree; a block whose id existed keeps it, every other gets a fresh one), `attach` (a `write` for the run tracked now). It edits the mod's atoms, so the pane redraws from state. The description is generated from `teach.ts` and must stay under the engine's cut at 4096 characters: what belongs to one field is said on that field in the schema.
+**The project tool** (`mcp__workflow-conductor__project`, deferred, so every brief names it in full): `read`, `apply` (ops, all or nothing), `write` (the whole tree; a block whose id existed keeps it, every other gets a fresh one), `attach` (a `write` for the run tracked now). It edits the mod's atoms, so the pane redraws from state. Claude reads the whole input and report; the transcript draws one line for the call and one for its result (`callLine`, `resultLine`, which reads back the report's own words). The engine stores the result as the text Claude read, so the result row is a rewrite of that text, except on an errored row, which draws the engine's own error text whatever `output` says, so the hook draws that line itself. The description is generated from `teach.ts` and must stay under the engine's cut at 4096 characters: what belongs to one field is said on that field in the schema.
 
 **Claude edits the board as it is.** `revisions[name]` counts every change; an edit from an older revision is denied. After a change by hand the next prompt carries a note of what differs from the project Claude last saw (`changedNote`), which counts as a read; with no snapshot, `staleNote` says to read. The snapshot is kept only while Claude holds the project whole: an edit that stored text Claude never saw (a kind's fill), a compaction, `/clear` or a resume drop it. A `write` over an unread project that has blocks is denied. A deny states a reason, never an instruction: Claude does not take instructions from a refusal.
 
 **Write/Edit on a project file** is followed: after it lands the open project is parsed again; invalid, the last good one stays.
 
-**The hand-off** (`buildHandoff`): the goal, the project file, the script to update where one exists, to ask about any flow that looks ambiguous, to confirm the design and ask what to run on, and the three rules that tie a run to the board: every `agent()` label is `<nodeId>: <text>`, one phase per top-level block titled `<nodeId> <name>`, `meta.name` is the project's name. With a script, blocks with `match` keep the script's labels.
+**The hand-off** (`buildHandoff`): the goal, the project file, the script to pass inline (written from the project, or the latest script, the last run's or the saved copy, changed only where the project changed), that run's id and journal where it was in this session, one line per kind the project uses (`KIND_TEACH[kind].script`: the Workflow reference's pattern name and what it leaves out), that work sent back reaches its agents in full, to ask only what is unresolved (the run input where `args` is set, a flow that looks ambiguous) and otherwise to say what it will do with its worst-case agent count and wall-clock and run it, and the three rules that tie a run to the board: every `agent()` label is `<nodeId>: <text>`, one phase per top-level block titled `<nodeId> <name>`, `meta.name` is the project's name. With a script, blocks with `match` keep the script's labels.
 
 **How it gets there.** `r` saves, tells the tracker, and submits the hand-off sentence itself. The mod's own prompt skips its own hooks and carries no context, so the sentence tells Claude to call `before_workflow`, which answers with the hand-off once. A sentence the person sends goes through the `prompt.submit` hook instead, which attaches the same text as context.
 
-**The offer** (`mcp__workflow-conductor__before_workflow`, not deferred: Claude calls a tool before a workflow only when its description is in every turn). It asks whether to design in Conductor first; an `Always …` answer is kept in `$.store` under `ask.`. No dialog, answer Standard: a subagent, no surface, a handoff waiting for its run. After a Conductor draft and until it is handed off, a call answers that the project waits unapproved.
+**The offer** (`mcp__workflow-conductor__before_workflow`, not deferred: Claude calls a tool before a workflow only when its description is in every turn). It asks whether to design in Conductor first, every time. No dialog, answer Standard: a subagent, no surface, a handoff waiting for its run. After a Conductor draft and until it is handed off, a call answers that the project waits unapproved.
 
 **Draft** (`/conductor <words>`): the brief goes as the command's context, the prompt is submitted from a clock callback (refused inside `command.run`), Claude names the project in one `write`. The pane shows a waiting scene, then lays the blocks out a few per beat on its own, locked, until the turn ends.
 
@@ -107,11 +111,11 @@ One screen: header (name as the project list's button, state; the legend on its 
 
 **Compact view** (`$.state` `shell`): `m` or a pane with no room minimizes into the band; any drawing of a placed pane with room ends it, so no way of opening the pane needs to know of it. The band draws the project, the saved projects as buttons, the run or the goal, and Expand.
 
-**`/conductor`**: bare is the run in progress, else the project last opened, else the start screen; `min` / `max` move the designer; any other words are a draft. Everything else (projects, replays, forgetting kept answers) is on the start screen.
+**`/conductor`**: bare is the run in progress, else the project last opened, else the start screen; `min` / `max` move the designer; any other words are a draft. Everything else (projects, replays) is on the start screen.
 
 ## Not exercised
 
-The desktop surface; the main screen outside fullscreen; clicks on the band and on the last row's buttons; kept `Always …` / `Never …` answers; a session resume; a retry of a failed script after the handoff's claim is spent.
+The desktop surface; the main screen outside fullscreen; clicks on the band and on the last row's buttons; a session resume; a retry of a failed script after the handoff's claim is spent.
 
 ## Known and accepted
 

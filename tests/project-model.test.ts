@@ -91,11 +91,37 @@ test('parseProject rejects bad input with a reason and never throws', async () =
   expect(rejected({ ...base, nodes: [{ type: 'agent' }] })).toMatch(/id/)
   expect(rejected({ ...base, nodes: [{ ...agent, name: 3 }] })).toMatch(/name/)
   expect(rejected({ ...base, nodes: [{ ...agent, knobs: { effort: 'extreme' } }] })).toMatch(/effort/)
+  expect(rejected({ ...base, nodes: [{ ...agent, knobs: { output: 3 } }] })).toMatch(/output/)
   expect(rejected({ ...base, nodes: [{ ...agent, knobs: { prompt: 3 } }] })).toMatch(/prompt/)
   expect(rejected({ ...base, nodes: [{ ...agent, match: ['ok', ''] }] })).toMatch(/match/)
   expect(rejected({ ...base, nodes: [{ ...agent, children: [{ id: 'n2', type: 'agent', name: 'b' }] }] })).toMatch(/cannot hold children/)
   expect(rejected({ ...base, nextId: 0, nodes: [] })).toMatch(/nextId/)
   expect(rejected('['.repeat(100000))).toMatch(/JSON|read/)
+})
+
+test('a saved prompt knob opens as part of the logic and is not written back', async () => {
+  const start = { id: 'n1', type: 'start', name: 'start' }
+  const project = parsed(
+    JSON.stringify({
+      ...base,
+      nodes: [
+        start,
+        { id: 'n2', type: 'agent', name: 'both', logic: 'One per file', knobs: { prompt: 'Review the file', output: '{ ok }' } },
+        { id: 'n3', type: 'agent', name: 'prompt only', knobs: { prompt: 'Find the sites' } },
+        { id: 'n4', type: 'agent', name: 'empty prompt', logic: 'Kept as it is.', knobs: { prompt: '  ' } },
+      ],
+    }),
+  )
+
+  const both = findNode(project, 'n2')
+  expect(both?.logic?.startsWith('One per file')).toBe(true)
+  expect(both?.logic).toContain('Review the file')
+  expect(both?.knobs).toEqual({ output: '{ ok }' })
+  expect(findNode(project, 'n3')?.logic).toBe('Find the sites')
+  expect(findNode(project, 'n3')?.knobs).toBeUndefined()
+  expect(findNode(project, 'n4')?.logic).toBe('Kept as it is.')
+  expect(serializeProject(project)).not.toContain('"prompt"')
+  expect(parsed(serializeProject(project))).toEqual(project)
 })
 
 test('the start block stands first and alone says a goal and args', async () => {

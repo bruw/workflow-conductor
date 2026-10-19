@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { lint } from '../src/project/lints'
+import { lint, problemFields } from '../src/project/lints'
 import type { LintRule } from '../src/project/lints'
 import { emptyProject } from '../src/project/model'
 import type { Project, ProjectNode } from '../src/project/model'
@@ -71,13 +71,14 @@ test('code-input-no-output stays quiet with an output, or when no agent feeds th
   expect(hits(rule, code)).toEqual([])
 })
 
-test('agent-no-brief fires for an agent with neither logic nor a prompt, but not for a kind whose name is the task', async () => {
+test('agent-no-brief fires for an agent with no logic, but not for a kind whose name is the task', async () => {
   const rule = 'agent-no-brief'
 
   expect(hits(rule, { id: 'n1', type: 'agent', name: 'do it' })).toEqual(['n1'])
   expect(hits(rule, { id: 'n1', type: 'agent', kind: 'scout', name: 'look' })).toEqual(['n1'])
   expect(hits(rule, { id: 'n1', type: 'agent', name: 'do it', logic: 'Does it.' })).toEqual([])
-  expect(hits(rule, { id: 'n1', type: 'agent', name: 'do it', knobs: { prompt: 'Do it' } })).toEqual([])
+  expect(hits(rule, { id: 'n1', type: 'agent', name: 'do it', logic: '  ', knobs: { output: '{ ok }' } })).toEqual(['n1'])
+  expect(problemFields(rule)).toEqual(['logic'])
   expect(hits(rule, finder, { id: 'n1', type: 'agent', kind: 'verify', name: 'verify' })).toEqual([])
   expect(hits(rule, code)).toEqual([])
 })

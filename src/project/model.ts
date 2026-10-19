@@ -36,7 +36,6 @@ export type Knobs = {
   goal?: string
   /** On the start block: what the workflow is run on, in words or as a shape. */
   args?: string
-  prompt?: string
   /** In words or as JSON Schema text. */
   output?: string
   model?: string
@@ -152,8 +151,8 @@ export function withStart(project: Project): Project {
   return { ...project, nextId: number + 1, nodes: [{ id: `n${number}`, type: 'start', name: 'start' }, ...project.nodes] }
 }
 
-const KNOB_KEYS = ['goal', 'args', 'prompt', 'output', 'model', 'effort', 'isolation', 'agentType', 'oncePer', 'stopCondition', 'condition'] as const
-const TEXT_KNOBS: readonly string[] = ['goal', 'args', 'prompt', 'output', 'model', 'agentType', 'oncePer', 'stopCondition', 'condition']
+const KNOB_KEYS = ['goal', 'args', 'output', 'model', 'effort', 'isolation', 'agentType', 'oncePer', 'stopCondition', 'condition'] as const
+const TEXT_KNOBS: readonly string[] = ['goal', 'args', 'output', 'model', 'agentType', 'oncePer', 'stopCondition', 'condition']
 const PROJECT_KEYS: readonly string[] = ['version', 'name', 'nextId', 'nodes']
 const NODE_KEYS: readonly string[] = ['id', 'type', 'kind', 'name', 'logic', 'knobs', 'match', 'children']
 const ID_PATTERN = /^n(\d+)$/
@@ -247,8 +246,20 @@ function readNodes(raw: unknown, where: string, seen: Set<string>): ProjectNode[
   return raw.map((one: unknown, index) => readNode(one, `${where}[${index}]`, seen))
 }
 
-function readNode(raw: unknown, where: string, seen: Set<string>): ProjectNode {
-  if (!isRecord(raw)) fail(`${where} must be an object`)
+// A `prompt` knob in a saved project opens as part of the logic, the one field that says what a block does; the next save drops it.
+function foldPrompt(raw: Record<string, unknown>, id: string): Record<string, unknown> {
+  if (!isRecord(raw.knobs) || !('prompt' in raw.knobs)) return raw
+  const { prompt, ...knobs } = raw.knobs
+  if (prompt !== undefined && typeof prompt !== 'string') fail(`${id}: knob prompt must be a string`)
+  const said = (prompt ?? '').trim()
+  if (said === '' || (raw.logic !== undefined && typeof raw.logic !== 'string')) return { ...raw, knobs }
+  const logic = (raw.logic ?? '').trim()
+  return { ...raw, knobs, logic: logic === '' ? said : `${logic}${/[.!?:;]$/.test(logic) ? '' : '.'} ${said}` }
+}
+
+function readNode(given: unknown, where: string, seen: Set<string>): ProjectNode {
+  if (!isRecord(given)) fail(`${where} must be an object`)
+  const raw = foldPrompt(given, typeof given.id === 'string' ? given.id : where)
   const { id, name, logic, match, children } = raw
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) fail(`${where}: id must look like "n1"`)
   // Past that, two numbers read as one: the next id handed out would be one a block has.

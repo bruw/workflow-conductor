@@ -10,9 +10,9 @@ The same for every kind of a block: a kind adds no field. A field's key in the f
 
 | Block | Text fields | Chips |
 | --- | --- | --- |
-| agent | name · logic · prompt · output | model · effort |
+| agent | name · logic · output | model · effort |
 | code | name · logic · output | |
-| subworkflow | name · logic · prompt · output | |
+| subworkflow | name · logic · output | |
 | start | goal · args | |
 | pipeline | name · logic · once per | |
 | parallel | name · logic · once per | |
@@ -24,18 +24,18 @@ The same for every kind of a block: a kind adds no field. A field's key in the f
 
 ## Kinds
 
-Prefill is written into the field when the block is added; a hint shows while the field is empty.
+Prefill is written into the field when the block is added; a hint shows while the field is empty. Logic is the one field that says what a block does; verify and judge fill it with their votes, so their card says what else it names.
 
 | Block | Kind | Means | Prefill | Hint |
 | --- | --- | --- | --- | --- |
 | **agent**: what is its job? | task | does one thing | | |
-| | scout | lists the work for a later fan-out | output `{ items: [{ id, what }] }` · effort low | prompt: what to list |
-| | check | an exact pass or fail: tests, typecheck, a rule | output `{ ok: boolean, failures: [] }` | prompt: what must hold |
-| | verify | voters try to refute each result; a majority decides | logic `3 votes: each voter tries to refute the result; it is kept when a majority fail to refute it` · output `{ refuted: boolean, reason }` | prompt: what to try to refute |
-| | judge | voters score the candidates; the best wins | logic `3 votes: each judge scores every candidate; the highest total wins` · output `{ scores: [{ candidate, score, why }] }` | prompt: the criteria to score on |
-| | critic | says what is missing; gaps become more work | output `{ gaps: [{ what, how_to_fill }] }` | prompt: what complete means here |
-| | merge | merges every result into one answer | | prompt: what to write from all the results · output: free text |
-| | classify | labels its input for a branch to route on | output `{ label }` · effort low | prompt: the labels to choose from |
+| | scout | lists the work for a later fan-out | output `{ items: [{ id, what }] }` · effort low | logic: what to list |
+| | check | an exact pass or fail: tests, typecheck, a rule | output `{ ok: boolean, failures: [] }` | logic: what must hold |
+| | verify | voters try to refute each result; a majority decides | logic `3 votes: each voter tries to refute the result; it is kept when a majority fail to refute it` · output `{ refuted: boolean, reason }` | logic: its votes, and what to try to refute |
+| | judge | voters score the candidates; the best wins | logic `3 votes: each judge scores every candidate; the highest total wins` · output `{ scores: [{ candidate, score, why }] }` | logic: its votes, and the criteria to score on |
+| | critic | says what is missing; gaps become more work | output `{ gaps: [{ what, how_to_fill }] }` | logic: what complete means here |
+| | merge | merges every result into one answer | | logic: what to write from all the results · output: free text |
+| | classify | labels its input for a branch to route on | output `{ label }` · effort low | logic: the labels to choose from |
 | **loop**: when does it stop? | custom | the stop condition in your own words | | stop condition: 3 rounds · the check passes · 2 dry rounds · budget < 50k |
 | | count | a fixed number of rounds | `3 rounds` | |
 | | pass | until the check at the end of a round passes | `the check passes, at most 3 rounds` · starts with an attempt and a check | |
