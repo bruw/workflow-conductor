@@ -4,7 +4,9 @@
 
 A terminal UI for planning, running and understanding complex agent workflows inside Claude Code.
  
-Don't hope that Claude one-shots your multi-step logic from a loosely worded description. Try **design → review → run** instead.
+Don't hope that Claude one-shots your multi-step logic from a loosely worded description. 
+
+Try **design → review → run** instead.
 
 
 ```
