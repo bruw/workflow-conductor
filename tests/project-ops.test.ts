@@ -173,9 +173,9 @@ test('updateNode changes name, logic and match and merges knobs', async () => {
   const merged = ok(updateNode(before, 'n4', { knobs: { model: 'haiku', effort: 'high' } }))
   expect(findNode(merged, 'n4')?.knobs).toEqual({ ...findNode(before, 'n4')?.knobs, model: 'haiku', effort: 'high' })
 
-  const cleared = ok(updateNode(merged, 'n4', { logic: '', knobs: { effort: undefined, prompt: '' } }))
+  const cleared = ok(updateNode(merged, 'n4', { logic: '', knobs: { effort: undefined, output: '' } }))
   expect(findNode(cleared, 'n4')?.logic).toBeUndefined()
-  expect(Object.keys(findNode(cleared, 'n4')?.knobs ?? {}).sort()).toEqual(['model', 'output'])
+  expect(Object.keys(findNode(cleared, 'n4')?.knobs ?? {})).toEqual(['model'])
 
   const bare = ok(updateNode(before, 'n2', { knobs: { oncePer: '' } }))
   expect(findNode(bare, 'n2')?.knobs).toBeUndefined()

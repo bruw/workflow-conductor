@@ -98,11 +98,11 @@ export function lint(project: Project): Lint[] {
       }
     }
 
-    if (needsBrief(node) && blank(node.logic) && blank(node.knobs?.prompt)) {
+    if (needsBrief(node) && blank(node.logic)) {
       lints.push({
         nodeId: node.id,
         rule: 'agent-no-brief',
-        message: 'agent has no logic and no prompt, so only its name says what it does: write its task in logic, or what to tell it in prompt',
+        message: 'agent has no logic, so only its name says what it does: write its task in logic',
       })
     }
 
@@ -165,7 +165,7 @@ export function lint(project: Project): Lint[] {
 
 /** The detail pane marks the ones that are not set. */
 export function problemFields(rule: LintRule): string[] {
-  if (rule === 'agent-no-brief') return ['logic', 'prompt']
+  if (rule === 'agent-no-brief') return ['logic']
   if (rule === 'loop-unbounded' || rule === 'loop-no-decider') return ['stopCondition']
   if (rule === 'code-input-no-output') return ['output']
   if (rule === 'arm-no-condition') return ['condition']

@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import type { RunState } from '../src/run/events'
 import { replayDue, replayEvents } from '../src/run/replay'
 import { createTracker, HANDOFF_MS, REPLAY_MS, STOPPED_MS, TICK_MS } from '../src/run/tracker'
-import type { TrackerHost } from '../src/run/tracker'
+import type { RunEnded, TrackerHost } from '../src/run/tracker'
 import * as review41 from '../fixtures/review-41'
 
 // A host in memory: timers fire when the test moves the time, everything else is recorded.
@@ -201,6 +201,26 @@ test("the run ends as the engine's notice of its task says; agents still open ta
   tracker.taskEnded('t1', 'failed', 5000)
   await advance(200)
   expect(log.toasts).toHaveLength(1)
+})
+
+test('a real run says once how it ended and as whose project; a replay says nothing', async () => {
+  const { host, advance } = fakeHost()
+  const ends: RunEnded[] = []
+  const tracker = createTracker()
+  tracker.attach({ ...host, ended: end => void ends.push(end) })
+  tracker.handoff({ name: 'demo', nodeIds: ['n1'] })
+  tracker.runStarted({ runId: 'wf_1', taskId: 't1' })
+  tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'n1: one' })
+  tracker.agentEnded('a1', { ok: true })
+  tracker.taskEnded('t1', 'completed')
+  tracker.taskEnded('t1', 'completed')
+  await advance(500)
+  expect(ends).toEqual([{ runId: 'wf_1', ending: 'done', project: 'demo' }])
+
+  tracker.replay(replayEvents('review-41', review41), 'fast')
+  await advance(500)
+  expect(tracker.state().status).not.toBe('running')
+  expect(ends).toHaveLength(1)
 })
 
 test('a run whose agents were all aborted is held stopped until a notice says otherwise; a skipped agent is no stop', async () => {

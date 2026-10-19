@@ -250,11 +250,6 @@ export function projectFile(root: string, name: string): string {
   return `${root.replace(/\/+$/, '')}/${PROJECT_DIR}/${name}.json`
 }
 
-/** The project does not name its script: that the file is there, beside its own, is the link. */
-export function scriptFile(root: string, name: string): string {
-  return `${root.replace(/\/+$/, '')}/${PROJECT_DIR}/${name}.workflow.js`
-}
-
 /** `text` is the saved file's content, undefined when there is none. A project opened before in this session comes back with the block it was left on. */
 export function openProject(name: string, text: string | undefined, previous?: ProjectUi): Step {
   const ui: ProjectUi = { ...(previous ? carryUi(previous, initialUi()) : initialUi()), name }
@@ -305,12 +300,10 @@ export function firstBlocks(project: Project, count: number): Project {
 /** A draft is laid out a beat a step, more blocks to a step where it is large: all of it is on the graph within this many steps. */
 export const REVEAL_STEPS = 12
 
-export type StartEntry = { kind: 'saved' | 'template' | 'blank' | 'replay' | 'recording' | 'reset'; id: string; title: string; blocks: number; note: string }
+export type StartEntry = { kind: 'saved' | 'template' | 'blank' | 'replay' | 'recording'; id: string; title: string; blocks: number; note: string }
 
 /** The recorded runs the start screen replays in the run view, by the name of their fixture. */
 export const RECORDINGS = ['review-41', 'partial-29'] as const
-/** The start screen's last row: it forgets the stored answers to Conductor's questions. */
-export const RESET_ID = 'ask-again'
 
 /** In the order `w` / `s` walk them. Under the projects: what is not a project to open. */
 export function startEntries(saved: readonly SavedProject[], templates: readonly Template[] = TEMPLATES): StartEntry[] {
@@ -322,7 +315,6 @@ export function startEntries(saved: readonly SavedProject[], templates: readonly
     { kind: 'blank' as const, id: BLANK_TEMPLATE_ID, title: 'Blank', blocks: 0, note: 'An empty project' },
     ...templates.map((one, at) => ({ kind: 'replay' as const, id: one.id, title: one.title, blocks: blocks[at] ?? 0, note: 'A made-up run over the template, nothing saved' })),
     ...RECORDINGS.map(one => ({ kind: 'recording' as const, id: one, title: one, blocks: 0, note: 'A recorded run, in the run view' })),
-    { kind: 'reset' as const, id: RESET_ID, title: 'Ask again', blocks: 0, note: 'Forget every "Always" and "Never" answer' },
   ]
 }
 
@@ -823,7 +815,7 @@ export function pickBlock(project: Project | null, ui: ProjectUi, choice: Partia
 }
 
 /** Each has a field of its own in the detail pane; model and effort are stepped on the card. */
-export const TEXT_KNOBS = ['goal', 'args', 'prompt', 'condition', 'oncePer', 'stopCondition', 'output'] as const
+export const TEXT_KNOBS = ['goal', 'args', 'condition', 'oncePer', 'stopCondition', 'output'] as const
 export type TextKnob = (typeof TEXT_KNOBS)[number]
 
 export const DRAFTING_NOTE = 'Claude is drafting this project: blocks appear here as they are written'
@@ -905,7 +897,7 @@ export const START_HELP: readonly string[] = [
   'The Up and Down arrows choose a row (w and s too), Enter opens it. A saved project opens as it was left; a template starts a new project, and Blank an empty one.',
   `Nothing is written until the first edit. Each saved project is a file in ${PROJECT_DIR}/: rename or delete it there.`,
   '/conductor <what you want> has Claude draft a new project on the board and name it; in an open project, a plain message to Claude changes it.',
-  'Under the templates: a replay shows a run without running one (made up over a template, or recorded), and Ask again forgets every "Always" and "Never" answer given to Conductor\'s questions.',
+  'Under the templates: a replay shows a run without running one, made up over a template or recorded.',
 ]
 
 /** `page` counts from 1; `start` is the start screen. */

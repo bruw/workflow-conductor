@@ -1,14 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderChildren } from 'claude-code'
 
-import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, applyOps, attachNote, changeWords, changedNote, clearFlash, projectOfPath, diffProjects, draftBrief, editReport, knownAfterEdit, readReport, replaceProject, showEdit, staleNote, toolDescription, unplacedNote } from '../src/project/chat'
+import { FLASH_CLEAR_MS, TOOL_FULL_NAME, TOOL_NAME, TOOL_SCHEMA, TOOL_TITLE, applyOps, attachNote, callLine, changeWords, changedNote, clearFlash, projectOfPath, diffProjects, draftBrief, editReport, knownAfterEdit, readReport, replaceProject, resultLine, showEdit, staleNote, toolDescription, unplacedNote } from '../src/project/chat'
 import { UNDO_HINT, remember, travel } from '../src/project/history'
 import type { History } from '../src/project/history'
 import { lint, preflightLine, problemFields } from '../src/project/lints'
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
 import { LAST_SCRIPTS_STORE, handoffPrompt, handoffTarget, noteScript, reviewPrompt } from '../src/project/handoff'
-import { ASK_STORES, resetText } from '../src/project/offer'
 import { replayEvents } from '../src/run/replay'
 import type { ReplayFixture } from '../src/run/replay'
 import { emptyProject, findNode, flatten, goalOf, isBlank, isProjectName, kindsOf, parseProject, serializeProject, typeName } from '../src/project/model'
@@ -66,7 +65,6 @@ import {
   pickBlock,
   pickerMatches,
   previewProps,
-  scriptFile,
   restoreProject,
   runOverlay,
   runSummary,
@@ -100,7 +98,7 @@ import { cellWidth, clip, cutCells, firstLines, oneLine, padCells, sanitize, wra
 import { ACCENT, FADED, GLYPH, PANE_ID, PANE_TITLE, RULE, TEXT } from '../src/ui/theme'
 import { wordmark } from '../src/ui/wordmark'
 
-import { offerDrafted, offerHanded, offerPrompted, setOfferBoard, takeOffered } from './offer'
+import { offerDrafted, offerHanded, offerPrompted, offerRan, setOfferBoard, takeOffered } from './offer'
 
 // The designer: owns the Project and what is chosen on it, applies ops, saves the file and draws the screen.
 // Keys are typed into the key catcher, an Input that is not drawn; the graph (./canvas.tsx) is a Client that posts here.
@@ -1001,16 +999,6 @@ const replayRecording = async ($: EngineInterface, id: string): Promise<void> =>
   await say($, `replaying ${id} in the run view: token counts are made up`)
 }
 
-const forgetAnswers = async ($: EngineInterface): Promise<void> => {
-  let cleared = 0
-  for (const slot of ASK_STORES) {
-    if ((await $.store.get(slot).catch(() => undefined)) === undefined) continue
-    await $.store.delete(slot).catch(() => undefined)
-    cleared++
-  }
-  await say($, resetText(cleared))
-}
-
 const openEntry = async ($: EngineInterface, at?: number): Promise<void> => {
   const ui = await read($, uiAtom)
   if (ui.status !== 'pick') return
@@ -1018,7 +1006,6 @@ const openEntry = async ($: EngineInterface, at?: number): Promise<void> => {
   if (!entry) return
   if (entry.kind === 'replay') return replayOver($, entry.id)
   if (entry.kind === 'recording') return replayRecording($, entry.id)
-  if (entry.kind === 'reset') return forgetAnswers($)
   const back = ui.back ?? null
   if (entry.kind === 'saved' && entry.id === back) return closeProjectList($)
   // A project started from a template and never edited has no file: left for another, nothing of it is kept.
@@ -1508,7 +1495,10 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         return { deny: `Project ${name} could not be saved, nothing was changed: ${reason(error)}` }
       }
       // The script the run is of is the one the next handoff starts from.
-      if (ran !== null) await $.store.set(LAST_SCRIPTS_STORE, noteScript(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined), name, ran.path, scriptFile(root, name))).catch(() => undefined)
+      if (ran !== null) {
+        await $.store.set(LAST_SCRIPTS_STORE, noteScript(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined), name, ran.path, true)).catch(() => undefined)
+        offerRan(name, { runId: ran.runId, transcriptDir: tracked.transcriptDir })
+      }
       // Undone like any edit made by hand; and Claude has seen what it just wrote.
       const said = changeWords(edit)
       if (said !== '') record(name, project, `Claude ${said}`)
@@ -1704,6 +1694,36 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     return { text: e.text, cursor: e.cursor }
   })
 
+  // The board holds what the call's input and report say at length: the transcript draws a line for each.
+  on('ui.render', { component: 'ToolUse', props: { tool: TOOL_FULL_NAME } }, async ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    const { input, isRunning, isErrored, isInterrupted } = e.props
+
+    return (
+      <Text wrap="truncate-end">
+        <Text color={isRunning ? FADED : isErrored ? 'error' : 'success'}>{`${GLYPH.dot} `}</Text>
+        <Text color={TEXT} bold>
+          {TOOL_TITLE}
+        </Text>
+        <Text color={FADED}>{` · ${callLine(input)}${isInterrupted ? ' · interrupted' : ''}`}</Text>
+      </Text>
+    )
+  })
+  // An errored row draws the engine's own error text whatever `output` says, so its line is drawn here.
+  on('ui.render', { component: 'ToolResult', props: { tool: TOOL_FULL_NAME } }, async ($, e, next) => {
+    const { output, isErrored } = e.props
+    if (typeof output !== 'string') return next(e)
+    if (!isErrored) return next({ ...e, props: { ...e.props, output: resultLine(output, false) } })
+    const { Text } = $.ui.resolve(e)
+
+    return (
+      <Text wrap="truncate-end">
+        <Text color={FADED}>{`  ${GLYPH.elbow}  `}</Text>
+        <Text color="error">{resultLine(output, true)}</Text>
+      </Text>
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: PROJECT_PANE_ID }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
@@ -1780,7 +1800,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         : drafting
           ? { text: 'DRAFTING', color: 'claude' }
           : starting && marked
-            ? { text: `${begins} · ${marked.kind === 'saved' ? 'saved project' : marked.kind === 'blank' ? 'blank project' : marked.kind === 'replay' ? `replay over the ${marked.title} template` : marked.kind === 'recording' ? 'recorded run' : marked.kind === 'reset' ? 'stored answers' : `from the ${marked.title} template`}`, color: FADED }
+            ? { text: `${begins} · ${marked.kind === 'saved' ? 'saved project' : marked.kind === 'blank' ? 'blank project' : marked.kind === 'replay' ? `replay over the ${marked.title} template` : marked.kind === 'recording' ? 'recorded run' : `from the ${marked.title} template`}`, color: FADED }
             : ui.status !== 'ready' || !project
               ? { text: 'project', color: FADED }
               : { text: `EDITING · ${!isSaved(ui.name) ? 'replay, not saved' : !ui.unsaved ? 'saved' : isBlank(project) ? 'not saved yet' : 'unsaved template'}`, color: FADED }
@@ -2084,7 +2104,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           previews[marked.id] = parsed.ok ? parsed.project : null
         }
         shown = previews[marked.id] ?? null
-      } else if (marked && marked.kind !== 'recording' && marked.kind !== 'reset') shown = TEMPLATES.find(one => one.id === marked.id)?.make() ?? emptyProject(ui.name)
+      } else if (marked && marked.kind !== 'recording') shown = TEMPLATES.find(one => one.id === marked.id)?.make() ?? emptyProject(ui.name)
       const keys = legendItems({ ring: 'start', placed: false, retype: false, empty: true, helping, locked: false, selected: false, container: false, nested: false, results: false, undo: false, redo: false, hidden: false, back: listing })
       const message = focused ? ui.notice : KEYS_CUE
 

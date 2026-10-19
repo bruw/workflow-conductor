@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { serializeProject } from '../src/project/model'
+import { review } from '../src/project/templates'
 import type { RunState } from '../src/run/events'
 import { STOPPED_MS } from '../src/run/tracker'
 
@@ -205,4 +207,98 @@ test("Claude's stop of the run's task ends it stopped", async ($, on) => {
   await clock.advance(300)
   expect(written?.status).toBe('stopped')
   expect(Object.values(written?.agents ?? {}).map(agent => agent.status)).toEqual(['failed'])
+})
+
+test("a project's run that ended done is asked about after Claude's turn; a yes copies its script into the repo, and the same script asks nothing", async ($, on) => {
+  const clock = mock.clock(on)
+  const ROOT = '/work'
+  const SCRIPT = '/projects/demo/session/workflows/scripts/demo-wf_1.js'
+  const COPY = `${ROOT}/.claude/workflows/demo.js`
+  const BODY = 'export const meta = { name: "demo", description: "d", phases: [] }\n'
+  const files: Record<string, string> = { [`${ROOT}/.claude/workflow-conductor/demo.json`]: serializeProject({ ...review(), name: 'demo' }), [SCRIPT]: BODY }
+  const asked: string[] = []
+  const toasts: string[] = []
+  let answer = 'Save to repo'
+  let runs = 0
+
+  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+  on('session.root', async () => ({ value: ROOT }))
+  on('tool.register', async (_$, e) => ({ value: { tool: e.name } }))
+  on('session.surfaces', async () => ({ value: ['terminal' as const] }))
+  on('command.register', async (_$, e) => ({ value: { command: e.name } }))
+  on('ui.panes', async () => ({ value: [] }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('ui.status', async () => ({ value: undefined }))
+  on('ui.toast', async (_$, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  on('fs.exists', async (_$, e) => ({ value: files[e.path] !== undefined }))
+  on('fs.read', async (_$, e) => {
+    const body = files[e.path]
+    if (body === undefined) throw new Error(`no file ${e.path}`)
+
+    return { value: body }
+  })
+  on('fs.write', async (_$, e) => {
+    files[e.path] = e.text
+
+    return { value: undefined }
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, async (_$, e) => {
+    const question = e.questions[0]?.question ?? ''
+    asked.push(question)
+
+    return { result: { questions: e.questions, answers: { [question]: answer } } }
+  })
+  on('tool.call', { tool: 'Workflow' }, async () => {
+    runs++
+
+    return { result: { status: 'async_launched' as const, taskId: `t${runs}`, runId: `wf_${runs}`, workflowName: 'demo', transcriptDir: DIR, scriptPath: SCRIPT } }
+  })
+  on('ui.render', { component: 'UserMessage' }, async (_$, e) => ({ type: 'Text' as const, props: {}, children: [e.props.text] }))
+  on('turn.complete', async (_$, e) => ({ text: e.answer }))
+
+  const notice = (id: string, status: string) =>
+    $.ui.mount({ plugin: 'workflow-conductor', surface: 'terminal', component: 'UserMessage', requestId: `m-${id}`, props: { text: `Dynamic workflow ${status}`, origin: { kind: 'task-notification' as const }, isExpanded: false, task: { id, status } } })
+  const mainTurnEnds = () => $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, turnId: 'main', reason: 'answer', usage: usage(1, 1) })
+
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Workflow', script: BODY })
+  await notice('t1', 'completed')
+  await clock.advance(200)
+  // Not while Claude answers the notice: once its turn ends.
+  expect(asked).toEqual([])
+  await mainTurnEnds()
+  await clock.advance(200)
+  expect(asked).toHaveLength(1)
+  expect(files[COPY]).toBe(BODY)
+  expect(toasts.some(line => line.includes('.claude/workflows/demo.js'))).toBe(true)
+
+  // The same script again: it is the saved one, nothing to ask.
+  await $.tool.call({ tool: 'Workflow', script: BODY })
+  await notice('t2', 'completed')
+  await clock.advance(200)
+  await mainTurnEnds()
+  await clock.advance(200)
+  expect(asked).toHaveLength(1)
+
+  // A changed script is asked about as an update, and a failed run is not asked about.
+  files[SCRIPT] = `${BODY}// changed\n`
+  await $.tool.call({ tool: 'Workflow', script: BODY })
+  await notice('t3', 'failed')
+  await clock.advance(200)
+  await mainTurnEnds()
+  await clock.advance(200)
+  expect(asked).toHaveLength(1)
+  answer = 'Not now'
+  await $.tool.call({ tool: 'Workflow', script: BODY })
+  await notice('t4', 'completed')
+  await clock.advance(200)
+  await mainTurnEnds()
+  await clock.advance(200)
+  expect(asked).toHaveLength(2)
+  expect(asked[1]).not.toBe(asked[0])
+  expect(files[COPY]).toBe(BODY)
 })

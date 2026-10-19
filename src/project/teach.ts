@@ -130,7 +130,7 @@ export const TEACH: Record<NodeType, Teach> = {
       'Says the goal of the workflow, in a sentence: Claude reads it when it writes the script, and reviews the project against it.',
       'Says the args, the input the script reads from `args`: what it is, or its shape. Left empty, the workflow takes no input.',
       'Every project has one, always its first block: it is not added, moved or deleted.',
-      'Later blocks draw on the args: a fan-out over "the files in args", a prompt that quotes the question.',
+      'Later blocks draw on the args: a fan-out over "the files in args", an agent told the question.',
       'The values come from the request the workflow is run with.',
       'Spawns no agent and costs no tokens.',
     ],
@@ -139,7 +139,7 @@ export const TEACH: Record<NodeType, Teach> = {
 
 export type BlockRef = { type: NodeType; kind?: Kind }
 
-export type TextField = 'logic' | 'goal' | 'args' | 'prompt' | 'condition' | 'oncePer' | 'stopCondition' | 'output'
+export type TextField = 'logic' | 'goal' | 'args' | 'condition' | 'oncePer' | 'stopCondition' | 'output'
 
 export type Starter = { type: NodeType; kind?: Kind; name: string; logic?: string; knobs?: Knobs }
 
@@ -147,7 +147,7 @@ export type KindTeach = {
   hint: string
   when: string
   card: string[]
-  /** One line in the script's terms: what the hand-off tells Claude the kind means. */
+  /** One line, the Workflow reference's pattern name where it has one and what it leaves out: what the hand-off tells Claude the kind means (a plain kind's is not sent). */
   script: string
   /** The knobs a new block of this kind is given. */
   fill?: Knobs
@@ -179,7 +179,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     ],
     script: 'one agent() whose schema is the work-list; the fan-out after it maps over that list',
     fill: { output: '{ items: [{ id, what }] }', effort: 'low' },
-    hints: { prompt: 'what to list, e.g. every site that needs the change' },
+    hints: { logic: 'what to list, e.g. every site that needs the change' },
   },
   check: {
     hint: 'Model checks pass/fail',
@@ -192,7 +192,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     ],
     script: 'one agent() returning { ok, failures }; the code after it tests `ok`',
     fill: { output: '{ ok: boolean, failures: [] }' },
-    hints: { prompt: 'what must hold, e.g. typecheck and tests pass' },
+    hints: { logic: 'what must hold, e.g. typecheck and tests pass' },
   },
   verify: {
     hint: 'Voters try to refute it',
@@ -202,12 +202,12 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'A finding survives only if a majority fail to refute it.',
       'Use after any finder: it stops plausible but wrong findings from surviving.',
       'Give voters distinct lenses (correctness, security, repro) when a claim can fail several ways.',
-      'Cost: votes × findings agents. 1 vote for a quick check, 3 to 5 for a thorough one: say how many in its logic (`3 votes`).',
+      'Cost: votes × findings agents. 1 vote for a quick check, 3 to 5 for a thorough one: say in its logic how many (`3 votes`) and what to refute it against.',
     ],
-    script: 'voters in a parallel(), as many as its logic says, each told to refute the result and to say refuted when unsure; keep it when a majority fail to refute',
+    script: 'Adversarial verify, as many voters as its logic says (Perspective-diverse verify where it gives them lenses)',
     fill: { output: '{ refuted: boolean, reason }' },
     logic: '3 votes: each voter tries to refute the result; it is kept when a majority fail to refute it',
-    hints: { prompt: 'what to try to refute, e.g. this finding against the code' },
+    hints: { logic: 'its votes, and what to try to refute, e.g. 3 votes against the code' },
   },
   judge: {
     hint: 'Judges score, best wins',
@@ -216,12 +216,12 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'Parallel judges score every candidate against the same criteria; the highest total wins.',
       'Put the attempts before it (a parallel of kind attempts) and a merge after it.',
       'Waiting for all results is right here: the judges need every candidate at once.',
-      'Cost: one agent per vote: say how many in its logic (`3 votes`).',
+      'Cost: one agent per vote: say in its logic how many (`3 votes`) and the criteria to score on (correctness, simplicity, risk).',
     ],
-    script: 'judges in a parallel(), as many as its logic says, each scoring every candidate; sum the scores in code and take the highest',
+    script: 'the scoring of a Judge panel: as many judges as its logic says, each scoring every candidate; sum the scores in code',
     fill: { output: '{ scores: [{ candidate, score, why }] }' },
     logic: '3 votes: each judge scores every candidate; the highest total wins',
-    hints: { prompt: 'the criteria to score on, e.g. correctness, simplicity, risk' },
+    hints: { logic: 'its votes, and the criteria to score on, e.g. correctness, simplicity, risk' },
   },
   critic: {
     hint: 'Finds what is missing',
@@ -232,9 +232,9 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'Use before the merge on research, review and audit work.',
       'What it finds becomes the next round of work: its output is a shape, so the gaps can be acted on.',
     ],
-    script: 'one agent() listing what is missing; its gaps are the next round of work',
+    script: 'Completeness critic, its gaps in its output shape',
     fill: { output: '{ gaps: [{ what, how_to_fill }] }' },
-    hints: { prompt: 'what complete means here, e.g. every angle searched' },
+    hints: { logic: 'what complete means here, e.g. every angle searched' },
   },
   merge: {
     hint: 'Many results into one',
@@ -246,7 +246,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'Runs once, whatever the fan-out before it.',
     ],
     script: 'one agent() after a barrier, given every result (nulls filtered out), writing one answer',
-    hints: { prompt: 'what to write from all the results', output: 'free text: the answer itself; a shape only if a block reads it' },
+    hints: { logic: 'what to write from all the results', output: 'free text: the answer itself; a shape only if a block reads it' },
   },
   classify: {
     hint: 'Labels input for routing',
@@ -259,7 +259,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     ],
     script: 'one agent() whose schema is one label out of a fixed list; a branch after it switches on the label',
     fill: { output: '{ label }', effort: 'low' },
-    hints: { prompt: 'the labels to choose from, e.g. bug, feature, question' },
+    hints: { logic: 'the labels to choose from, e.g. bug, feature, question' },
   },
 
   // loop: when does it stop?
@@ -279,8 +279,9 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'What the check found is handed to the next round, so each try starts from the failures.',
       'Say the most rounds it may take: a check that never passes runs to the cap of 1000 agents.',
       'The last block of a round needs an output shape the stop test can read ({ ok }).',
+      'A reviewer in a round is told what earlier rounds raised and judges against fixed criteria, or the loop never converges.',
     ],
-    script: 'loop while the round\'s last block says `ok` is false, up to the stated rounds; hand its failures to the next round',
+    script: 'rounds until the round\'s last block says `ok`, up to the rounds its stop condition says; the next round is given the check\'s failures, and a reviewer in it what earlier rounds raised',
     fill: { stopCondition: 'the check passes, at most 3 rounds' },
     starter: [
       { type: 'agent', name: 'attempt', logic: 'Does the work. From the second round on it is given what the check found.' },
@@ -296,7 +297,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'Dedup against everything seen, not only what was confirmed, or it never converges.',
       'Cost is open-ended: say how many dry rounds end it, and consider a budget as well.',
     ],
-    script: 'while (dry < K): run the round, dedup against everything seen (not only what was confirmed), count a round with nothing new as dry',
+    script: 'Loop-until-dry, K the dry rounds its stop condition says',
     fill: { stopCondition: '2 rounds in a row find nothing new' },
     starter: [
       { type: 'agent', name: 'find', logic: 'One round of finding. Told what was already found, so it looks elsewhere.', knobs: { output: '{ found: [{ id, what }] }' } },
@@ -318,7 +319,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
     hint: 'Until target reached',
     when: 'you need a set number of results: 10 findings, 5 candidates',
     card: ['Each round adds what it found to one list; the loop stops when the list is long enough.', 'Dedup each round against the list, or the same result is counted twice.', 'A target that cannot be met runs to the cap of 1000 agents: consider a budget as well.'],
-    script: 'while (collected.length < N): push each round\'s results onto `collected`',
+    script: 'Loop-until-count, N from its stop condition; dedup each round against what is collected',
     fill: { stopCondition: '10 items collected' },
   },
   budget: {
@@ -329,7 +330,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'With no budget given there is nothing to run against: the loop then does a single round.',
       'The budget is shared with everything else in the turn.',
     ],
-    script: 'while (budget.total && budget.remaining() > N); with no budget set, run one round',
+    script: 'Loop-until-budget, the floor from its stop condition; with no budget set, one round',
     fill: { stopCondition: 'budget below 50k tokens' },
   },
 
@@ -343,7 +344,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'Say the items in "once per": the list a scout made, the changed files.',
       'When no step needs all results together, a pipeline does the same without the wait.',
     ],
-    script: 'parallel(items.map(item => () => …)): a barrier',
+    script: 'parallel(items.map(item => () => …)) over the items its once-per names, a barrier; a chain of stages per item is a pipeline()',
     hints: { oncePer: 'the items, e.g. changed files, ×4 dimensions' },
   },
   sweep: {
@@ -355,7 +356,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'Each searcher is blind to the others, so results overlap: dedup in code afterwards.',
       'Cost: one agent per angle.',
     ],
-    script: 'parallel() of one searcher per angle, each given its angle and blind to the others; dedup their results in code',
+    script: 'Multi-modal sweep, one searcher per angle its once-per names; dedup their results in code',
     fill: { oncePer: '4 search angles: by container, by content, by entity, by time' },
   },
   attempts: {
@@ -367,7 +368,7 @@ export const KIND_TEACH: Record<Kind, KindTeach> = {
       'Beats iterating on a single try when many answers are possible.',
       'Cost: one agent per try.',
     ],
-    script: 'parallel() of N agents on the same task, each given one angle and blind to the others',
+    script: 'the attempts of a Judge panel: one agent per angle its once-per names, each blind to the others',
     fill: { oncePer: '×3 angles: MVP-first, risk-first, user-first' },
   },
 
@@ -432,7 +433,6 @@ export function defaultName(block: BlockRef): string {
 export const KNOB_HELP: Record<keyof Knobs, string> = {
   goal: 'on the start block only: the goal of the workflow, in a sentence',
   args: 'on the start block only: the input the script reads from `args`, in words or as a shape, "{ target? }: a branch, a pull request or a path"; unset, it takes none',
-  prompt: 'intent of the agent prompt, not its final wording',
   output: 'the output, in words or as JSON Schema text',
   model: 'haiku, sonnet or opus; unset inherits the session',
   effort: `${EFFORTS.join(', ')}; unset inherits`,
@@ -448,9 +448,9 @@ export const KNOB_HELP: Record<keyof Knobs, string> = {
  * A container hands on what its last block makes, so it has no `output`; a branch's rule is on its arms (`condition`).
  */
 export const KNOBS_BY_TYPE: Record<NodeType, readonly (keyof Knobs)[]> = {
-  agent: ['prompt', 'output', 'model', 'effort', 'isolation', 'agentType'],
+  agent: ['output', 'model', 'effort', 'isolation', 'agentType'],
   code: ['output'],
-  subworkflow: ['prompt', 'output'],
+  subworkflow: ['output'],
   start: ['goal', 'args'],
   pipeline: ['oncePer'],
   parallel: ['oncePer'],
@@ -476,10 +476,10 @@ export function hasName(node: { type: NodeType }): boolean {
   return node.type !== 'start'
 }
 
-/** `condition` belongs to no type: it is offered, after the prompt, to a block that stands directly in a `branch`. */
+/** `condition` belongs to no type: it is offered, first, to a block that stands directly in a `branch`. */
 export function knobsOf(node: BlockRef & { knobs?: Knobs }, parentType?: NodeType): (keyof Knobs)[] {
   const own = KNOBS_BY_TYPE[node.type]
-  const listed: readonly (keyof Knobs)[] = parentType !== 'branch' ? own : own[0] === 'prompt' ? ['prompt', 'condition', ...own.slice(1)] : ['condition', ...own]
+  const listed: readonly (keyof Knobs)[] = parentType !== 'branch' ? own : ['condition', ...own]
   const extra = (Object.keys(node.knobs ?? {}) as (keyof Knobs)[]).filter(key => !listed.includes(key) && node.knobs?.[key] !== undefined)
   return [...listed, ...extra]
 }
@@ -490,7 +490,6 @@ export const FIELD_LABEL = {
   logic: 'logic',
   goal: 'goal',
   args: 'args',
-  prompt: 'prompt',
   oncePer: 'once per',
   stopCondition: 'stop condition',
   condition: 'condition',
@@ -505,7 +504,6 @@ export const FIELD_PLACEHOLDER = {
   logic: 'what this block does and why, for whoever reads the project',
   goal: 'what this workflow is for, in a sentence',
   args: 'what it is run on, e.g. { target? }: a branch or a path; empty: no input',
-  prompt: 'the intent of its prompt; Claude writes the wording',
   oncePer: 'e.g. changed files, ×4 dimensions',
   stopCondition: 'e.g. 2 dry rounds, 10 findings, budget < 50k',
   condition: 'e.g. no findings; leave the last arm empty for the else',

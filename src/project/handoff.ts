@@ -1,9 +1,12 @@
 // The handoff: what `r` on the board tells Claude. Short on purpose: the project file says what the workflow
-// does, and only how a run is tied back to it (label, phase, meta.name) is said here.
+// does; said here is only the script to start from, what its kinds mean in the Workflow reference's terms, and how a
+// run is tied back to it (label, phase, meta.name).
 
-import { typeName, canHoldChildren, flatten, goalOf } from './model'
-import type { Project } from './model'
+import { typeName, canHoldChildren, flatten, goalOf, plainKind } from './model'
+import type { Kind, Project } from './model'
 import { OFFER_TOOL_FULL_NAME } from './offer'
+import { isSaved } from './session'
+import { KIND_TEACH } from './teach'
 
 export type Handoff = { text: string; context: string[] }
 
@@ -50,10 +53,10 @@ export function handoffTarget(text: string): string | null {
 
 /** The chat tool hands Claude the project, the selection and the lints. */
 export function reviewPrompt(name: string): string {
-  return `Review the "${name}" workflow project as it is on the board now (it may have changed by hand: read it, unless a Conductor note with this prompt says what changed): is the structure right for its goal, what is missing, what is wasteful? `
+  return `Review the "${name}" workflow project as it is on the board now (it may have changed by hand: read it, unless a Conductor note with this prompt says what changed): is the structure right for its goal, what is missing, what is wasteful, and what are its worst-case agent count and rough wall-clock? `
 }
 
-/** `$.store` key: per project, the script its last run ran where that is not the file beside the project. */
+/** `$.store` key: per project, the script its last run ran, the file the Workflow tool kept in the session folder. */
 export const LAST_SCRIPTS_STORE = 'lastScripts'
 
 export function lastScripts(value: unknown): Record<string, string> {
@@ -61,17 +64,59 @@ export function lastScripts(value: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
 }
 
-/** A run of the file beside the project leaves nothing to remember: that file is the newest. */
-export function noteScript(value: unknown, name: string, ran: string, beside: string): Record<string, string> {
-  const { [name]: _, ...rest } = lastScripts(value)
-  return ran === beside ? rest : { ...rest, [name]: ran }
+/** `replace`: the run came out of a handoff, or the script remembered is gone. A run that only has the project's name may be of an older script. */
+export function noteScript(value: unknown, name: string, ran: string, replace: boolean): Record<string, string> {
+  const kept = lastScripts(value)
+  return replace || kept[name] === undefined ? { ...kept, [name]: ran } : kept
 }
 
-/** Claude writes the script itself, at `path` beside the project (the mod writes no file another tool runs); `from` is the script to start from, null for none. */
-export type HandoffScript = { path: string; from: string | null }
+/** A run of the project in this session: what a resume of it needs. */
+export type LastRun = { runId: string; transcriptDir?: string }
+
+/** `path`: the script to start from (the last run's or the saved copy), null where there is neither; `run`: the last run, where it was in this session. */
+export type HandoffScript = { path: string | null; run?: LastRun }
+
+/** Claude Code's own folder of saved workflows: it runs each `*.js` there by its `meta.name`, with `Workflow({ name })`. */
+export const SAVED_WORKFLOWS_DIR = '.claude/workflows'
+
+export function savedWorkflowFile(root: string, name: string): string {
+  return `${root.replace(/\/+$/, '')}/${SAVED_WORKFLOWS_DIR}/${name}.js`
+}
+
+export type ScriptFile = { path: string; mtimeMs: number }
+
+/** A copy is made from a run's script but can be newer than any run (changed by hand, pulled), so the later file wins; a tie is the run's. */
+export function newestScript(ran: ScriptFile | null, copy: ScriptFile | null): string | null {
+  if (ran === null || copy === null) return (ran ?? copy)?.path ?? null
+  return copy.mtimeMs > ran.mtimeMs ? copy.path : ran.path
+}
+
+/**
+ * A run's end, as the question whether to save its script reads it. `script`: the run's script, null where it cannot be read;
+ * `copy`: the saved one, null where there is none; `answerable`: the main conversation started the run and a surface draws.
+ */
+export type SaveCase = { ending: 'done' | 'failed' | 'stopped'; project: string | undefined; script: string | null; copy: string | null; answerable: boolean }
+
+/** `save` a first copy, `update` one that differs, null to ask nothing. */
+export function saveAsk(end: SaveCase): 'save' | 'update' | null {
+  if (end.ending !== 'done' || end.project === undefined || !isSaved(end.project) || !end.answerable || end.script === null) return null
+  if (end.copy === null) return 'save'
+  return end.copy === end.script ? null : 'update'
+}
+
+/** One line per kind the project uses, in project order; a plain kind says only what its type says. */
+function kindLines(project: Project): string[] {
+  const seen = new Map<Kind, string>()
+  for (const row of flatten(project)) {
+    const kind = row.node.kind
+    if (kind !== undefined && kind !== plainKind(row.node.type) && !seen.has(kind)) seen.set(kind, `- ${typeName(row.node)}: ${KIND_TEACH[kind].script}.`)
+  }
+  return [...seen.values()]
+}
 
 export function buildHandoff(project: Project, projectPath: string, script: HandoffScript): Handoff {
-  const scriptPath = script.from
+  const scriptPath = script.path
+  const run = scriptPath === null ? undefined : script.run
   const count = flatten(project).length
   // The start block is the goal and the input, not a stage: it gets no phase and no agent is labelled with it.
   const stages = project.nodes.filter(node => node.type !== 'start')
@@ -81,6 +126,7 @@ export function buildHandoff(project: Project, projectPath: string, script: Hand
   const goal = goalOf(project)
   const args = (project.nodes.find(node => node.type === 'start')?.knobs?.args ?? '').replace(/\s+/g, ' ').trim()
   const example = quoted(first ? `${first.id}: ${first.name}` : 'n1: scout diff')
+  const kinds = kindLines(project)
 
   const lines = [
     `Conductor handoff: ${scriptPath === null ? 'implement' : 'update'} and run the workflow project "${project.name}".`,
@@ -89,18 +135,20 @@ export function buildHandoff(project: Project, projectPath: string, script: Hand
     `Read the project file: ${projectPath}`,
     'It defines the workflow: what each block says (its type, kind, name, logic and knobs) is what to build.',
     ...(scriptPath === null
-      ? [`Write it as a Workflow script to ${script.path} and run it with the Workflow tool's \`scriptPath\`.`]
+      ? ["Write its Workflow script from the project and pass it inline as the Workflow tool's `script`."]
       : [
-          scriptPath === script.path ? `Its script exists: ${script.path}` : `Its last run's script is ${scriptPath}: copy it to ${script.path}.`,
-          `Update ${script.path} to match the project as it is now, changing only what the project changed, and run it with the`,
-          "Workflow tool's `scriptPath`. If it already matches, run it unchanged. Do not write another script.",
+          `Its latest script is ${scriptPath}: read it and leave that file as it is; change only what the project changed and pass the`,
+          "result inline as the Workflow tool's `script`. If it already matches, run it unchanged.",
         ]),
-    `The user approved it on the board: do not call ${OFFER_TOOL_FULL_NAME} for it again.`,
+    ...(run === undefined ? [] : [`That run was in this session: runId ${run.runId}${run.transcriptDir === undefined ? '' : `, journal ${run.transcriptDir}/journal.jsonl`}.`]),
+    ...(kinds.length > 0 ? ['', 'Its kinds, in the Workflow reference\'s terms:', ...kinds] : []),
     '',
-    'Before you write anything, in one message: confirm the design with the user (two or three lines on what the workflow',
-    'will do, and a question about every flow in the project that is ambiguous or looks unintended) and, unless they',
-    `have already said it, ask what to run it on${args === '' ? " (the start block has no `args`: where the workflow needs no input, say so and do not ask)" : ` (the start block's \`args\`: ${clip(args, WHEN_MAX)})`}.`,
-    'Wait for their answer, then go on.',
+    'Where a block\'s result sends work back (a rejection, failures, gaps), the agents that do that work are given those items in full.',
+    '',
+    `The user approved it on the board with r: do not call ${OFFER_TOOL_FULL_NAME} for it again.`,
+    `Ask, and wait for the answer, only about what is unresolved: ${args === '' ? '' : `what to run it on, unless they have said it (the start block's \`args\`: ${clip(args, WHEN_MAX)}); `}a flow that looks ambiguous or unintended.`,
+    'Otherwise say in one or two lines what the workflow will do, with its worst-case agent count and rough wall-clock from',
+    'its loop caps and fan-outs, and run it.',
     '',
     'So the run shows on the board:',
     ...(scriptPath === null

@@ -45,6 +45,8 @@ export type TrackerHost = {
   toast: (text: string) => unknown
   /** Null: the run was not started from a project. */
   project?: (name: string | null) => unknown
+  /** A real run (not a replay) ended; `project` is the one it was tracked as. */
+  ended?: (end: RunEnded) => unknown
 }
 
 /** A project's claim on a run: handed off, the next run to start is its run; adopted, the run already tracked is. */
@@ -63,7 +65,9 @@ export type Tracker = ReturnType<typeof createTracker>
 
 const hasRunning = (state: RunState): boolean => Object.values(state.agents).some(agent => agent.status === 'running')
 
-type Ending = 'done' | 'failed' | 'stopped'
+export type Ending = 'done' | 'failed' | 'stopped'
+
+export type RunEnded = { runId: string; ending: Ending; project?: string }
 
 /** The words a task notification ends with: `completed`, `failed`, `killed`, or another its producer wrote. */
 const endingOf = (status: string): Ending => (status === 'completed' ? 'done' : status === 'killed' ? 'stopped' : 'failed')
@@ -266,6 +270,9 @@ export function createTracker() {
     flush()
     const text = endText(state)
     call(h => h.toast(text))
+    const { runId, status } = state
+    const project = active?.name
+    if (!replayed && runId !== undefined && status !== 'idle' && status !== 'running') call(h => h.ended?.({ runId, ending: status, project }))
   }
 
   function apply(events: readonly RunEvent[]): void {
