@@ -109,7 +109,7 @@ One screen: header (name as the project list's button, state; the legend on its 
 
 **The detail pane** shows the selected block's fields (the type's, the same for every kind), the add / retype list, a help page, or the start screen's list. `model` and `effort` are stepped by `1` `2` on the card; `isolation` and `agentType` are Claude's to set and shown read-only.
 
-**Compact view** (`$.state` `shell`): `m` or a pane with no room minimizes into the band; any drawing of a placed pane with room ends it, so no way of opening the pane needs to know of it. The band draws the project, the saved projects as buttons, the run or the goal, and Expand.
+**Compact view** (`$.state` `shell`): `m` (only while a workflow runs, or a replay is on the board) or a pane with no room minimizes into the band; any drawing of a placed pane with room ends it, so no way of opening the pane needs to know of it. The band is one row: the project, then its plan as a strip of step titles (containers open into their blocks, parallel and branch arms in parentheses) with the run's marks on them, centred on the current step and cut off at the edges, or with no run why the designer is not on screen; and Expand. The native workflow bar under the prompt has the counts, the tokens and the time, so the strip does not.
 
 **`/conductor`**: bare is the run in progress, else the project last opened, else the start screen; `min` / `max` move the designer; any other words are a draft. Everything else (projects, replays) is on the start screen.
 

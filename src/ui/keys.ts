@@ -115,6 +115,8 @@ export type LegendState = {
   redo: boolean
   /** The detail pane is hidden: the header names the key that shows it. */
   hidden: boolean
+  /** A workflow is running, or a replay is on the board: only then does the designer minimize. */
+  minimizes?: boolean
   /** The start screen was opened from a project (`p`): `p` goes back to it. */
   back?: boolean
 }
@@ -138,7 +140,7 @@ export function legendItems(state: LegendState): Legend {
     const choose: LegendItem[] = [{ keys: '↑ ↓', word: 'Choose', core: true }, { keys: 'Enter', word: 'Open', core: true }]
     const back: LegendItem[] = state.back ? [{ keys: 'p', word: 'Back', core: true }] : []
     // A help page has the detail pane in place of the list: the keys that walk the list still act, and are the header's.
-    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, help], actions: [minimize], detail: choose }
+    return state.helping ? { header: choose, actions: [], detail: pages } : { header: [...back, help], actions: state.minimizes ? [minimize] : [], detail: choose }
   }
   const edits = !state.locked
   // In a field and in the add list the letters are text, so the actions wait.
@@ -164,7 +166,7 @@ export function legendItems(state: LegendState): Legend {
     }
   }
   if (state.helping) return { header: [{ keys: 'WASD', word: 'Navigate', core: true }], actions, detail: pages }
-  actions.push(minimize)
+  if (state.minimizes) actions.push(minimize)
   const moves = edits && state.selected && !state.fixed
   const header: (LegendItem | false)[] = [
     // First, so it is the last to go where the room is short.

@@ -393,6 +393,17 @@ test('a slow replay spreads the fixture over ten seconds; a fast one lands at on
   expect(fast.log.toasts.length).toBe(1)
 })
 
+test('a replay is told from a run the engine started', async () => {
+  const fake = fakeHost()
+  const tracker = createTracker()
+  tracker.attach(fake.host)
+  expect(tracker.replayed()).toBe(false)
+  tracker.replay(replayEvents('review-41', review41), 'fast')
+  expect(tracker.replayed()).toBe(true)
+  tracker.runStarted({ runId: 'wf_2', name: 'real' })
+  expect(tracker.replayed()).toBe(false)
+})
+
 test('replayDue hands out every event exactly once', async () => {
   expect(replayDue(83, 0, 105)).toBe(0)
   expect(replayDue(83, 105, 105)).toBe(83)

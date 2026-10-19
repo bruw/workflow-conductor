@@ -402,6 +402,9 @@ export function createTracker() {
     /** Whether the tracked run comes out of a handoff of its project (the run it waited for, or a retry of it), not only out of its name. */
     handedOff: (): boolean => active !== undefined && active.name === handed,
 
+    /** Whether the run held is a replay, not one the engine ran. */
+    replayed: (): boolean => replayed,
+
     paneOpened(): void {
       shown = true
       syncStatus()

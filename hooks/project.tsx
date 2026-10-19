@@ -82,15 +82,16 @@ import { FIELD_LABEL, PALETTE_GROUPS, TEACH, fieldWord as fieldLabel, groupOf, h
 import type { BlockRef } from '../src/project/teach'
 import { TEMPLATES } from '../src/project/templates'
 import { emptyRunState } from '../src/run/events'
+import type { RunState } from '../src/run/events'
 import { replayProjectEvents } from '../src/run/replay'
 import type { Tracker } from '../src/run/tracker'
 import { NOT_SET, UNMAPPED_ID, canOpen } from '../src/ui/graph-layout'
 import { parseGraphMessage } from '../src/ui/graph-model'
-import { BORDER_CELLS, BORDER_ROWS, COMPACT_BAR_W, EXPAND_W, EXPAND_WORD, LIST_GAP, LIST_LABEL, WHY_TEXT, compactView, initialShell, whyCompact, wouldDock } from '../src/ui/compact'
-import type { CompactWhy, Minimized } from '../src/ui/compact'
+import { EXPAND_W, EXPAND_WORD, WHY_TEXT, currentStep, initialShell, planStrip, stripItems, whyCompact, wouldDock } from '../src/ui/compact'
+import type { CompactWhy, Minimized, StripPart, StripTone } from '../src/ui/compact'
 import { ENTER, FOCUS_HINT, KEY_OPS, MINIMIZE_KEYS, PASTE_NOTICE, burstKeys, legendItems, legendRows, unboundNotice, LEGEND_GAP } from '../src/ui/keys'
 import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
-import { FAILED, bar, fmtCount } from '../src/ui/rail'
+import { FAILED, fmtCount } from '../src/ui/rail'
 import { BEAT_MS, SCENE_COLUMNS, SCENE_ROWS, SOLO_ROWS, SPLASH_MS, splashScene, waitScene } from '../src/ui/persona'
 import type { PersonaSpan } from '../src/ui/persona'
 import { MARK_ROWS, MARK_W, markFrame, markPalette } from '../src/ui/mark'
@@ -655,10 +656,11 @@ const EXPAND_WORDS: readonly string[] = ['max', 'expand']
 /** A Button's hotkey has no case, so `M` presses it too. */
 const EXPAND_ELEMENT = 'conductor-expand'
 const EXPAND_HOTKEY = 'm'
-const BAND_PROJECT_PREFIX = 'conductor-project:'
-/** The band lists the saved projects again when its listing is older than this. */
-const LISTING_MS = 4000
-let bandListing: { at: number; names: string[] } = { at: 0, names: [] }
+/** The strip's cells below which the band drops its focus hint. */
+const BAND_HINT_MIN = 48
+const STRIP_TONES: Record<StripTone, string> = { text: TEXT, faded: FADED, claude: 'claude', success: 'success', error: 'error' }
+/** The run's project as read from its file, for a band whose board has another one open; its file is locked while the run is on. */
+let stripProject: { name: string; runId: string | undefined; project: Project | null } | null = null
 /** The terminal's size at which the band last opened the pane by itself: not tried again until the size changes. */
 let autoTried = ''
 
@@ -668,6 +670,14 @@ let minimizing = false
 const MINIMIZE_DELAY_MS = 32
 /** Opened by the person from the band: short of room it stays and says why, since a dock can be widened only while it is on screen. */
 let heldOpen = false
+
+/** The band shows a run's progress, so the person minimizes only while one is on, or while a replay's is on the board. */
+const MINIMIZE_IDLE = 'minimize: the designer minimizes while a workflow runs or replays'
+const minimizes = (run: RunState, over: boolean): boolean => run.status === 'running' || (over && runTracker?.replayed() === true)
+const canMinimize = async ($: EngineInterface): Promise<boolean> => {
+  const run = await read($, runAtom)
+  return minimizes(run, overlaysProject(run, await read($, runProjectAtom), await read($, uiAtom)))
+}
 
 /** From a clock callback: a drawing asks for it too, and a drawing closes nothing. */
 const minimize = ($: EngineInterface, by: Exclude<Minimized, 'no'>, why: CompactWhy | null = null): void => {
@@ -699,15 +709,11 @@ const expand = async ($: EngineInterface, asked: boolean, columns?: number): Pro
   if (asked) $.clock.after(FOCUS_DELAY_MS * 2, () => void retake($, false).catch(() => undefined))
 }
 
-const showSaved = async ($: EngineInterface, name: string): Promise<void> => {
-  await flushDrafts($)
-  const held = await read($, uiAtom)
-  if (held.name === name && held.status === 'ready') return
-  const text = await $.fs.read(projectFile(await $.session.root(), name)).catch(() => undefined)
-  const step = openProject(name, typeof text === 'string' ? text : undefined, held)
-  if (step.ui.status !== 'ready') return
-  await update($, projectAtom, () => step.project)
-  await update($, uiAtom, () => step.ui)
+const stripProjectOf = async ($: EngineInterface, name: string, runId: string | undefined): Promise<Project | null> => {
+  if (stripProject?.name === name && stripProject.runId === runId) return stripProject.project
+  const parsed = isSaved(name) ? parseProject(await $.fs.read(projectFile(await $.session.root(), name)).catch(() => '')) : null
+  stripProject = { name, runId, project: parsed?.ok === true ? parsed.project : null }
+  return stripProject.project
 }
 
 /** A pane opened with nobody asking, in a terminal too narrow for it to be placed: the designer is in the band instead. */
@@ -1027,6 +1033,11 @@ const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   }
   const op = KEY_OPS[key]
   if (op === 'minimize') {
+    if (!(await canMinimize($))) {
+      await say($, MINIMIZE_IDLE)
+
+      return true
+    }
     minimize($, 'person')
 
     return false
@@ -1091,6 +1102,11 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
     return true
   }
   if (op === 'minimize') {
+    if (!(await canMinimize($))) {
+      await say($, MINIMIZE_IDLE)
+
+      return true
+    }
     minimize($, 'person')
 
     return false
@@ -1255,6 +1271,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     terminalColumns = e.presentation?.columns ?? terminalColumns
     if (MINIMIZE_WORDS.includes(shellWord)) {
       if ((await read($, shellAtom)).minimized === 'person') return { text: `The designer is minimized already: /${COMMAND} max expands it.` }
+      if (!(await canMinimize($))) return { text: `${MINIMIZE_IDLE}.` }
       minimize($, 'person')
 
       return { text: `Designer minimized into the band above the prompt: /${COMMAND} max expands it.` }
@@ -2105,7 +2122,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         }
         shown = previews[marked.id] ?? null
       } else if (marked && marked.kind !== 'recording') shown = TEMPLATES.find(one => one.id === marked.id)?.make() ?? emptyProject(ui.name)
-      const keys = legendItems({ ring: 'start', placed: false, retype: false, empty: true, helping, locked: false, selected: false, container: false, nested: false, results: false, undo: false, redo: false, hidden: false, back: listing })
+      const keys = legendItems({ ring: 'start', placed: false, retype: false, empty: true, helping, locked: false, selected: false, container: false, nested: false, results: false, undo: false, redo: false, hidden: false, back: listing, minimizes: minimizes(run, over) })
       const message = focused ? ui.notice : KEYS_CUE
 
       const nameW = Math.min(Math.max(...entries.map(one => cellWidth(oneLine(one.title)))), Math.max(8, Math.floor(detailW / 2) - 4))
@@ -2218,6 +2235,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       undo: (history?.undo.length ?? 0) > 0,
       redo: (history?.redo.length ?? 0) > 0,
       hidden,
+      minimizes: minimizes(run, over),
     })
 
     const said: Said =
@@ -2646,21 +2664,6 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       $.clock.after(0, () => void expand($, false, columns).catch(() => undefined))
     }
 
-    const now = Date.now()
-    if (now - bandListing.at > LISTING_MS) {
-      const dir = `${(await $.session.root()).replace(/\/+$/, '')}/${PROJECT_DIR}`
-      const entries = await $.fs.list(dir).catch(() => [])
-      bandListing = {
-        at: now,
-        names: entries
-          .filter(entry => entry.kind === 'file' && entry.name.endsWith('.json'))
-          .map(entry => entry.name.slice(0, -'.json'.length))
-          // Only what can be opened, which is also what can be shown as it is: a project's name.
-          .filter(name => isSaved(name) && isProjectName(name))
-          .sort(),
-      }
-    }
-
     const ui = await read($, uiAtom)
     const project = ui.status === 'ready' ? await read($, projectAtom) : null
     const run = await read($, runAtom)
@@ -2669,114 +2672,49 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const tracked = run.status === 'running' || (run.status !== 'idle' && project !== null && runProject === ui.name && !ui.runCleared)
     // The tick clock is read only while a run is on, so a band at rest is not redrawn by it.
     const clock = run.status === 'running' ? await read($, clockAtom) : 0
-    const cycle = { nudge: await read($, nudgeAtom), theme: await themeOf($) }
     const columns = e.props.bodyColumns
-    // The border and its padding take their cells from every row.
-    const room = Math.max(8, columns - MARK_W - (e.props.maxRows >= BORDER_ROWS ? BORDER_CELLS : 0))
-    const agents = Object.values(run.agents)
-    const settled = agents.filter(agent => agent.status !== 'running').length
-    const summary = tracked ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, room - COMPACT_BAR_W - 2)) : null
-    const runName = runProject !== null && runProject !== ui.name ? `${runProject}: ` : ''
-    const view = compactView({
-      columns,
-      rows: e.props.maxRows,
-      shell,
-      name: project === null ? null : ui.name,
-      goal: project === null ? '' : oneLine(goalOf(project)),
-      run: summary === null ? null : { bar: bar(settled, agents.length, COMPACT_BAR_W), text: `${runName}${summary.text.replace(/^[a-z]+/, word => word.toUpperCase())}`, color: summary.color },
-      saved: bandListing.names,
-    })
+    const name = oneLine(tracked && runProject !== null ? runProject : project === null ? COMMAND : ui.name)
+    const lead = `${GLYPH.diamond} ${clip(name, Math.max(8, Math.floor(columns / 4)))}  `
+    // Short of room the strip keeps the cells the focus hint would take.
+    const hinted = columns - cellWidth(lead) - EXPAND_W - FOCUS_HINT.length - 4 >= BAND_HINT_MIN
+    const room = Math.max(8, columns - cellWidth(lead) - EXPAND_W - 2 - (hinted ? FOCUS_HINT.length + 2 : 0))
+    let strip: StripPart[] | null = null
+    if (tracked) {
+      const items = stripItems(runProject === null ? null : runProject === ui.name && project !== null ? project : await stripProjectOf($, runProject, run.runId), run)
+      strip = planStrip(items, currentStep(items, run.status === 'running'), room, clock)
+    }
+    const why = shell.minimized === 'auto' && shell.why !== null ? WHY_TEXT[shell.why] : 'The designer is minimized'
 
     const terminal = e.viewport?.columns
-    const expandButton = (
-      <Box flexDirection="row" flexShrink={0}>
-        <Text color={FADED}>{`${FOCUS_HINT}  `}</Text>
-        <Button key={EXPAND_ELEMENT} plain onPress={() => press($, () => expand($, true, terminal))}>
-          <Text>
-            <Text color="claude">{`[${EXPAND_HOTKEY}]`}</Text>
-            <Text color={TEXT}>{` ${EXPAND_WORD}`}</Text>
-          </Text>
-        </Button>
-        {/* The key itself: a Button with a hotkey writes it before its label (`m: `), so this one is in the tree and not drawn. */}
-        <Box key="conductor-expand-key" display="none">
-          <Button key={`${EXPAND_ELEMENT}:key`} hotkey={EXPAND_HOTKEY} onPress={() => press($, () => expand($, true, terminal))}>
-            {EXPAND_WORD}
-          </Button>
-        </Box>
-      </Box>
-    )
-    const statusRow = (width: number) => (
-      <Text wrap="truncate-end">
-        {view.status.bar !== null && <Text color={view.status.color ?? TEXT}>{`${view.status.bar} `}</Text>}
-        <Text color={view.status.color ?? FADED}>{clip(view.status.text, Math.max(4, width - (view.status.bar === null ? 0 : COMPACT_BAR_W + 1)))}</Text>
-      </Text>
-    )
-
-    if (view.oneLine) {
-      const lead = `${GLYPH.diamond} ${COMMAND} / ${view.name}`
-      return (
-        <Box flexDirection="row" height={1}>
-          <Text bold color="claude">{`${clip(lead, Math.max(8, Math.floor(columns / 3)))}  `}</Text>
-          <Box flexGrow={1} flexShrink={1}>{statusRow(columns - lead.length - EXPAND_W - FOCUS_HINT.length - 6)}</Box>
-          <Box flexShrink={0}>{expandButton}</Box>
-        </Box>
-      )
-    }
-
-    const stateW = view.state.length
-    const nameW = Math.max(8, room - COMMAND.length - 3 - stateW - 2)
-    const rows = view.taken - (view.bordered ? 2 : 0)
-    const body = (
-      <Box flexDirection="row" height={rows}>
-        <Box key="conductor-mark" flexDirection="column" width={MARK_W} flexShrink={0}>
-          {'Client' in els ? (
-            <els.Client key="conductor-mark-cycle" module="./mark.tsx" width={MARK_W} height={MARK_ROWS} props={cycle} />
-          ) : (
-            markFrame(0, 0, markPalette(cycle.theme)).map(row => (
-              <Box flexDirection="row" height={1} flexShrink={0}>
-                {row.map(span => (
-                  <Text color={span.color ?? TEXT}>{span.text}</Text>
-                ))}
-              </Box>
-            ))
-          )}
-        </Box>
-        <Box flexDirection="column" width={room} flexShrink={0}>
-          <Box flexDirection="row" justifyContent="space-between" height={1}>
-            <Text wrap="truncate-end">
-              <Text bold color="claude">{COMMAND}</Text>
-              <Text color={FADED}>{' / '}</Text>
-              <Text bold color={TEXT}>{clip(view.name, nameW)}</Text>
-            </Text>
-            <Box flexShrink={0}>
-              <Text color={FADED}>{view.state}</Text>
-            </Box>
-          </Box>
-          {view.list !== null && (
-            <Box flexDirection="row" height={1}>
-              <Text color="suggestion">{LIST_LABEL}</Text>
-              {view.list.names.map(name => (
-                <Box flexDirection="row" flexShrink={0}>
-                  <Text>{' '.repeat(LIST_GAP)}</Text>
-                  <Button key={`${BAND_PROJECT_PREFIX}${name}`} plain onPress={() => press($, () => showSaved($, name))}>
-                    <Text color={name === view.list?.current ? 'claude' : TEXT} bold={name === view.list?.current ? true : undefined}>{name}</Text>
-                  </Button>
-                </Box>
-              ))}
-              {view.list.more > 0 && <Text color={FADED}>{`${' '.repeat(LIST_GAP)}+${view.list.more} more`}</Text>}
-            </Box>
-          )}
-          <Box flexDirection="row" justifyContent="space-between" height={1}>
-            <Box flexGrow={1} flexShrink={1}>{statusRow(room - EXPAND_W - FOCUS_HINT.length - 4)}</Box>
-            <Box flexShrink={0}>{expandButton}</Box>
-          </Box>
-        </Box>
-      </Box>
-    )
-    if (!view.bordered) return body
     return (
-      <Box flexDirection="column" width={columns} borderStyle="round" borderColor={RULE} paddingX={1}>
-        {body}
+      <Box flexDirection="row" height={1}>
+        <Text bold color="claude">{lead}</Text>
+        <Box flexGrow={1} flexShrink={1}>
+          {strip === null ? (
+            <Text color={FADED} wrap="truncate-end">{clip(why, room)}</Text>
+          ) : (
+            <Text wrap="truncate-end">
+              {strip.map(part => (
+                <Text color={STRIP_TONES[part.tone]} bold={part.bold}>{part.text}</Text>
+              ))}
+            </Text>
+          )}
+        </Box>
+        <Box flexDirection="row" flexShrink={0}>
+          <Text color={FADED}>{hinted ? `  ${FOCUS_HINT}  ` : '  '}</Text>
+          <Button key={EXPAND_ELEMENT} plain onPress={() => press($, () => expand($, true, terminal))}>
+            <Text>
+              <Text color="claude">{`[${EXPAND_HOTKEY}]`}</Text>
+              <Text color={TEXT}>{` ${EXPAND_WORD}`}</Text>
+            </Text>
+          </Button>
+          {/* The key itself: a Button with a hotkey writes it before its label (`m: `), so this one is in the tree and not drawn. */}
+          <Box key="conductor-expand-key" display="none">
+            <Button key={`${EXPAND_ELEMENT}:key`} hotkey={EXPAND_HOTKEY} onPress={() => press($, () => expand($, true, terminal))}>
+              {EXPAND_WORD}
+            </Button>
+          </Box>
+        </Box>
       </Box>
     )
   })

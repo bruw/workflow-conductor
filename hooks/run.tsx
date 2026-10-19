@@ -154,8 +154,8 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         },
         every: (ms, fn) => $.clock.every(ms, fn),
         after: (ms, fn) => $.clock.after(ms, fn),
-        // Either pane shows the run: the run view, or the designer with the run laid over it.
-        paneShown: async () => (await $.ui.panes()).some(pane => (pane.id === PANE_ID || pane.id === PROJECT_PANE_ID) && pane.isShown && pane.isPlaced),
+        // Either pane shows the run (the run view, or the designer with the run laid over it), and so does the band above the prompt while the designer is minimized.
+        paneShown: async () => (await read($, shellAtom)).minimized !== 'no' || (await $.ui.panes()).some(pane => (pane.id === PANE_ID || pane.id === PROJECT_PANE_ID) && pane.isShown && pane.isPlaced),
         project: name => update($, runProjectAtom, () => name),
         ended: end => {
           saveDue = end
