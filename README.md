@@ -1,30 +1,33 @@
 ![Conductor in Claude Code: open the board, build a workflow by keys and mouse, watch the run on the graph, minimize it](https://github.com/bruw/workflow-conductor/releases/download/media/demo.gif)
 
-Claude Code Mod that adds a UI for planning, running and understanding agent Workflows.
+# Conductor - visual workflow planner in Claude Code
 
-Claude writes a long orchestration script and proposes to execute. You say yes and hope that what's burning your tokens is the thing you meant.
+A terminal UI for planning, running and understanding complex agent workflows inside Claude Code.
+ 
+Don't hope that Claude one-shots your multi-step logic from a loosely worded description. Try **design → review → run** instead.
 
-Conductor adds an option to create a **visual plan** first. You can read it in 10 sec, verify the logic before handing off to Claude to write the script.
-It costs like a Plan, and can save *millions of tokens* over a workflow done badly.
 
 ```
 /plugin install workflow-conductor --marketplace bruw/workflow-conductor
+/conductor
+# make sure you're in a large terminal window
 ```
+ 
+Conductor has Claude draw a **visual plan** that thinks through the workflow step by step. You can read it in ten seconds and check the logic before Claude writes the script.
+ 
+A plan costs about as much as Plan mode, and it can save **a lot of tokens** compared with a workflow done badly.
 
 
-## What you get
-Design: draw it yourself, start from a template, or let Claude draft it from a description and refine it in plain words.
-
-Check: common design mistakes are flagged on the graph before you run.
-
-Run: hands the spec to Claude to implement and run
-
-Monitor: progress, failures and token cost show up on the plan you made.
-
-Learn: block kinds are named multi-agent patterns, and you can compare each design with the script it produced. That makes it a practical way to learn how good workflows are built.
+## What
+ 
+- **Design:** Draw it yourself, start from a template, or let Claude draft it from a description and refine it in plain words.
+- **Check:** Common design mistakes are flagged on the graph before you run. Flags are warnings, not blocks: you can run anyway. It's your money.
+- **Run:** Claude implements the spec as a Workflow script and runs it.
+- **Monitor:** Progress, failures and token cost show up on the plan you made.
+- **Learn:** Block kinds are named multi-agent patterns, and you can compare each design with the script it produced. That makes Conductor a practical way to learn how good workflows are built.
 
 
-## How to use
+## How
 Type `/conductor review this PR thoroughly`. Claude drafts this and puts it on the board:
 
 ```
@@ -56,11 +59,9 @@ Type `/conductor review this PR thoroughly`. Claude drafts this and puts it on t
 ╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
-You can read that in ten seconds.
-
-Don't like it? Say so, in plain words: *"add a verify with 3 votes after n3"*, *"set this block to low effort"*.
-
-Then press `r`. Claude confirms the design, asks what to run it on, writes a real Workflow script from the project, and runs it. The board becomes the run:
+Edit it directly in the UI, or ask Claude to edit it for you.
+ 
+Then press `r` to script and run. Claude confirms the design, writes a real Workflow script from the project, and runs it. The board becomes the run:
 
 ```
 ╭───────────────────────────────────────────────────────────────────── n1 ─╮
@@ -86,16 +87,10 @@ Then press `r`. Claude confirms the design, asks what to run it on, writes a rea
 ╰─ · not run ──────────────────────────────────────────────────────────────╯
 ```
 
-## Why a man might want it
-
-- **You approve a design, not a script.** 
-- **The project is a file in your repo.** `.claude/workflow-conductor/<name>.json`, with the script it was last run as beside it. It diffs. It reviews. The next run changes only what the project changed.
-- **It tells you what's wrong and stops nobody.** A loop with no stop condition, a verify with nothing to check, a branch arm with no condition: each gets a ` ! ` on its card. You can run it anyway. It's your money.
-- **It works on runs you never designed.** When Claude starts a workflow on its own, Conductor asks once whether to draw it. Say yes and the run shows up on a graph of the script that's already running.
 
 ## Cost
 
-What Claude spends getting a workflow to run, before the run's own agents. Estimates, in tokens.
+Workflow script estimates, in tokens.
 
 | Flow | Design | Hand-off (`r`) |
 | --- | --- | --- |
@@ -105,12 +100,13 @@ What Claude spends getting a workflow to run, before the run's own agents. Estim
 
 ## The parts
 
-Eight blocks to rule them all. 
-Three do work: `agent`, `code`, `subworkflow`. 
-Four hold other blocks: `pipeline`, `parallel`, `loop`, `branch`. 
-And `start`, which carries the goal.
+There are eight blocks:
+ 
+- **Work:** `agent`, `code`, `subworkflow`
+- **Containers:** `pipeline`, `parallel`, `loop`, `branch`
+- **Goal:** `start`
 
-A pattern is a **kind** of a block, and picking one fills in what the pattern needs:
+Each block comes in several kinds. A kind is a common pattern that prefills the block's logic field:
 
 | Block | Kinds |
 | --- | --- |
@@ -123,6 +119,7 @@ Four templates to start from (`Review`, `Research`, `Migrate`, `Judge panel`), o
 
 ## Getting around
 
+Conductor supports full mouse and keyboard navigation.
 
 | | |
 | --- | --- |
@@ -143,18 +140,16 @@ Four templates to start from (`Review`, `Research`, `Migrate`, `Judge panel`), o
 | `p` | projects and templates |
 | `?` | every other key, and the mouse |
 
-The mouse works too: click to select, drag the selected card to move it, wheel to scroll.
 
-
-## What you need
+## Requirements
 
 - Claude Code 2.1.296 or later, with the Workflow tool.
 - A terminal 110 columns wide, in the fullscreen layout. Narrower than that, you get the compact strip and no designer; widen it and the designer opens by itself.
 - Fullscreen for the mouse. The keys work without it.
 
-## Hack it
+## Develop
 
-MIT. Get busy designing.
+It's MIT-licensed, so feel free to change it to fit your needs.
 
 ```
 claude --plugin-dir /path/to/conductor
@@ -173,7 +168,7 @@ In the desktop app, where no flag can be given, the `env` of your user settings 
 
 ## What it touches
 
-Conductor makes no network requests and reads no settings or credentials.
+**Conductor makes no network requests and reads no settings or credentials.**
 
 | Area | What Conductor does | What it never does |
 | --- | --- | --- |
