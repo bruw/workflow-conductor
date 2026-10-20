@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { KINDS, NODE_TYPES, canHoldChildren, emptyProject, findNode, flatten, kindsOf, parseProject, readType, serializeProject, startOf, walk } from '../src/project/model'
+import { KINDS, NODE_TYPES, canHoldChildren, emptyProject, findNode, flatten, kindsOf, parseProject, readType, sameProject, serializeProject, startOf, walk } from '../src/project/model'
 import type { Project } from '../src/project/model'
 import { TEMPLATES, review } from '../src/project/templates'
 
@@ -214,4 +214,12 @@ test('walk visits depth-first with the parent, and findNode reaches nested nodes
   expect(seen).toEqual(['n6:-:0:0', 'n1:-:0:1', 'n2:-:0:2', 'n3:n2:1:0', 'n4:n2:1:1', 'n5:-:0:3'])
   expect(findNode(project, 'n4')).toMatchObject({ type: 'agent', kind: 'verify' })
   expect(findNode(project, 'n99')).toBeUndefined()
+})
+
+test('two projects are one whatever their names or how their file is laid out', () => {
+  const one = review()
+  const laidOut = parsed(JSON.stringify(JSON.parse(serializeProject(one)), null, 8))
+  expect(sameProject(one, laidOut)).toBe(true)
+  expect(sameProject(one, { ...one, name: 'copied' })).toBe(true)
+  expect(sameProject(one, { ...one, nodes: one.nodes.slice(0, 1) })).toBe(false)
 })

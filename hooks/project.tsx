@@ -10,7 +10,7 @@ import * as review41 from '../fixtures/review-41'
 import { LAST_SCRIPTS_STORE, handoffPrompt, handoffTarget, noteScript, reviewPrompt } from '../src/project/handoff'
 import { replayEvents } from '../src/run/replay'
 import type { ReplayFixture } from '../src/run/replay'
-import { emptyProject, findNode, flatten, goalOf, isBlank, isProjectName, kindsOf, parseProject, serializeProject, typeName } from '../src/project/model'
+import { emptyProject, findNode, flatten, goalOf, isBlank, isProjectName, kindsOf, parseProject, sameProject, serializeProject, typeName } from '../src/project/model'
 import type { Project, ProjectNode, NodeType } from '../src/project/model'
 import { nextIdNumber, quickKnob } from '../src/project/ops'
 import type { NodePatch } from '../src/project/ops'
@@ -323,12 +323,76 @@ const timesAtom = atom({ plugin: 'workflow-conductor', key: 'runTimes' } as cons
 const shellAtom = atom({ plugin: 'workflow-conductor', key: 'shell' } as const, initialShell())
 const runScriptAtom = atom({ plugin: 'workflow-conductor', key: 'runScript' } as const, null)
 
+class StaleFile extends Error {
+  constructor(
+    readonly name: string,
+    readonly text: string,
+  ) {
+    super(`project ${name} was changed in another session`)
+  }
+}
+
+/** What this session last read from or wrote to each project's file. Another session sharing the root may save over it. */
+const onDisk: Record<string, Project> = {}
+/** The revision at which each project last changed in another session, so Claude is not told the user did it. */
+const elsewhereAt: Record<string, number> = {}
+const changedElsewhere = (name: string): void => {
+  revisions[name] = (revisions[name] ?? 0) + 1
+  elsewhereAt[name] = revisions[name]
+}
+/** A file taken onto the board or for Claude. */
+const loadedDisk = (name: string, project: Project): void => {
+  const known = onDisk[name]
+  if (known !== undefined && !sameProject(known, project)) changedElsewhere(name)
+  onDisk[name] = project
+}
+
 // Spelled whole, not built by `projectFile`, so that a reader of the call sees where every save lands.
-const saveProject = async ($: EngineInterface, name: string, project: Project): Promise<void> => {
+// `board` stands in for `onDisk` where a reload with changed source lost it; null for a project not saved yet.
+const saveProject = async ($: EngineInterface, name: string, project: Project, board: Project | null): Promise<void> => {
   // The name is spelled into the path: anything but kebab-case could reach outside the projects' directory.
   if (!isProjectName(name)) throw new Error(`not a project name: ${name}`)
   const root = await $.session.root()
-  await $.fs.write(`${root.replace(/\/+$/, '')}/.claude/workflow-conductor/${name}.json`, serializeProject(project))
+  const path = `${root.replace(/\/+$/, '')}/.claude/workflow-conductor/${name}.json`
+  // Read and write are two calls, so a save landing between them is still lost: the engine has no write-if-unchanged.
+  const text = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
+  if (text !== undefined) {
+    const known = onDisk[name] ?? board
+    const now = parseProject(text)
+    if (known === null || !now.ok || !sameProject(now.project, known)) throw new StaleFile(name, text)
+  }
+  await $.fs.write(path, serializeProject(project))
+  onDisk[name] = project
+}
+
+type Shown = Pick<Step, 'project' | 'ui'>
+
+type Refused = { project: Project; what: string }
+
+/**
+ * The board takes what another session saved in place of the edit that met it. One undo brings back the board with
+ * `refused`, the edit, made on it, and saves that over the other session's; the next undo goes to before the edit.
+ */
+const takeSaved = (stale: StaleFile, board: Project | null, refused: Refused | null, held: ProjectUi): Shown => {
+  changedElsewhere(stale.name)
+  const opened = openProject(stale.name, stale.text, held)
+  if (opened.project === null) return { project: board, ui: { ...held, notice: `not saved: ${stale.name}.json is not a valid project now` } }
+  if (board) {
+    const history = refused ? remember(histories[stale.name], board, refused.what) : histories[stale.name]
+    histories[stale.name] = remember(history, refused?.project ?? board, 'the file changed in another session')
+  }
+  onDisk[stale.name] = opened.project
+  const back = board ? ' · [u] Back to yours' : ''
+
+  return { project: opened.project, ui: { ...opened.ui, notice: `not saved: ${stale.name} was changed in another session, the board shows it now${back}` } }
+}
+
+const showSaved = async ($: EngineInterface, stale: StaleFile, board: Project | null, refused: Refused | null, held: ProjectUi): Promise<string | null> => {
+  const shown = takeSaved(stale, board, refused, held)
+  await update($, projectAtom, () => shown.project)
+  await update($, uiAtom, () => shown.ui)
+
+  return shown.ui.notice
 }
 
 const reason = (error: unknown): string => cutCells(sanitize(error instanceof Error ? error.message : String(error)), 160)
@@ -355,6 +419,7 @@ const projectOfRun = async ($: EngineInterface, workflow: string | undefined): P
     const opened = openProject(name, await $.fs.read(path).catch(() => ''), shown)
     if (opened.project === null) return null
     project = opened.project
+    loadedDisk(name, project)
     await update($, projectAtom, () => opened.project)
     await update($, uiAtom, () => opened.ui)
   }
@@ -380,7 +445,8 @@ let flushing: Promise<string | null> = Promise.resolve(null)
 let justSaid: string | null = null
 const SAID_MS = 400
 /** Saves what was typed and not sent with Enter, as one edit, before anything else acts on the project. One at a time, in the order asked. */
-const flushDrafts = ($: EngineInterface): Promise<string | null> => {
+// `keep`: a field that met another session's save is kept, with its text, to be sent again onto that save.
+const flushDrafts = ($: EngineInterface, keep = false): Promise<string | null> => {
   const run = flushing.then(async (): Promise<string | null> => {
     if (!hasDrafts()) return null
     const pending = drafts
@@ -399,8 +465,10 @@ const flushDrafts = ($: EngineInterface): Promise<string | null> => {
 
       return null
     }
+    const before = project
     const said: string[] = []
     let titled = false
+    let label: string | undefined
     const node = pending.id === null ? undefined : findNode(project, pending.id)
     if (node) {
       let patch: NodePatch = {}
@@ -410,7 +478,7 @@ const flushDrafts = ($: EngineInterface): Promise<string | null> => {
       }
       const step = patchNode(project, ui, node.id, patch)
       if (step.changed && step.project) {
-        record(ui.name, project, step.what)
+        label = step.what
         project = step.project
         said.push(step.what ?? `${node.id} changed`)
         titled = patch.name !== undefined
@@ -418,14 +486,27 @@ const flushDrafts = ($: EngineInterface): Promise<string | null> => {
     }
     if (said.length === 0) return null
     let notice = `${said.join('; ')} · ${UNDO_HINT}`
+    let stale: StaleFile | null = null
     try {
-      if (isSaved(ui.name)) await saveProject($, ui.name, project)
+      if (isSaved(ui.name)) await saveProject($, ui.name, project, before)
     } catch (error) {
-      notice = `not saved: ${reason(error)}`
+      if (error instanceof StaleFile) stale = error
+      else notice = `not saved: ${reason(error)}`
     }
-    const saved = project
-    await update($, projectAtom, () => saved)
-    await update($, uiAtom, held => ({ ...held, notice, runCleared: true, unsaved: false, freshId: titled ? null : held.freshId }))
+    if (stale !== null) {
+      notice = (await showSaved($, stale, before, { project, what: label ?? 'an edit' }, ui)) ?? notice
+      const theirs = await read($, projectAtom)
+      if (keep && pending.id !== null && theirs !== null && findNode(theirs, pending.id)) {
+        drafts = pending
+        notice = `not saved: ${ui.name} was changed in another session, the board shows it now · Enter: your text onto it`
+        await update($, uiAtom, held => ({ ...held, notice, editing: true, selectedId: pending.id }))
+      }
+    } else {
+      record(ui.name, before, label)
+      const saved = project
+      await update($, projectAtom, () => saved)
+      await update($, uiAtom, held => ({ ...held, notice, runCleared: true, unsaved: false, freshId: titled ? null : held.freshId }))
+    }
     justSaid = notice
     $.clock.after(SAID_MS, () => {
       if (justSaid === notice) justSaid = null
@@ -585,16 +666,30 @@ const runContext = async ($: EngineInterface): Promise<RunContext> => {
   return { ...(held ? { run: now, locked: now.status === 'running' || laying } : laying ? { locked: true } : {}), ...(laying ? { drafting: true } : {}), ...(graphBox ? { graph: graphBox } : {}) }
 }
 
-const store = async ($: EngineInterface, step: Step, before: Project | null): Promise<ProjectUi> => {
-  if (!step.changed || !step.project) return step.ui
-  if (step.what !== undefined) record(step.ui.name, before, step.what)
+/** `kept` is the project's undo history from before the step. */
+const store = async ($: EngineInterface, step: Step, before: Project | null, kept: History | undefined): Promise<Shown> => {
+  if (!step.changed || !step.project) return step
+  const name = step.ui.name
+  const board = before?.name === name ? before : null
+  let notice: string | undefined
   try {
-    if (isSaved(step.ui.name)) await saveProject($, step.ui.name, step.project)
+    if (isSaved(name)) await saveProject($, name, step.project, board)
   } catch (error) {
-    return { ...step.ui, notice: `not saved: ${reason(error)}` }
+    if (!(error instanceof StaleFile)) notice = `not saved: ${reason(error)}`
+    else {
+      // An undo or redo has moved the history already, for a step that is not taken; it is not offered again.
+      const travelled = board !== null && histories[name] !== kept
+      if (travelled) {
+        if (kept === undefined) delete histories[name]
+        else histories[name] = kept
+      }
+      const refused = !travelled && step.what !== undefined ? { project: step.project, what: step.what } : null
+      return takeSaved(error, board, refused, step.ui)
+    }
   }
+  if (step.what !== undefined) record(step.ui.name, before, step.what)
 
-  return step.ui
+  return { project: step.project, ui: notice === undefined ? step.ui : { ...step.ui, notice } }
 }
 
 const beat = ($: EngineInterface): void => {
@@ -624,12 +719,13 @@ const startSplash = ($: EngineInterface): void => {
 const commit = async ($: EngineInterface, make: (project: Project | null, held: ProjectUi, context: RunContext) => Step): Promise<Step> => {
   const before = await read($, projectAtom)
   const held = await read($, uiAtom)
+  const kept = histories[held.name]
   const step = make(before, held, await runContext($))
-  const nextUi = await store($, step, before)
-  if (step.project !== before) await update($, projectAtom, () => step.project)
-  if (nextUi !== held) await update($, uiAtom, () => nextUi)
+  const shown = await store($, step, before, kept)
+  if (shown.project !== before) await update($, projectAtom, () => shown.project)
+  if (shown.ui !== held) await update($, uiAtom, () => shown.ui)
 
-  return { ...step, ui: nextUi }
+  return { ...step, ...shown }
 }
 
 /** Polls the prompt box while a request waits in it or the keys are off (`handed`): once it is empty the line goes and the keys are keys again. */
@@ -731,7 +827,7 @@ const handOff = async ($: EngineInterface, name: string): Promise<boolean> => {
   const path = projectFile(await $.session.root(), name)
   // A template nobody edited yet is on the board only: handing it off is what saves it.
   const onBoard = shown.name === name && shown.status === 'ready' ? await read($, projectAtom) : null
-  if (onBoard !== null && !(await $.fs.exists(path).catch(() => true))) await saveProject($, name, onBoard).catch(() => undefined)
+  if (onBoard !== null && !(await $.fs.exists(path).catch(() => true))) await saveProject($, name, onBoard, null).catch(() => undefined)
   if (!(await $.fs.exists(path).catch(() => false))) return false
   if (onBoard !== null && shown.unsaved) await update($, uiAtom, held => ({ ...held, unsaved: false }))
   const parsed = parseProject(await $.fs.read(path).catch(() => ''))
@@ -854,7 +950,8 @@ const saveField = async ($: EngineInterface, id: string, base: string, value: st
   const mine = drafts.id === id && drafts.name === ui.name
   drafts = { name: ui.name, id, values: { ...(mine ? drafts.values : {}), [base]: value } }
   await home($)
-  await flushDrafts($)
+  await flushDrafts($, true)
+  if (drafts.id === id && drafts.name === ui.name) await landOn($, { base, id }, (await read($, uiAtom)).notice ?? '')
 }
 
 const pick = async ($: EngineInterface, choice: Partial<PickRow>): Promise<void> => {
@@ -931,6 +1028,7 @@ const closeProjectList = async ($: EngineInterface): Promise<void> => {
   behind = null
   if (step !== null && step.project !== null) {
     const project = step.project
+    loadedDisk(name, project)
     const viewRootId = kept !== null && kept.ui.viewRootId !== null && findNode(project, kept.ui.viewRootId) ? kept.ui.viewRootId : null
     await update($, projectAtom, () => project)
     await update($, uiAtom, () => ({ ...step.ui, viewRootId, carousels: kept?.ui.carousels ?? {}, runCleared: kept?.ui.runCleared ?? false, follow: kept?.ui.follow ?? true }))
@@ -958,6 +1056,7 @@ const openSaved = async ($: EngineInterface, name: string): Promise<void> => {
 
     return
   }
+  if (step.project !== null) loadedDisk(name, step.project)
   await update($, projectAtom, () => step.project)
   await update($, uiAtom, () => step.ui)
   settleRing($)
@@ -1335,6 +1434,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       }
     }
     if (step.ui.status === 'pick') step = { ...step, ui: { ...step.ui, name: saved.some(one => one.name === name) ? freeName(await savedNames($, root)) : name, saved, startMark: saved.length } }
+    if (step.project !== null) loadedDisk(name, step.project)
     await update($, projectAtom, () => step.project)
     await update($, uiAtom, () => step.ui)
     await $.ui.open(paneArgs(true))
@@ -1393,9 +1493,10 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       warnedAt[shown.name] = revision
       const board = await read($, projectAtom)
       const before = seenProjects[shown.name]
-      const change = board !== null && before !== undefined ? changedNote(shown.name, revision, before, board, shown.selectedId) : null
+      const elsewhere = (elsewhereAt[shown.name] ?? 0) > seen
+      const change = board !== null && before !== undefined ? changedNote(shown.name, revision, before, board, shown.selectedId, elsewhere) : null
       if (change !== null) told = board
-      context = [...context, change ?? staleNote(shown.name, revision)]
+      context = [...context, change ?? staleNote(shown.name, revision, elsewhere)]
     }
     const pass = context === (e.context ?? []) ? e : { ...e, context }
     // A change said in full counts as read once the prompt has entered with it: an edit made from it is not refused as stale.
@@ -1475,15 +1576,20 @@ export const registerProject = (on: On, tracker: Tracker): void => {
         if (owner === name || isOpen || (await $.fs.exists(path))) return { deny: `A project named ${name} exists that this run did not create. Nothing was changed. A name no project has is free to use.` }
       }
       let project: Project | null = isOpen ? await read($, projectAtom) : null
+      let isNew = false
       if (project === null) {
         if (isSaved(name) && (await $.fs.exists(path))) {
           const parsed = parseProject(await $.fs.read(path).catch(() => ''))
           if (!parsed.ok) return { deny: `${PROJECT_DIR}/${name}.json is not a valid project (${parsed.error}). Nothing was changed.` }
           // Named as its file is (`openProject`).
           project = { ...parsed.project, name }
+          loadedDisk(name, project)
         } else if (action === 'read' || !isSaved(name)) {
           return { deny: `No project named ${name}. An apply or write with that name starts it.` }
-        } else project = emptyProject(name)
+        } else {
+          project = emptyProject(name)
+          isNew = true
+        }
       }
       const locked = (await read($, runProjectAtom)) === name && (await read($, runAtom)).status === 'running'
       if (action === 'read') {
@@ -1497,7 +1603,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       // An edit made from memory of a board that has since changed by hand would undo the person's work.
       const known = seenByClaude[name]
       if (known !== undefined && known !== (revisions[name] ?? 0)) {
-        return { deny: `The user changed project ${name} on the board by hand since you last read it (it is now revision ${revisions[name] ?? 0}, you saw ${known}), so this edit was made from a board that is gone. Nothing was changed.` }
+        const who = (elsewhereAt[name] ?? 0) > known ? `Project ${name} was changed in another session` : `The user changed project ${name} on the board by hand`
+        return { deny: `${who} since you last read it (it is now revision ${revisions[name] ?? 0}, you saw ${known}), so this edit was made from a project that is gone. Nothing was changed.` }
       }
       // A whole tree written over a project Claude has not seen in this conversation would replace the person's work unread
       // (a draft Claude named as a project that exists). An attach is guarded above; a project with no block yet is free.
@@ -1507,9 +1614,13 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       const edit = action === 'apply' ? applyOps(project, input.ops) : replaceProject(project, input.nodes)
       if (!edit.ok) return { deny: edit.error }
       try {
-        if (isSaved(name)) await saveProject($, name, edit.project)
+        if (isSaved(name)) await saveProject($, name, edit.project, isNew ? null : project)
       } catch (error) {
-        return { deny: `Project ${name} could not be saved, nothing was changed: ${reason(error)}` }
+        if (!(error instanceof StaleFile)) return { deny: `Project ${name} could not be saved, nothing was changed: ${reason(error)}` }
+        if (isOpen) await showSaved($, error, project, null, ui)
+        else changedElsewhere(name)
+
+        return { deny: `Project ${name} was changed in another session since this one loaded it${isOpen ? ', and the board now shows that' : ''}, so this edit was made on a project that is gone. Nothing was changed.` }
       }
       // The script the run is of is the one the next handoff starts from.
       if (ran !== null) {
@@ -1576,9 +1687,12 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     }
     await flushDrafts($)
     const answer = await next(e)
-    const ui = await read($, uiAtom)
-    if (answer.deny !== undefined || answer.isError === true || ui.name !== name || ui.status === 'closed') return answer
+    if (answer.deny !== undefined || answer.isError === true) return answer
     const parsed = parseProject(await $.fs.read(projectFile(root, name)).catch(() => ''))
+    // Claude's own write: the next save is checked against it, not taken for another session's.
+    if (parsed.ok) onDisk[name] = { ...parsed.project, name }
+    const ui = await read($, uiAtom)
+    if (ui.name !== name || ui.status === 'closed') return answer
     if (!parsed.ok) {
       $.ui.toast(`conductor: ${oneLine(name)}.json is not a valid project (${cutCells(oneLine(parsed.error), 80)}); the board keeps the last good one`)
 
@@ -1617,9 +1731,11 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       const project = await read($, projectAtom)
       const ui = await read($, uiAtom)
       const context = await runContext($)
+      const kept = histories[ui.name]
       const step = applyMessage(project, ui, message, context)
-      const nextUi = await store($, step, project)
-      if (step.project !== project) await update($, projectAtom, () => step.project)
+      const shown = await store($, step, project, kept)
+      const nextUi = shown.ui
+      if (shown.project !== project) await update($, projectAtom, () => shown.project)
       if (nextUi !== ui) await update($, uiAtom, () => nextUi)
       await keepSaid($, flushed)
       // A `[+]` needs its filter to type in. (So does a list the click left open: the catcher is not drawn under it.)
