@@ -343,6 +343,16 @@ export function serializeProject(project: Project): string {
   return `${JSON.stringify(out, null, 2)}\n`
 }
 
+/** Whether two projects are one, whatever names they carry: a file is named by its path. Both go through the parser, so a project laid out by hand matches. */
+export function sameProject(a: Project, b: Project): boolean {
+  const plain = (project: Project): string | null => {
+    const parsed = parseProject(serializeProject({ ...project, name: 'same' }))
+    return parsed.ok ? serializeProject(parsed.project) : null
+  }
+  const one = plain(a)
+  return one !== null && one === plain(b)
+}
+
 export function walk(project: Project, fn: (node: ProjectNode, info: WalkInfo) => void): void {
   const visit = (nodes: readonly ProjectNode[], parent: ProjectNode | undefined, depth: number): void => {
     nodes.forEach((node, index) => {

@@ -49,6 +49,7 @@ scripts/render-graph.ts  layout + paint as text with no session (--list names th
 - `match` (labels or phase titles; a trailing `*` is a prefix) ties a block to a script that existed before the project.
 - `replay-*` projects live in state only: never written, listed or handed off.
 - A template is saved by its first edit or by a hand-off, not by opening it.
+- A save first reads the file: where it is no longer what this session last read or wrote (another session sharing the root saved it), nothing is written, the board takes the file, and an edit Claude makes from an older read is denied until it reads the project again. On the board, one undo brings back the person's version with the refused edit made on it, and saves that; text typed in a field stays in it, to be sent onto the other session's.
 
 ## A run and its project
 

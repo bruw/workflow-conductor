@@ -581,8 +581,13 @@ export function resultLine(text: string, isError: boolean): string {
 }
 
 /** Sent, unseen, with a prompt when the board changed by hand and the change itself cannot be said (`changedNote`). */
-export function staleNote(name: string, revision: number): string {
-  return `Conductor: the user changed the "${name}" workflow project on the board by hand since you last read or edited it (it is now revision ${revision}). This note cannot say what changed, so what you know of it is out of date: call ${TOOL_FULL_NAME} with action "read" before you describe, review or edit it.`
+/** `elsewhere`: the change came from another session saving the file, not from the user's hand on this board. */
+function changedLine(name: string, elsewhere: boolean): string {
+  return elsewhere ? `the "${name}" workflow project was changed in another session` : `the user changed the "${name}" workflow project on the board by hand`
+}
+
+export function staleNote(name: string, revision: number, elsewhere = false): string {
+  return `Conductor: ${changedLine(name, elsewhere)} since you last read or edited it (it is now revision ${revision}). This note cannot say what changed, so what you know of it is out of date: call ${TOOL_FULL_NAME} with action "read" before you describe, review or edit it.`
 }
 
 function blockOf(node: ProjectNode, deep: boolean): Record<string, unknown> {
@@ -645,12 +650,12 @@ export function boardChanges(seen: Project, now: Project): string[] {
 }
 
 /** In place of `staleNote` when the project as Claude last saw it is at hand. Null when saying the change takes more than the project does: a read is cheaper. */
-export function changedNote(name: string, revision: number, seen: Project, now: Project, selectedId: string | null): string | null {
+export function changedNote(name: string, revision: number, seen: Project, now: Project, selectedId: string | null, elsewhere = false): string | null {
   const lines = boardChanges(seen, now)
   if (lines.join('\n').length > serializeProject(now).length) return null
   const selected = selectedId === null ? undefined : findNode(now, selectedId)
   return [
-    `Conductor: the user changed the "${name}" workflow project on the board by hand since you last read or edited it (it is now revision ${revision}). ${lines.length > 0 ? 'What follows is everything that changed' : 'Nothing in it differs from what you last saw'}: with it you know the board as it is, so this is the note that stands in for a read: none is needed. An edit with ${TOOL_FULL_NAME} from here is accepted.`,
+    `Conductor: ${changedLine(name, elsewhere)} since you last read or edited it (it is now revision ${revision}). ${lines.length > 0 ? 'What follows is everything that changed' : 'Nothing in it differs from what you last saw'}: with it you know the board as it is, so this is the note that stands in for a read: none is needed. An edit with ${TOOL_FULL_NAME} from here is accepted.`,
     ...lines,
     `Selected block ("this block"): ${selected ? `${selected.id} (${typeName(selected)} "${selected.name}")` : 'none'}.`,
   ].join('\n')
