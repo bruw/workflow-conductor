@@ -1,4 +1,4 @@
-![Conductor in Claude Code: open the board, build a workflow by keys and mouse, watch the run on the graph, minimize it](https://github.com/bruw/workflow-conductor/releases/download/media/demo.gif)
+![Conductor in Claude Code: open the board, build a workflow by keys and mouse, watch the run on the graph, minimize it](https://github.com/bruw/workflow-conductor/releases/download/media/conductor-demo-v7.gif)
 
 # Conductor - visual workflow planner in Claude Code
 
