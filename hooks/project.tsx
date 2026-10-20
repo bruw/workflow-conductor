@@ -2686,35 +2686,40 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const why = shell.minimized === 'auto' && shell.why !== null ? WHY_TEXT[shell.why] : 'The designer is minimized'
 
     const terminal = e.viewport?.columns
+    // What other plugins and the engine draw in the band stays, under the strip.
+    const below = (await next(e)) ?? null
     return (
-      <Box flexDirection="row" height={1}>
-        <Text bold color="claude">{lead}</Text>
-        <Box flexGrow={1} flexShrink={1}>
-          {strip === null ? (
-            <Text color={FADED} wrap="truncate-end">{clip(why, room)}</Text>
-          ) : (
-            <Text wrap="truncate-end">
-              {strip.map(part => (
-                <Text color={STRIP_TONES[part.tone]} bold={part.bold}>{part.text}</Text>
-              ))}
-            </Text>
-          )}
-        </Box>
-        <Box flexDirection="row" flexShrink={0}>
-          <Text color={FADED}>{hinted ? `  ${FOCUS_HINT}  ` : '  '}</Text>
-          <Button key={EXPAND_ELEMENT} plain onPress={() => press($, () => expand($, true, terminal))}>
-            <Text>
-              <Text color="claude">{`[${EXPAND_HOTKEY}]`}</Text>
-              <Text color={TEXT}>{` ${EXPAND_WORD}`}</Text>
-            </Text>
-          </Button>
-          {/* The key itself: a Button with a hotkey writes it before its label (`m: `), so this one is in the tree and not drawn. */}
-          <Box key="conductor-expand-key" display="none">
-            <Button key={`${EXPAND_ELEMENT}:key`} hotkey={EXPAND_HOTKEY} onPress={() => press($, () => expand($, true, terminal))}>
-              {EXPAND_WORD}
+      <Box flexDirection="column">
+        <Box flexDirection="row" height={1}>
+          <Text bold color="claude">{lead}</Text>
+          <Box flexGrow={1} flexShrink={1}>
+            {strip === null ? (
+              <Text color={FADED} wrap="truncate-end">{clip(why, room)}</Text>
+            ) : (
+              <Text wrap="truncate-end">
+                {strip.map(part => (
+                  <Text color={STRIP_TONES[part.tone]} bold={part.bold}>{part.text}</Text>
+                ))}
+              </Text>
+            )}
+          </Box>
+          <Box flexDirection="row" flexShrink={0}>
+            <Text color={FADED}>{hinted ? `  ${FOCUS_HINT}  ` : '  '}</Text>
+            <Button key={EXPAND_ELEMENT} plain onPress={() => press($, () => expand($, true, terminal))}>
+              <Text>
+                <Text color="claude">{`[${EXPAND_HOTKEY}]`}</Text>
+                <Text color={TEXT}>{` ${EXPAND_WORD}`}</Text>
+              </Text>
             </Button>
+            {/* The key itself: a Button with a hotkey writes it before its label (`m: `), so this one is in the tree and not drawn. */}
+            <Box key="conductor-expand-key" display="none">
+              <Button key={`${EXPAND_ELEMENT}:key`} hotkey={EXPAND_HOTKEY} onPress={() => press($, () => expand($, true, terminal))}>
+                {EXPAND_WORD}
+              </Button>
+            </Box>
           </Box>
         </Box>
+        {below}
       </Box>
     )
   })
