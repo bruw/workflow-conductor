@@ -1,6 +1,7 @@
 // The graph's model: what the hooks module hands the Client, the messages it posts back, and the reducer for what the Client keeps.
 // Selection, the view, the carousels' offsets, the add list and the delete question live in the hooks module's state. No `$`, no engine imports.
 
+import { isRecord } from '../project/model'
 import type { Project } from '../project/model'
 import type { Place } from '../project/ops'
 import { cardOf, dropTarget, graphAt, graphRows, layoutGraph, panTo, samePlace, slideBy } from './graph-layout'
@@ -69,10 +70,6 @@ export function graphLayout(props: Pick<GraphProps, 'project' | 'mode' | 'select
     unmapped: props.unmapped,
     locked: props.mode === 'run',
   })
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function readPlace(value: unknown): Place | undefined {

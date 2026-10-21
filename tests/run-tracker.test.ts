@@ -225,8 +225,9 @@ test('a real run says once how it ended and as whose project; a replay says noth
 
 test('a run whose agents were all aborted is held stopped until a notice says otherwise; a skipped agent is no stop', async () => {
   const { host, log, advance } = fakeHost()
+  const ends: RunEnded[] = []
   const tracker = createTracker()
-  tracker.attach(host)
+  tracker.attach({ ...host, ended: end => void ends.push(end) })
   tracker.runStarted({ runId: 'wf_1', taskId: 't1' })
   tracker.agentSpawned({ runId: 'wf_1', agentId: 'a1', label: 'a1' })
   tracker.agentSpawned({ runId: 'wf_1', agentId: 'a2', label: 'a2' })
@@ -252,6 +253,7 @@ test('a run whose agents were all aborted is held stopped until a notice says ot
   await advance(200)
   expect(tracker.state().status).toBe('done')
   expect(log.toasts).toHaveLength(1)
+  expect(ends.map(end => end.ending)).toEqual(['stopped', 'done'])
 
   // A stop of the task, as Claude's TaskStop says it: the agents still running fail with it.
   const other = createTracker()

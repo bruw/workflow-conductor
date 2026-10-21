@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { NodeRun, RunState } from '../src/run/events'
-import { journalPhases, journalToEvents } from '../src/run/journal'
+import { journalPhases, journalToEvents, usageTotal } from '../src/run/journal'
 import type { AgentMeta } from '../src/run/journal'
 import { reduce, reduceAll } from '../src/run/reducer'
 // The runner loads code files only, so each fixture has a generated .ts mirror.
@@ -234,4 +234,10 @@ test('journalPhases maps each started agent to its phase, or null when it has no
   ])
   expect(journalPhases(review41.journal).size).toBe(41)
   expect(journalPhases(undefined as unknown as string).size).toBe(0)
+})
+
+test("a request's token figure is its four usage counts; anything else counts nothing", () => {
+  expect(usageTotal({ input_tokens: 3, output_tokens: 20, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, server_tool_use: 7 })).toBe(1123)
+  expect(usageTotal({ input_tokens: -1, output_tokens: 'x', cache_read_input_tokens: Number.NaN })).toBe(0)
+  expect(usageTotal(undefined)).toBe(0)
 })

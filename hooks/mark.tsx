@@ -10,7 +10,7 @@ type MarkProps = { nudge?: number; theme?: string }
 type MarkState = { state: number; since: number; nudge: number; frame: number }
 
 /** Often enough for a fade to look smooth; a frame that changes nothing is not drawn. */
-const TICK_MS = 60
+const TICK_MS = 64
 
 const Mark: ClientModule<JsonValue, MarkState> = (raw, surface) => {
   // On a reload one frame of props can come in another shape: they are read defensively.

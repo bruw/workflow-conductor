@@ -43,7 +43,7 @@ Everything here was seen on Claude Code 2.1.296 to 2.1.299, terminal surface, fu
 
 - A run that completes or fails queues a task notification about 2 s after its last agent.
 - session.append (door queue, agent main) is raised at once.
-- prompt.submit (origin task-notification) and ui.render UserMessage (props.task: id, status, toolUseId, durationMs) are raised only once the main loop is idle. Behind a held turn that was 25 s later.
+- prompt.submit (origin task-notification) and ui.render UserMessage (props.task: id, status, toolUseId, durationMs) are raised only once the main loop is idle. A held turn delays them until it ends.
 - The notification's task id is the Workflow result's taskId. Its toolUseId is the Workflow call's.
 - ui.render UserMessage is raised again for an old notification row whenever the transcript redraws it.
 - The task's output file (the notification's output-file) is empty while the run goes on. It is written once at the end, with workflowProgress (per agent: state, attempt, tokens, toolCalls, durationMs) and logs.
@@ -111,7 +111,7 @@ Everything here was seen on Claude Code 2.1.296 to 2.1.299, terminal surface, fu
   - Below that it waits (isPlaced false), the person sees nothing, and no ui.render is raised.
 - A waiting pane seats itself when the terminal reaches 144 columns and stays when narrowed. Under 110 columns it goes inline.
 - An open from the person's own command is placed at any width.
-- An unasked open from a band drawing was placed from 112 columns, against the 144 seen from a tool.call hook and in the types. This is not explained, so keep the isPlaced check.
+- An unasked open from a band drawing is placed from 112 columns, against 144 from a tool.call hook and in the types. This is not explained, so keep the isPlaced check.
 - The dock's width is the person's once they dragged it (the dockColumns setting). The mod's columns is only a request.
 - The docked pane's background is the engine's (theme token composerSidebarBackground) and no mod can remove it. Only a custom theme overrides it, with a concrete colour.
 - The inline placement has no such background.

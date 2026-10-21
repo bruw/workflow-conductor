@@ -270,6 +270,10 @@ export function createTracker() {
     flush()
     const text = endText(state)
     call(h => h.toast(text))
+    report()
+  }
+
+  const report = (): void => {
     const { runId, status } = state
     const project = active?.name
     if (!replayed && runId !== undefined && status !== 'idle' && status !== 'running') call(h => h.ended?.({ runId, ending: status, project }))
@@ -278,6 +282,7 @@ export function createTracker() {
   function apply(events: readonly RunEvent[]): void {
     const before = state
     let wasRunning = state.status === 'running'
+    const wasStopped = state.status === 'stopped'
     for (const event of events) {
       const next = reduce(state, event, active)
       if (next === state) continue
@@ -294,6 +299,8 @@ export function createTracker() {
       else cancelStopWait()
     }
     if (wasRunning && state.status !== 'running') finish()
+    // A run held stopped that a later notice ends otherwise: told once more, without a second toast, so a run that ended done is asked about.
+    else if (wasStopped && state.status !== 'stopped' && state.status !== 'running') report()
     else startTicker()
   }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: scripts/send.sh '/conductor' Enter
+# Usage: scripts/send.sh -l '/conductor'; sleep 1; scripts/send.sh Enter
 set -euo pipefail
 
 SESSION="${CONDUCTOR_SESSION:-conductor-dev}"

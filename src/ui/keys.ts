@@ -28,6 +28,7 @@ export type KeyOp =
   | 'projects'
   | 'help'
   | 'minimize'
+  | 'overwrite'
   /** No key of its own: the add list's `cancel`. */
   | 'cancel'
 
@@ -63,6 +64,7 @@ export const KEY_OPS: Record<string, KeyOp> = {
   '?': 'help',
   h: 'help',
   m: 'minimize',
+  f: 'overwrite',
 }
 
 /** One key both minimizes the pane and expands the band. */
@@ -194,10 +196,6 @@ export const LEGEND_GAP = 2
 /** `[n] New`: the brackets and the space are the 3. */
 export function legendCells(item: LegendItem): number {
   return item.keys.length + 3 + item.word.length
-}
-
-export function legendWidth(row: readonly LegendItem[]): number {
-  return row.reduce((sum, item) => sum + legendCells(item), 0) + LEGEND_GAP * Math.max(0, row.length - 1)
 }
 
 function fill(items: readonly LegendItem[], width: number): LegendItem[][] {

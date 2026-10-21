@@ -118,7 +118,7 @@ const SCENE_H = 30
 const CONDUCTOR_X = 26
 
 export const SPLASH_BEATS = 6
-export const BEAT_MS = 300
+export const BEAT_MS = 304
 export const SPLASH_MS = SPLASH_BEATS * BEAT_MS
 /** The cue, two bars, the bow. */
 const SCORE: readonly Pose[] = ['idle', 'ready', 'conducting', 'ready', 'conducting', 'complete']
@@ -191,8 +191,4 @@ export function splashScene(beat: number, columns: number, rows: number): { line
 /** The splash while a draft is awaited: its two bars, round and round. `beat` only grows. */
 export function waitScene(beat: number, columns: number, rows: number): { lines: PersonaSpan[][]; width: number } {
   return splashScene(1 + (Math.max(0, Math.trunc(beat)) % 2), columns, rows)
-}
-
-export function beatAt(ms: number): number {
-  return Math.max(0, Math.min(SPLASH_BEATS - 1, Math.floor(ms / BEAT_MS)))
 }

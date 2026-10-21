@@ -2,7 +2,7 @@
 // does; said here is only the script to start from, what its kinds mean in the Workflow reference's terms, and how a
 // run is tied back to it (label, phase, meta.name).
 
-import { typeName, canHoldChildren, flatten, goalOf, plainKind } from './model'
+import { typeName, canHoldChildren, flatten, goalOf, plainKind, startOf } from './model'
 import type { Kind, Project } from './model'
 import { OFFER_TOOL_FULL_NAME } from './offer'
 import { isSaved } from './session'
@@ -124,7 +124,7 @@ export function buildHandoff(project: Project, projectPath: string, script: Hand
   // The label's example names a block that spawns agents itself, where the project has one; with a script, one the label rule is for.
   const first = flatten(project).find(row => !canHoldChildren(row.node.type) && row.node.type !== 'start' && row.node.type !== 'code' && (scriptPath === null || !row.node.match))?.node ?? stages[0]
   const goal = goalOf(project)
-  const args = (project.nodes.find(node => node.type === 'start')?.knobs?.args ?? '').replace(/\s+/g, ' ').trim()
+  const args = (startOf(project)?.knobs?.args ?? '').replace(/\s+/g, ' ').trim()
   const example = quoted(first ? `${first.id}: ${first.name}` : 'n1: scout diff')
   const kinds = kindLines(project)
 

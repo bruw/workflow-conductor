@@ -57,5 +57,5 @@ Prefill is written into the field when the block is added; a hint shows while th
 
 - A pattern that spans several blocks (judge panel: attempts, judge, merge) is a template, not a kind.
 - Changing a block's kind keeps every value that was typed; a value still as the old kind filled it in is replaced by the new kind's. An empty container gets the new kind's starter blocks.
-- A loop of kind pass or dry is added with its starter blocks in one edit (one undo).
+- A loop of kind pass or dry is added on the board with its starter blocks in one edit (one undo); an edit from Claude brings its own.
 - No field is read for a count or a meaning: `once per`, a stop condition and the votes in a logic are words for Claude.

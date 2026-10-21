@@ -7,13 +7,13 @@ Claude Code mod: design a workflow as a graph of blocks, hand the project to Cla
 - The project is a **spec, not a program**: JSON plus free text. Claude reads it and writes the real script. There is no JSON → JS compiler and no JS → JSON import.
 - **No field is mined.** `oncePer`, a stop condition, the votes in a logic are words for Claude; nothing parses them for a count or a meaning. Lints go by type, kind and whether a field is empty. The two places that do read text are wiring: the node id at the start of an agent's label, and the hand-off sentence.
 - A pattern is a **kind** of the block it is made of, never a block type of its own; a kind adds presets (filled knobs, a filled logic, starter blocks, hints), never a field. A pattern that spans several blocks is a template.
-- Text the person reads says "block" and "problem"; identifiers and what Claude is sent say "node" and "lint".
+- Text the person reads says "block" and "problem"; prose Claude is sent says "block" and "lint"; identifiers and schema fields say "node".
 
 ## Layout
 
 ```
 hooks/register.tsx     composes the three below over one shared tracker
-hooks/run.tsx          run hooks (Workflow tool.call, agent.spawn, turn.step, turn.complete), the save question, the run view pane
+hooks/run.tsx          run hooks (Workflow and TaskStop tool.call, agent.spawn, turn.step, turn.complete, UserMessage ui.render), the save question, the run view pane
 hooks/project.tsx      the designer: /conductor, the screen, the key catcher and ring, saving, the project tool, the band
 hooks/offer.tsx        the before_workflow tool and its question
 hooks/canvas.tsx       Client: draws the graph from props, posts pointer messages
@@ -40,7 +40,7 @@ scripts/render-graph.ts  layout + paint as text with no session (--list names th
 
 ## Project file
 
-`.claude/workflow-conductor/<name>.json`, and no script beside it: Claude passes the script inline. Where the script lives is under "A run and its project".
+`.claude/workflow-conductor/<name>.json`, and no script beside it: Claude passes the script inline.
 
 - Ids `n<k>` are never reused: `nextId` only grows, also across undo.
 - Exactly one `start` block, first at the top level; it cannot be added, moved, removed or retyped. It alone carries `goal` and `args`; a project with nothing else is blank, which is what "empty" means everywhere.
@@ -49,7 +49,7 @@ scripts/render-graph.ts  layout + paint as text with no session (--list names th
 - `match` (labels or phase titles; a trailing `*` is a prefix) ties a block to a script that existed before the project.
 - `replay-*` projects live in state only: never written, listed or handed off.
 - A template is saved by its first edit or by a hand-off, not by opening it.
-- A save first reads the file: where it is no longer what this session last read or wrote (another session sharing the root saved it), nothing is written, the board takes the file, and an edit Claude makes from an older read is denied until it reads the project again. On the board, one undo brings back the person's version with the refused edit made on it, and saves that; text typed in a field stays in it, to be sent onto the other session's.
+- A save first reads the file: where it is no longer what this session last read or wrote (another session sharing the root saved it), nothing is written, the board takes the file, and an edit Claude makes from an older read is denied until it reads the project again. On the board, one undo brings back the person's version with the refused edit made on it, and saves that; text typed in a field stays in it, to be sent onto the other session's. Where the file holds no valid project, nothing is written over it: the board keeps the edit, unsaved, each save tries again, and `f` writes the board over the file; Claude's edits are denied until the file is fixed.
 
 ## A run and its project
 
@@ -81,7 +81,7 @@ scripts/render-graph.ts  layout + paint as text with no session (--list names th
 
 **The hand-off** (`buildHandoff`): the goal, the project file, the script to pass inline (written from the project, or the latest script, the last run's or the saved copy, changed only where the project changed), that run's id and journal where it was in this session, one line per kind the project uses (`KIND_TEACH[kind].script`: the Workflow reference's pattern name and what it leaves out), that work sent back reaches its agents in full, to ask only what is unresolved (the run input where `args` is set, a flow that looks ambiguous) and otherwise to say what it will do with its worst-case agent count and wall-clock and run it, and the three rules that tie a run to the board: every `agent()` label is `<nodeId>: <text>`, one phase per top-level block titled `<nodeId> <name>`, `meta.name` is the project's name. With a script, blocks with `match` keep the script's labels.
 
-**How it gets there.** `r` saves, tells the tracker, and submits the hand-off sentence itself. The mod's own prompt skips its own hooks and carries no context, so the sentence tells Claude to call `before_workflow`, which answers with the hand-off once. A sentence the person sends goes through the `prompt.submit` hook instead, which attaches the same text as context.
+**How it gets there.** `r` saves, tells the tracker, and submits the hand-off sentence itself. The mod's own prompt skips its own hooks and carries no context, so the sentence tells Claude to call `before_workflow`, which answers with the hand-off once. A sentence the person sends goes through the `prompt.submit` hook instead, which makes the same hand-off, so `before_workflow` answers with it.
 
 **The offer** (`mcp__workflow-conductor__before_workflow`, not deferred: Claude calls a tool before a workflow only when its description is in every turn). It asks whether to design in Conductor first, every time. No dialog, answer Standard: a subagent, no surface, a handoff waiting for its run. After a Conductor draft and until it is handed off, a call answers that the project waits unapproved.
 
@@ -124,4 +124,4 @@ The desktop surface; the main screen outside fullscreen; clicks on the band and 
 - A prompt queued mid-turn marks the change note as seen early.
 - After `/clear`, an `attach` to the run still shown is refused.
 - The turn is held while the Visualize dialog is up.
-- A project file changed outside Claude's tools is not followed.
+- A project file changed outside Claude's tools is not followed until this session's next save, which shows it in place of the edit.

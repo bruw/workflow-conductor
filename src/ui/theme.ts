@@ -1,5 +1,7 @@
 // Pure UI constants. No `$`, no engine imports.
 
+import type { AgentStatus, RunStatus } from '../run/events'
+
 export const PANE_ID = 'conductor'
 export const PANE_TITLE = 'Conductor'
 
@@ -46,3 +48,12 @@ export const GRAY: Record<keyof typeof ACCENT, string> = {
   start: 'inactive',
 }
 export const GRAY_FADED = 'subtle'
+
+/** A run's or an agent's status as a theme key; a stopped run is quiet words, not a rule. */
+export const STATUS_COLOR = {
+  idle: FADED,
+  running: 'claude',
+  done: 'success',
+  failed: 'error',
+  stopped: FADED,
+} as const satisfies Record<RunStatus | AgentStatus, string>

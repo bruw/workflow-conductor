@@ -4,7 +4,7 @@
 import { OUTLINE_MAX, outline } from './handoff'
 import { OFFER_TOOL_FULL_NAME } from './offer'
 import { lint } from './lints'
-import { CONTAINER_TYPES, KINDS, NODE_TYPES, startOf, typeName, canHoldChildren, findNode, flatten, kindsOf, parseProject, readType, serializeProject } from './model'
+import { CONTAINER_TYPES, KINDS, NODE_TYPES, startOf, typeName, canHoldChildren, findNode, flatten, isRecord, kindsOf, parseProject, readType, serializeProject } from './model'
 import type { Project, ProjectNode, Kind, Row } from './model'
 import { addNode, moveNode, nextIdNumber, removeNode, retypeNode, updateNode } from './ops'
 import type { NodePatch, Place } from './ops'
@@ -179,10 +179,6 @@ export type Change = { added: string[]; changed: string[]; removed: string[]; no
 
 export type Edit = ({ ok: true; project: Project } & Change) | { ok: false; error: string }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 const TYPES_HINT = `types: ${NODE_TYPES.join(', ')}`
 const CONTAINERS_HINT = `containers: ${CONTAINER_TYPES.join(', ')}`
 const KNOBS_HINT = `knobs: ${KNOB_NAMES.join(', ')}`
@@ -275,6 +271,7 @@ function reordered(before: Project, after: Project): string[] {
 export function replaceProject(before: Project, rawNodes: unknown): Edit {
   if (!Array.isArray(rawNodes)) return { ok: false, error: 'write needs `nodes`: the array of top-level blocks' }
   const known = new Set(flatten(before).map(row => row.node.id))
+  const startId = startOf(before)?.id
   const kept = new Set<string>()
   let next = nextIdNumber(before)
   let problem: string | undefined
@@ -291,6 +288,10 @@ export function replaceProject(before: Project, rawNodes: unknown): Edit {
       kept.add(raw.id)
       id = raw.id
       stays = true
+    } else if (raw.type === 'start' && startId !== undefined && !kept.has(startId)) {
+      // The start block is never new: one sent without its id is still the one there.
+      kept.add(startId)
+      id = startId
     } else id = `n${next++}`
     const read = readType(raw.type, raw.kind)
     if ('error' in read) problem ??= `${id}: ${read.error}`

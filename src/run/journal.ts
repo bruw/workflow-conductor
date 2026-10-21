@@ -101,4 +101,12 @@ function count(value: unknown): number {
 }
 
 /** The usage counts that make up the token figure shown: prompt tokens mostly arrive as cache writes and reads. */
-export const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'] as const
+const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'] as const
+
+/** One request's figure: all four usage counts, as the built-in workflow row counts an agent's latest request. */
+export function usageTotal(usage: unknown): number {
+  if (usage === null || typeof usage !== 'object') return 0
+  const counts = usage as Record<string, unknown>
+
+  return USAGE_KEYS.reduce((sum, key) => sum + count(counts[key]), 0)
+}

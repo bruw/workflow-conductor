@@ -14,10 +14,6 @@ export const HISTORY_MAX = 50
 export const UNDO_HINT = '[u] Undo'
 export const REDO_HINT = '[y] Redo'
 
-export function emptyHistory(): History {
-  return { undo: [], redo: [] }
-}
-
 export function remember(history: History | undefined, before: Project, what: string): History {
   const undo = [...(history?.undo ?? []), { project: before, what }]
   return { undo: undo.slice(Math.max(0, undo.length - HISTORY_MAX)), redo: [] }

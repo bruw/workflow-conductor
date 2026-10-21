@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
-import { applyOps, callLine, editReport, readReport, resultLine } from '../src/project/chat'
+import { applyOps, callLine, editReport, readReport, replaceProject, resultLine, toolDescription } from '../src/project/chat'
 import type { Edit } from '../src/project/chat'
 import { lint } from '../src/project/lints'
-import { flatten } from '../src/project/model'
+import { emptyProject, flatten, startOf } from '../src/project/model'
 import { review } from '../src/project/templates'
 
 function edited(edit: Edit): Extract<Edit, { ok: true }> {
@@ -73,4 +73,15 @@ test('a text no report wrote gives a line of its own', () => {
   const line = resultLine('something else\nentirely', false)
   expect(line.length).toBeGreaterThan(0)
   expect(line).not.toContain('\n')
+})
+
+test('the tool description stays under the engine cut', () => {
+  expect(toolDescription().length).toBeLessThan(4096)
+})
+
+test('a write that leaves the start block id off keeps its id', () => {
+  const before = emptyProject('draft')
+  const after = edited(replaceProject(before, [{ type: 'start', knobs: { goal: 'ship it' } }, { type: 'agent', name: 'a' }]))
+  expect(startOf(after.project)?.id).toBe(startOf(before)?.id)
+  expect(new Set(flatten(after.project).map(row => row.node.id)).size).toBe(2)
 })

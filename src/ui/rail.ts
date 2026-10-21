@@ -1,7 +1,7 @@
 import type { AgentRun, RunState } from '../run/events'
 
 import { cellWidth, clip, oneLine } from './text'
-import { FADED, GLYPH, RULE } from './theme'
+import { FADED, GLYPH, RULE, STATUS_COLOR } from './theme'
 
 // The run pane as plain rows: no `$`, no elements. hooks/run.tsx maps rows to elements.
 
@@ -177,7 +177,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
   const width = Math.max(MIN_WIDTH, Math.floor(ui.width ?? DEFAULT_WIDTH))
   const spin = spinnerFrame(ui.now)
   const all = countOf(agents)
-  const statusColor: ColorKey = state.status === 'running' ? 'claude' : state.status === 'failed' ? 'error' : state.status === 'stopped' ? 'subtle' : 'success'
+  const statusColor: ColorKey = STATUS_COLOR[state.status]
   const rows: Row[] = []
   // A run's name, a phase's title and an agent's label are not this mod's words: each is shown cleaned, on one line.
   const name = oneLine(state.name ?? state.runId ?? '') || 'workflow'
@@ -235,7 +235,7 @@ export function buildRunRows(state: RunState, ui: RailUi): Row[] {
     if (!open) continue
 
     members.forEach((agent, at) => {
-      const agentColor: ColorKey = agent.status === 'running' ? 'claude' : agent.status === 'failed' ? 'error' : 'success'
+      const agentColor: ColorKey = STATUS_COLOR[agent.status]
       const agentGlyph = agent.status === 'running' ? spin : agent.status === 'failed' ? FAILED : GLYPH.done
       const branch = at === members.length - 1 ? GLYPH.railEnd : GLYPH.railBranch
       const took = agent.durationMs === undefined ? '' : fmtDuration(agent.durationMs)

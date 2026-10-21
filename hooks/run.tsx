@@ -21,7 +21,7 @@ import {
 import { PROJECT_PANE_ID, bareTarget, projectFile, projectName, endRun, followRun, handoffOf, initialTimes, initialUi, isSaved, stampTimes } from '../src/project/session'
 import { emptyRunState } from '../src/run/events'
 import type { RunState } from '../src/run/events'
-import { USAGE_KEYS } from '../src/run/journal'
+import { usageTotal } from '../src/run/journal'
 import type { Handoff, RunEnded, Tracker } from '../src/run/tracker'
 import { buildRunRows, togglePhase } from '../src/ui/rail'
 import type { Part, Row } from '../src/ui/rail'
@@ -55,16 +55,6 @@ const shellAtom = atom({ plugin: 'workflow-conductor', key: 'shell' } as const, 
 const plain = (state: RunState): RunState => JSON.parse(JSON.stringify(state)) as RunState
 
 const text = (value: unknown): string | undefined => (typeof value === 'string' && value.length > 0 ? value : undefined)
-
-const count = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0)
-
-/** One request's figure: all four usage counts, as the built-in workflow row counts an agent's latest request. */
-const usageTotal = (usage: unknown): number | undefined => {
-  if (usage === null || typeof usage !== 'object') return undefined
-  const counts = usage as Record<string, unknown>
-
-  return USAGE_KEYS.reduce((sum, key) => sum + count(counts[key]), 0)
-}
 
 /** Runs the main conversation started: a subagent's run is not the person's to be asked about. */
 const ownRuns = new Set<string>()
@@ -258,7 +248,7 @@ export const registerRun = (on: On, tracker: Tracker): void => {
   // Runs on every loop: each chunk goes through untouched, the last one is read.
   on('turn.step', async function* (_$, e, next) {
     for await (const chunk of next(e)) {
-      if (chunk.kind === 'stop' && e.agentId !== undefined) tracker.agentUsage(e.agentId, usageTotal(chunk.usage) ?? 0)
+      if (chunk.kind === 'stop' && e.agentId !== undefined) tracker.agentUsage(e.agentId, usageTotal(chunk.usage))
       yield chunk
     }
   })

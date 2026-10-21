@@ -11,6 +11,7 @@ import { KEY_OPS, LOCKED_OPS } from '../ui/keys'
 import type { KeyOp } from '../ui/keys'
 import { fmtDuration, fmtCount } from '../ui/rail'
 import { clip, wrapText } from '../ui/text'
+import { STATUS_COLOR } from '../ui/theme'
 import { REDO_HINT, UNDO_HINT } from './history'
 import { lint } from './lints'
 import { NODE_TYPES, blockCount, canHoldChildren, emptyProject, findNode, flatten, goalOf, isBlank, isProjectName, kindsOf, parseProject, toKebab, typeName } from './model'
@@ -90,10 +91,6 @@ export const SCRATCH_PREFIX = 'replay-'
 
 export function isSaved(name: string): boolean {
   return !name.startsWith(SCRATCH_PREFIX)
-}
-
-export function savedProject(name: string, text: string): SavedProject {
-  return savedEntry(name, parseProject(text))
 }
 
 export function savedEntry(name: string, parsed: ParseResult): SavedProject {
@@ -694,6 +691,7 @@ export function applyOp(project: Project | null, ui: ProjectUi, op: KeyOp, conte
     case 'run':
     case 'review':
     case 'projects':
+    case 'overwrite':
       // The hooks module puts the request in the prompt box, or lists the projects; nothing changes here.
       return { project, ui: calm, changed: false }
     case 'clearRun':
@@ -941,7 +939,7 @@ export function runSummary(run: RunState, elapsedMs: number | null, room: number
     [status],
   ].map(parts => parts.join(' · '))
   const text = wordings.find(one => one.length <= room) ?? status
-  return { text, color: run.status === 'running' ? 'claude' : failed > 0 || run.status === 'failed' ? 'error' : run.status === 'stopped' ? 'inactive' : 'success' }
+  return { text, color: run.status !== 'running' && failed > 0 ? 'error' : STATUS_COLOR[run.status] }
 }
 
 /** In the clock's ms: the run state itself carries no times, and a drawing reads no clock. */

@@ -20,6 +20,6 @@ tmux new-session -d -s "$SESSION" -x 160 -y 50 -c "$REPO" \
 echo "session:   $SESSION"
 echo "debug log: $DEBUG_LOG"
 echo "attach:    tmux attach -t '=$SESSION'"
-echo "send keys: scripts/send.sh '/conductor' Enter"
+echo "send keys: scripts/send.sh -l '/conductor'; sleep 1; scripts/send.sh Enter"
 echo "capture:   scripts/capture.sh"
 echo "stop:      tmux kill-session -t '=$SESSION'"

@@ -194,6 +194,8 @@ const runNotice = (line: string, isFilled: boolean): string => `run: ${isFilled 
 const askNotice = (line: string, isFilled: boolean): string => (isFilled ? 'ask: the question is in the prompt · change it as you like, then Enter' : `ask: type in the prompt: ${line.trim()}`)
 const draftLine = (): string => `/${COMMAND} `
 const draftNotice = (line: string, isFilled: boolean): string => (isFilled ? 'draft: say in the prompt what the workflow should do, then Enter' : `draft: type in the prompt: ${line.trim()} <what you want>`)
+/** A run, ask or draft notice waits on the prompt box, as does a refusal worded as one. */
+const isRequestNotice = (notice: string | null): boolean => notice !== null && /^(run|ask|draft): /.test(notice)
 
 /** Undo and redo, per project. Module variables, not state: fifty projects are too much to store, and a drawing may read them. */
 const histories: Record<string, History> = {}
@@ -332,6 +334,17 @@ class StaleFile extends Error {
   }
 }
 
+/** The file holds no valid project: a save does not write over it unless the person says so (`f`). */
+class InvalidFile extends Error {
+  constructor(readonly name: string) {
+    super(`${name}.json is not a valid project`)
+  }
+}
+
+/** Projects whose last save met an invalid file: the board holds the edits, unsaved, until a save gets through. */
+const heldOver = new Set<string>()
+const invalidNotice = (name: string): string => `not saved: ${name}.json is not a valid project now · the board keeps your edit · [f] Write over it`
+
 /** What this session last read from or wrote to each project's file. Another session sharing the root may save over it. */
 const onDisk: Record<string, Project> = {}
 /** The revision at which each project last changed in another session, so Claude is not told the user did it. */
@@ -345,11 +358,12 @@ const loadedDisk = (name: string, project: Project): void => {
   const known = onDisk[name]
   if (known !== undefined && !sameProject(known, project)) changedElsewhere(name)
   onDisk[name] = project
+  heldOver.delete(name)
 }
 
 // Spelled whole, not built by `projectFile`, so that a reader of the call sees where every save lands.
 // `board` stands in for `onDisk` where a reload with changed source lost it; null for a project not saved yet.
-const saveProject = async ($: EngineInterface, name: string, project: Project, board: Project | null): Promise<void> => {
+const saveProject = async ($: EngineInterface, name: string, project: Project, board: Project | null, overwrite = false): Promise<void> => {
   // The name is spelled into the path: anything but kebab-case could reach outside the projects' directory.
   if (!isProjectName(name)) throw new Error(`not a project name: ${name}`)
   const root = await $.session.root()
@@ -359,10 +373,16 @@ const saveProject = async ($: EngineInterface, name: string, project: Project, b
   if (text !== undefined) {
     const known = onDisk[name] ?? board
     const now = parseProject(text)
-    if (known === null || !now.ok || !sameProject(now.project, known)) throw new StaleFile(name, text)
+    if (!now.ok) {
+      if (!overwrite) {
+        heldOver.add(name)
+        throw new InvalidFile(name)
+      }
+    } else if (known === null || !sameProject(now.project, known)) throw new StaleFile(name, text)
   }
   await $.fs.write(path, serializeProject(project))
   onDisk[name] = project
+  heldOver.delete(name)
 }
 
 type Shown = Pick<Step, 'project' | 'ui'>
@@ -376,7 +396,8 @@ type Refused = { project: Project; what: string }
 const takeSaved = (stale: StaleFile, board: Project | null, refused: Refused | null, held: ProjectUi): Shown => {
   changedElsewhere(stale.name)
   const opened = openProject(stale.name, stale.text, held)
-  if (opened.project === null) return { project: board, ui: { ...held, notice: `not saved: ${stale.name}.json is not a valid project now` } }
+  // A StaleFile is thrown only over a file that parses.
+  if (opened.project === null) return { project: board, ui: { ...held, notice: invalidNotice(stale.name) } }
   if (board) {
     const history = refused ? remember(histories[stale.name], board, refused.what) : histories[stale.name]
     histories[stale.name] = remember(history, refused?.project ?? board, 'the file changed in another session')
@@ -491,7 +512,7 @@ const flushDrafts = ($: EngineInterface, keep = false): Promise<string | null> =
       if (isSaved(ui.name)) await saveProject($, ui.name, project, before)
     } catch (error) {
       if (error instanceof StaleFile) stale = error
-      else notice = `not saved: ${reason(error)}`
+      else notice = error instanceof InvalidFile ? invalidNotice(ui.name) : `not saved: ${reason(error)}`
     }
     if (stale !== null) {
       notice = (await showSaved($, stale, before, { project, what: label ?? 'an edit' }, ui)) ?? notice
@@ -675,7 +696,8 @@ const store = async ($: EngineInterface, step: Step, before: Project | null, kep
   try {
     if (isSaved(name)) await saveProject($, name, step.project, board)
   } catch (error) {
-    if (!(error instanceof StaleFile)) notice = `not saved: ${reason(error)}`
+    if (error instanceof InvalidFile) notice = invalidNotice(name)
+    else if (!(error instanceof StaleFile)) notice = `not saved: ${reason(error)}`
     else {
       // An undo or redo has moved the history already, for a step that is not taken; it is not offered again.
       const travelled = board !== null && histories[name] !== kept
@@ -736,11 +758,11 @@ const watchBox = ($: EngineInterface): void => {
     $.clock.after(BOX_POLL_MS, () => {
       void (async (): Promise<void> => {
         const ui = await read($, uiAtom)
-        const waits = ui.handed || (ui.notice !== null && /^(run|ask|draft): /.test(ui.notice))
+        const waits = ui.handed || isRequestNotice(ui.notice)
         const box = waits ? await $.prompt.read().catch(() => ({ text: '', cursor: 0 })) : null
         if (box !== null && box.text.trim() !== '') return look()
         boxWatched = false
-        if (waits) await update($, uiAtom, held => ({ ...held, handed: false, notice: held.notice !== null && (/^(run|ask|draft): /.test(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice }))
+        if (waits) await update($, uiAtom, held => ({ ...held, handed: false, notice: (isRequestNotice(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice }))
       })()
     })
   }
@@ -1156,6 +1178,21 @@ const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
 }
 
 /** Resolves to false when the keys typed with it are not to be applied (the keyboard went to the prompt, nothing is on the board). */
+/** `f`: the board is written over a file that holds no valid project, once the person asks. */
+const overwriteFile = async ($: EngineInterface, name: string): Promise<void> => {
+  const project = await read($, projectAtom)
+  if (!heldOver.has(name) || project === null) return say($, `f: ${name} is saved, there is nothing to write over`)
+  try {
+    await saveProject($, name, project, project, true)
+  } catch (error) {
+    // Made valid since: by another session, so the board takes it as any save does.
+    if (error instanceof StaleFile) return void (await showSaved($, error, project, null, await read($, uiAtom)))
+    return say($, `not saved: ${reason(error)}`)
+  }
+  await update($, uiAtom, held => ({ ...held, unsaved: false, runCleared: true }))
+  await say($, `wrote the board over ${name}.json`)
+}
+
 const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
   const ui = await read($, uiAtom)
   const project = await read($, projectAtom)
@@ -1221,6 +1258,11 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
 
     return false
   }
+  if (op === 'overwrite' && !locked) {
+    await overwriteFile($, ui.name)
+
+    return true
+  }
   if ((op === 'run' || op === 'review') && !locked) {
     await request($, op === 'run' ? 'run' : 'ask')
 
@@ -1260,16 +1302,11 @@ const press = ($: EngineInterface, work: () => Promise<unknown>): void => {
 
 /** Each key is applied on the state the one before it left. */
 const queueKeys = ($: EngineInterface, keys: readonly string[] | null): void => {
-  keyChain = keyChain
-    .then(async (): Promise<void> => {
-      if (keys === null) return say($, PASTE_NOTICE)
-      for (const key of keys) if (!(await runKey($, key))) return
-    })
-    .catch((error: unknown) => {
-      $.ui.toast(`conductor: ${reason(error)}`)
-    })
-    // The catcher is drawn again under its new key, empty, whatever the keys changed.
-    .then(() => $.ui.invalidate('ui.render'))
+  // The catcher is drawn again under its new key, empty, whatever the keys changed.
+  press($, async () => {
+    if (keys === null) return say($, PASTE_NOTICE)
+    for (const key of keys) if (!(await runKey($, key))) return
+  })
 }
 
 /** The catcher holds its whole text so far, so the new characters are the ones after those already taken; more than a burst at once is a paste. */
@@ -1289,16 +1326,11 @@ const doorKeys = ($: EngineInterface, element: string, kind: 'change' | 'submit'
   const fresh = doored.element === element ? value.slice(Math.min(value.length, doored.taken)) : value
   doored = { element, taken: value.length }
   tidySoon($)
-  keyChain = keyChain
-    .then(async (): Promise<void> => {
-      if (!(await read($, uiAtom)).editing) await openFields($)
-      if (!(await read($, uiAtom)).editing) return
-      for (const key of [...fresh, ...(kind === 'submit' && value !== '' ? [ENTER] : [])]) if (!(await runKey($, key))) return
-    })
-    .catch((error: unknown) => {
-      $.ui.toast(`conductor: ${reason(error)}`)
-    })
-    .then(() => $.ui.invalidate('ui.render'))
+  press($, async () => {
+    if (!(await read($, uiAtom)).editing) await openFields($)
+    if (!(await read($, uiAtom)).editing) return
+    for (const key of [...fresh, ...(kind === 'submit' && value !== '' ? [ENTER] : [])]) if (!(await runKey($, key))) return
+  })
 }
 
 /** The list closed on Enter and the ring has not left its filter: what is typed there goes where a key typed now goes. False when the keys are not to be applied. */
@@ -1315,46 +1347,36 @@ const closedFilter = async ($: EngineInterface, element: string, value: string):
 
 /** Pressed again before the ring has left, it is Enter for what opened next. */
 const filterEnter = ($: EngineInterface, element: string, value: string): void => {
-  keyChain = keyChain
-    .then(async (): Promise<void> => {
-      if ((await read($, uiAtom)).picker !== null) {
-        pickedField = { element, value, taken: 0 }
+  press($, async () => {
+    if ((await read($, uiAtom)).picker !== null) {
+      pickedField = { element, value, taken: 0 }
 
-        return pick($, {})
-      }
-      if (await closedFilter($, element, value)) await runKey($, ENTER)
-    })
-    .catch((error: unknown) => {
-      $.ui.toast(`conductor: ${reason(error)}`)
-    })
-    .then(() => $.ui.invalidate('ui.render'))
+      return pick($, {})
+    }
+    if (await closedFilter($, element, value)) await runKey($, ENTER)
+  })
 }
 
 /** While nothing narrows the list `w`, `s` and `n` are keys: the filter is drawn again under a new key, without them. */
 const filterKeys = ($: EngineInterface, element: string, value: string): void => {
-  keyChain = keyChain
-    .then(async (): Promise<void> => {
-      const project = await read($, projectAtom)
-      if ((await read($, uiAtom)).picker === null) {
-        await closedFilter($, element, value)
+  press($, async () => {
+    const project = await read($, projectAtom)
+    if ((await read($, uiAtom)).picker === null) {
+      await closedFilter($, element, value)
 
-        return
-      }
-      const skip = picked.element === element ? Math.min(picked.taken, value.length) : 0
-      let taken = 0
-      await update($, uiAtom, held => {
-        const typed = typePicker(project, held, filterText(held, value.slice(skip)))
-        taken = typed.taken
-        return typed.ui
-      })
-      picked = { element, taken: skip + taken }
-      if (taken > 0) pickGen++
-      if ((await read($, uiAtom)).picker === null) await home($)
+      return
+    }
+    const skip = picked.element === element ? Math.min(picked.taken, value.length) : 0
+    let taken = 0
+    await update($, uiAtom, held => {
+      const typed = typePicker(project, held, filterText(held, value.slice(skip)))
+      taken = typed.taken
+      return typed.ui
     })
-    .catch((error: unknown) => {
-      $.ui.toast(`conductor: ${reason(error)}`)
-    })
-    .then(() => $.ui.invalidate('ui.render'))
+    picked = { element, taken: skip + taken }
+    if (taken > 0) pickGen++
+    if ((await read($, uiAtom)).picker === null) await home($)
+  })
 }
 
 export const registerProject = (on: On, tracker: Tracker): void => {
@@ -1405,7 +1427,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     if (previous.name === name && previous.status === 'ready' && (await read($, projectAtom)) !== null) {
       // A field left open when the keyboard went to the prompt is closed: the keys are keys again.
       if (previous.editing || previous.picker !== null) await update($, uiAtom, held => ({ ...held, editing: false, freshId: null, picker: null }))
-      await $.ui.open(paneArgs(true))
+      await $.ui.open(paneArgs(true)).catch(() => undefined)
       settleRing($)
 
       return { text: bare.live ? `Project ${name} opened with its run.` : `Project ${name} opened.` }
@@ -1416,7 +1438,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       const started = openProject(freeName(await savedNames($, root)), undefined, previous)
       await update($, projectAtom, () => null)
       await update($, uiAtom, () => ({ ...started.ui, saved, startMark: 0 }))
-      await $.ui.open(paneArgs(true))
+      await $.ui.open(paneArgs(true)).catch(() => undefined)
       settleRing($)
 
       return { text: `${saved.length} saved ${saved.length === 1 ? 'project' : 'projects'}: open one in the pane, or start a new one from a template.` }
@@ -1437,7 +1459,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     if (step.project !== null) loadedDisk(name, step.project)
     await update($, projectAtom, () => step.project)
     await update($, uiAtom, () => step.ui)
-    await $.ui.open(paneArgs(true))
+    await $.ui.open(paneArgs(true)).catch(() => undefined)
     settleRing($)
 
     if (step.ui.status === 'error') return { text: `Project ${name} could not be opened: ${step.ui.error}` }
@@ -1453,7 +1475,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     setOfferBoard({ drafting: () => beginDraft($) })
     // A load: the state outlives it, what it said of the moment does not.
     await update($, uiAtom, held =>
-      held.editing || held.picker !== null || held.handed || held.confirmId !== null || (held.drafting ?? null) !== null || (held.notice !== null && /^(run|ask|draft): /.test(held.notice)) || held.notice === HANDED_NOTICE
+      held.editing || held.picker !== null || held.handed || held.confirmId !== null || (held.drafting ?? null) !== null || isRequestNotice(held.notice) || held.notice === HANDED_NOTICE
         ? {
             ...held,
             editing: false,
@@ -1463,7 +1485,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
             confirmId: null,
             drafting: null,
             reveal: null,
-            notice: held.notice !== null && (/^(run|ask|draft): /.test(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice,
+            notice: (isRequestNotice(held.notice) || held.notice === HANDED_NOTICE) ? null : held.notice,
           }
         : held,
     )
@@ -1480,8 +1502,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     // The person's own words in the conversation (a notice of a run that ended is not): a handoff that waits for its run waits on.
     if ((e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk') && !e.text.trimStart().startsWith('/')) tracker.prompted()
     // A prompt was sent: whatever waited in the box for the keys is on its way, and the line that said so is spent.
-    if (shown.handed || (shown.notice !== null && /^(run|ask|draft): /.test(shown.notice))) {
-      await update($, uiAtom, held => ({ ...held, handed: false, notice: held.notice === HANDED_NOTICE || (held.notice !== null && /^(run|ask|draft): /.test(held.notice)) ? null : held.notice }))
+    if (shown.handed || isRequestNotice(shown.notice)) {
+      await update($, uiAtom, held => ({ ...held, handed: false, notice: held.notice === HANDED_NOTICE || isRequestNotice(held.notice) ? null : held.notice }))
     }
     // Told with this prompt, once per change, or Claude would answer from what it remembers. The note says the change itself
     // where the project Claude saw is at hand, so no read is spent on it; without one it says to read again.
@@ -1616,6 +1638,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       try {
         if (isSaved(name)) await saveProject($, name, edit.project, isNew ? null : project)
       } catch (error) {
+        if (error instanceof InvalidFile) return { deny: `Project ${name}'s file is not a valid project now, so nothing was changed. Fix ${name}.json with Edit, or ask the user to press f on the board to write the board over it.` }
         if (!(error instanceof StaleFile)) return { deny: `Project ${name} could not be saved, nothing was changed: ${reason(error)}` }
         if (isOpen) await showSaved($, error, project, null, ui)
         else changedElsewhere(name)
@@ -1691,6 +1714,8 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const parsed = parseProject(await $.fs.read(projectFile(root, name)).catch(() => ''))
     // Claude's own write: the next save is checked against it, not taken for another session's.
     if (parsed.ok) onDisk[name] = { ...parsed.project, name }
+    if (parsed.ok) heldOver.delete(name)
+    else heldOver.add(name)
     const ui = await read($, uiAtom)
     if (ui.name !== name || ui.status === 'closed') return answer
     if (!parsed.ok) {
@@ -1701,7 +1726,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const written: Project = parsed.project.name === name ? parsed.project : { ...parsed.project, name }
     const before = ui.status === 'ready' ? await read($, projectAtom) : null
     const change = diffProjects(before, written)
-    if (before !== null && JSON.stringify(before) !== JSON.stringify(written)) record(name, before, `the file ${changeWords(change) || 'changed'}`)
+    if (before !== null && !sameProject(before, written)) record(name, before, `the file ${changeWords(change) || 'changed'}`)
     sawProject(name, written)
     await update($, projectAtom, () => written)
     await update($, uiAtom, held => showEdit(held, name, written, change))
@@ -1875,7 +1900,9 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const clock = locked ? await read($, clockAtom) : 0
     const overlay = over ? runOverlay(run, clock) : undefined
     const draftBeats = (ui.drafting ?? null) !== null ? await read($, draftBeatAtom) : 0
-    const cycle = { nudge: await read($, nudgeAtom), theme: await themeOf($) }
+    const theme = await themeOf($)
+    // A Client's props may hold no undefined: with no theme read, the key is left out.
+    const cycle = { nudge: await read($, nudgeAtom), ...(theme === undefined ? {} : { theme }) }
     const splashed = await read($, splashedAtom)
     // Whether the pane holds the keyboard: Escape hands it to the prompt, and a field left open then is closed to the eye.
     const focused = e.props.isFocused !== false
@@ -1936,7 +1963,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
             ? { text: `${begins} · ${marked.kind === 'saved' ? 'saved project' : marked.kind === 'blank' ? 'blank project' : marked.kind === 'replay' ? `replay over the ${marked.title} template` : marked.kind === 'recording' ? 'recorded run' : `from the ${marked.title} template`}`, color: FADED }
             : ui.status !== 'ready' || !project
               ? { text: 'project', color: FADED }
-              : { text: `EDITING · ${!isSaved(ui.name) ? 'replay, not saved' : !ui.unsaved ? 'saved' : isBlank(project) ? 'not saved yet' : 'unsaved template'}`, color: FADED }
+              : { text: `EDITING · ${!isSaved(ui.name) ? 'replay, not saved' : heldOver.has(ui.name) ? 'not saved: the file is invalid' : !ui.unsaved ? 'saved' : isBlank(project) ? 'not saved yet' : 'unsaved template'}`, color: FADED }
     const shownName = oneLine(starting && marked?.kind === 'saved' ? marked.id : ui.name)
     const pressable = listing || !starting
     const nameMark = !pressable ? '' : listing ? ' ▴' : ' ▾'
@@ -2366,7 +2393,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const cue =
       afterCue !== null && KEYS_CUE.length + 3 + afterCue.length <= saidW
         ? `${KEYS_CUE} · ${afterCue}`
-        : afterCue !== null && /^(run|ask|draft): /.test(afterCue)
+        : isRequestNotice(afterCue)
           ? `${KEYS_CUE.split(' · ')[0] ?? KEYS_CUE} · ${afterCue}`
           : KEYS_CUE
     const message: Said = focused ? said : { text: cue, color: FADED }
