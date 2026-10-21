@@ -18,10 +18,10 @@ import { KIND_TEACH, KNOB_HELP, TEACH, defaultName, fillOf, logicOf } from './te
 export const TOOL_NAME = 'project'
 export const TOOL_FULL_NAME = 'mcp__workflow-conductor__project'
 export const TOOL_TITLE = 'Conductor'
-export const PROJECT_DIR_HINT = `${PROJECT_DIR}/<name>.json`
+const PROJECT_DIR_HINT = `${PROJECT_DIR}/<name>.json`
 
-export const ACTIONS = ['read', 'apply', 'write', 'attach'] as const
-export const OP_KINDS = ['add', 'update', 'move', 'remove'] as const
+const ACTIONS = ['read', 'apply', 'write', 'attach'] as const
+const OP_KINDS = ['add', 'update', 'move', 'remove'] as const
 
 const KNOB_NAMES = Object.keys(KNOB_HELP)
 
@@ -221,7 +221,7 @@ export function diffProjects(before: Project | null, after: Project): Change {
 }
 
 /** A `condition` on a block that is no arm of a branch picks nothing. */
-export function strayConditions(project: Project, ids: readonly string[]): string[] {
+function strayConditions(project: Project, ids: readonly string[]): string[] {
   return flatten(project)
     .filter(row => ids.includes(row.node.id) && (row.node.knobs?.condition ?? '').trim() !== '' && (row.parentId === undefined ? undefined : findNode(project, row.parentId)?.type) !== 'branch')
     .map(row => `${row.node.id} has a \`condition\` but does not stand directly in a branch, so nothing reads it: move the block into the branch as an arm, or clear the knob (condition: "").`)
@@ -240,7 +240,7 @@ function checked(before: Project, candidate: Project, touched: Iterable<string> 
 }
 
 /** An `add` beside a sibling in a branch or a parallel makes another arm, not a step after it. Null elsewhere. */
-export function armNote(project: Project, id: string, beside: string): string | null {
+function armNote(project: Project, id: string, beside: string): string | null {
   const row = flatten(project).find(one => one.node.id === id)
   const parent = row?.parentId === undefined ? undefined : findNode(project, row.parentId)
   if (!parent) return null
@@ -492,10 +492,7 @@ export function editReport(project: Project, change: Change, revision?: number):
   ].join('\n')
 }
 
-/**
- * Whether Claude holds `stored` whole after the edit it made with `input`: every text the answer's outline does not say is one
- * Claude sent or one the block had in the project it last saw (`seen`). False for a text from elsewhere, such as what a kind fills in.
- */
+/** False where the stored project holds a text Claude neither sent nor saw (`seen`), such as what a kind fills in: Claude must read again. */
 export function knownAfterEdit(stored: Project, seen: Project | undefined, input: unknown): boolean {
   const rows = flatten(stored)
   if (rows.length > OUTLINE_MAX) return false
@@ -608,7 +605,7 @@ function childIds(rows: readonly Row[]): Map<string, string[]> {
 const whereWords = (parentId: string): string => (parentId === TOP ? 'at the top level' : `inside ${parentId}`)
 
 /** Everything that differs between the project as Claude last saw it and the board, so that the one and the lines give the other exactly. */
-export function boardChanges(seen: Project, now: Project): string[] {
+function boardChanges(seen: Project, now: Project): string[] {
   const old = new Map(flatten(seen).map(row => [row.node.id, row]))
   const rows = flatten(now)
   const kids = childIds(rows)

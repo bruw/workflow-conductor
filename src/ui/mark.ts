@@ -31,7 +31,7 @@ export type MarkPalette = Record<Look | 'line', string>
 
 /** Raw colours, since a theme key cannot be blended: the persona's orange, the theme's success green, a grey for what waits. */
 export const DARK: MarkPalette = { lead: '#d77757', done: '#4eba65', wait: '#5c5c5c', line: '#5c5c5c' }
-export const LIGHT: MarkPalette = { lead: '#d77757', done: '#2c7a39', wait: '#b4b4b4', line: '#b4b4b4' }
+const LIGHT: MarkPalette = { lead: '#d77757', done: '#2c7a39', wait: '#b4b4b4', line: '#b4b4b4' }
 
 export function markPalette(theme: string | undefined): MarkPalette {
   return theme?.startsWith('light') ? LIGHT : DARK

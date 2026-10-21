@@ -48,8 +48,8 @@ export const NO_PHASE = '(no phase)'
 export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
 export const SPIN_MS = 96
 export const FAILED = '✗'
-export const DEFAULT_WIDTH = 60
-export const BAR_WIDTH = 8
+const DEFAULT_WIDTH = 60
+const BAR_WIDTH = 8
 
 const MIN_WIDTH = 36
 const EIGHTHS = ['▏', '▎', '▍', '▌', '▋', '▊', '▉'] as const
@@ -150,7 +150,7 @@ function tally(counts: Counts & { tokens: number }): Part[] {
 const row = (fields: Omit<Row, 'text'>): Row => ({ ...fields, text: fields.parts.map(part => part.text).join('') })
 
 /** Agents grouped by phase in first-seen order; agents without one come last. */
-export function groupByPhase(state: RunState): { phase: string; agents: AgentRun[] }[] {
+function groupByPhase(state: RunState): { phase: string; agents: AgentRun[] }[] {
   const groups = new Map<string, AgentRun[]>()
   const loose: AgentRun[] = []
 

@@ -11,17 +11,14 @@ import { replayDue } from './replay'
 // Reaches everything outside through a TrackerHost, so it runs under a fake host in tests.
 
 export const TICK_MS = 96
-/**
- * Every agent that ended since the last spawn was aborted, none runs, and no spawn came for this long: the run was stopped
- * where the engine sends no notice of it (the workflow view). A skipped agent is aborted too, and its run spawns on at once.
- */
+/** The engine sends no notice of a stop from the workflow view; a skipped agent is aborted too, but its run spawns on at once. */
 export const STOPPED_MS = 8000
 /** A handoff waits this long for a run under another name than its project's; a prompt from the person starts the wait again. */
 export const HANDOFF_MS = 180_000
 /** A slow replay spreads its events over this long. */
 export const REPLAY_MS = 10_000
 /** An agent neither heard from (a spawn, a usage count) nor ended for this long is held failed, so its run can end. */
-export const STALE_MS = 30 * 60_000
+const STALE_MS = 30 * 60_000
 
 // In ticks. A full state write may go out every tick (~10/s); the rest are slower.
 const USAGE_EVERY = 5
@@ -456,10 +453,7 @@ export function createTracker() {
       apply([{ kind: 'agent-end', agentId, ok: end.ok, durationMs: end.durationMs, tokens }])
     },
 
-    /**
-     * The engine's notice that task `taskId` ended, with its status word. Said again for every drawing of the notice: only the
-     * first counts. A run held stopped for want of a notice takes the status a later one gives.
-     */
+    /** Raised again on every drawing of the notice, so only the first counts; a run held stopped takes a later one's status. */
     taskEnded(taskId: string, status: string, durationMs?: number): void {
       if (state.taskId === undefined || state.taskId !== taskId) return
       const ending = endingOf(status)

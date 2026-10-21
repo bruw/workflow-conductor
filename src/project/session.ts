@@ -26,7 +26,7 @@ import { TEMPLATES } from './templates'
 export const PROJECT_PANE_ID = 'conductor-project'
 export const PROJECT_PANE_TITLE = 'Conductor project'
 export const PROJECT_DIR = '.claude/workflow-conductor'
-export const BLANK_TEMPLATE_ID = 'blank'
+const BLANK_TEMPLATE_ID = 'blank'
 export const DEFAULT_PROJECT_NAME = 'untitled'
 
 /** `pick`: the start screen. `error`: the saved file could not be read. */
@@ -117,7 +117,7 @@ export function handoffOf(name: string, project: Project): { name: string; nodeI
 export type GraphBox = { columns: number; rows: number }
 
 /** The room assumed where none was told (nothing drawn yet). */
-export const GRAPH_BOX: GraphBox = { columns: 100, rows: 40 }
+const GRAPH_BOX: GraphBox = { columns: 100, rows: 40 }
 
 export type RunContext = {
   /** A run of this project is in progress, or Claude is drafting it: every edit is refused. */
@@ -131,7 +131,7 @@ export type RunContext = {
 
 export const LOCK_NOTICE = 'run in progress · editing locked'
 export const DRAFT_LOCK_NOTICE = 'Claude is drafting · editing opens when it is done'
-export function lockNotice(context: Pick<RunContext, 'drafting'>): string {
+function lockNotice(context: Pick<RunContext, 'drafting'>): string {
   return context.drafting ? DRAFT_LOCK_NOTICE : LOCK_NOTICE
 }
 
@@ -300,7 +300,7 @@ export const REVEAL_STEPS = 12
 export type StartEntry = { kind: 'saved' | 'template' | 'blank' | 'replay' | 'recording'; id: string; title: string; blocks: number; note: string }
 
 /** The recorded runs the start screen replays in the run view, by the name of their fixture. */
-export const RECORDINGS = ['review-41', 'partial-29'] as const
+const RECORDINGS = ['review-41', 'partial-29'] as const
 
 /** In the order `w` / `s` walk them. Under the projects: what is not a project to open. */
 export function startEntries(saved: readonly SavedProject[], templates: readonly Template[] = TEMPLATES): StartEntry[] {
@@ -341,7 +341,7 @@ export function previewProps(project: Project, box: GraphBox = GRAPH_BOX): Graph
   return { project, mode: 'run', selectedId: null, viewRootId: null, problems: {}, openAt: null, scroll: {}, columns: graphColumns(box.columns), rows: Math.max(1, box.rows), unmapped: 0, wheel: { from: '', rows: 0 } }
 }
 
-export function whereIs(project: Project, id: string): string {
+function whereIs(project: Project, id: string): string {
   const row = flatten(project).find(one => one.node.id === id)
   if (!row) return ''
   const parent = row.parentId === undefined ? undefined : findNode(project, row.parentId)
@@ -407,7 +407,7 @@ export function graphProps(project: Project, ui: ProjectUi, box: GraphBox = GRAP
 }
 
 /** The graph as the Client draws it for this state: what the keys walk. */
-export function graphOf(project: Project, ui: ProjectUi, context: RunContext = {}): GraphLayout {
+function graphOf(project: Project, ui: ProjectUi, context: RunContext = {}): GraphLayout {
   return graphLayout(graphProps(project, ui, context.graph, context.run ? runOverlay(context.run) : undefined))
 }
 
@@ -427,7 +427,7 @@ export function crumbs(project: Project, rootId: string | null): { id: string; t
   return out
 }
 
-export function blockName(node: { id: string; name: string }): string {
+function blockName(node: { id: string; name: string }): string {
   return `${node.id} ${clip(node.name, 24)}`
 }
 
@@ -534,7 +534,7 @@ export function retypeBlock(project: Project | null, ui: ProjectUi, id: string, 
   return settle(project, { ...ui, editing: false, freshId: null, picker: null }, renamed, ui.selectedId, `${id} is now ${typeName(to)}`, context)
 }
 
-export function retypeChoices(node: { type: NodeType; children?: readonly unknown[] }): NodeType[] {
+function retypeChoices(node: { type: NodeType; children?: readonly unknown[] }): NodeType[] {
   if (node.type === 'start') return []
   return NODE_TYPES.filter(type => type !== 'start' && ((node.children?.length ?? 0) === 0 || canHoldChildren(type)))
 }
@@ -542,7 +542,7 @@ export function retypeChoices(node: { type: NodeType; children?: readonly unknow
 const FIRST_BLOCK = 'the first block'
 
 /** `after n4 (in n2)`, `first in n2`, `at the end`: the place is a list and an index; the words name the neighbour. */
-export function placeLabel(project: Project, at: Place): string {
+function placeLabel(project: Project, at: Place): string {
   const parent = at.parentId === undefined ? undefined : findNode(project, at.parentId)
   const list = parent ? (parent.children ?? []) : project.nodes
   const before = list[at.index - 1]
@@ -550,7 +550,7 @@ export function placeLabel(project: Project, at: Place): string {
   return parent ? `first in ${parent.id}` : list.length === 0 ? FIRST_BLOCK : 'at the start'
 }
 
-export function placeBy(project: Project, id: string | null, where: AddWhere): Place {
+function placeBy(project: Project, id: string | null, where: AddWhere): Place {
   const row = id === null ? undefined : flatten(project).find(one => one.node.id === id)
   if (!row) return { index: project.nodes.length }
   if (where === 'inside') return { parentId: row.node.id, index: row.node.children?.length ?? 0 }
@@ -559,13 +559,13 @@ export function placeBy(project: Project, id: string | null, where: AddWhere): P
 }
 
 /** The sides `n` goes round. Nothing goes before the start block. */
-export function addSides(node: Pick<ProjectNode, 'type'>): AddWhere[] {
+function addSides(node: Pick<ProjectNode, 'type'>): AddWhere[] {
   if (node.type === 'start') return ['after']
   return canHoldChildren(node.type) ? ['after', 'inside', 'before'] : ['after', 'before']
 }
 
 /** As `n` opens it on a block (`addPlace`). `frame`: the block is the one the view shows. */
-export function openAdd(project: Project, node: ProjectNode | undefined, frame: boolean = false): NonNullable<ProjectUi['picker']> {
+function openAdd(project: Project, node: ProjectNode | undefined, frame: boolean = false): NonNullable<ProjectUi['picker']> {
   if (!node) return { at: addPlace(project, null, null), query: '' }
   // The same place the graph lights its `[+]` at.
   const at = addPlace(project, node.id, frame ? node.id : null)
@@ -573,7 +573,7 @@ export function openAdd(project: Project, node: ProjectNode | undefined, frame: 
 }
 
 /** `n` pressed in the add list. Returns `ui` itself where there is no block to go round. */
-export function cyclePlace(project: Project, ui: ProjectUi): ProjectUi {
+function cyclePlace(project: Project, ui: ProjectUi): ProjectUi {
   const picker = ui.picker
   const node = picker?.anchorId === undefined ? undefined : findNode(project, picker.anchorId)
   if (!picker || !node || picker.retypeId !== undefined) return ui
@@ -714,10 +714,7 @@ export function openRetype(project: Project | null, ui: ProjectUi, id: string, c
 /** `opens`: a block type whose kinds the list shows next. */
 export type PickRow = BlockRef & { opens?: boolean }
 
-/**
- * With something typed: every block whose name holds it. With nothing typed: the blocks, and one that has kinds opens on them.
- * A block being retyped lists its own kinds first, and only what it may become.
- */
+/** A block being retyped lists its own kinds first, and only what it may become. */
 export function pickerMatches(project: Project | null, picker: NonNullable<ProjectUi['picker']>): PickRow[] {
   const retyped = picker.retypeId === undefined || project === null ? undefined : findNode(project, picker.retypeId)
   const allowed = picker.retypeId === undefined ? null : retypeChoices(retyped ?? { type: 'agent' })
@@ -738,11 +735,11 @@ export function movePick(project: Project | null, ui: ProjectUi, by: number): Pr
 }
 
 /** The key the add list keeps for itself while nothing is typed in its filter: the place. */
-export const PICKER_PLACE = 'n'
+const PICKER_PLACE = 'n'
 /** One more while it lists a block's kinds: back to the blocks. */
-export const PICKER_BACK = 'b'
+const PICKER_BACK = 'b'
 /** The key that closes the add list, wherever it is typed: no block's or kind's name holds it. */
-export const PICKER_CLOSE = 'x'
+const PICKER_CLOSE = 'x'
 
 function forgetNav(picker: NonNullable<ProjectUi['picker']>): NonNullable<ProjectUi['picker']> {
   const { nav: _nav, lead: _lead, ...rest } = picker
@@ -813,10 +810,10 @@ export function pickBlock(project: Project | null, ui: ProjectUi, choice: Partia
 }
 
 /** Each has a field of its own in the detail pane; model and effort are stepped on the card. */
-export const TEXT_KNOBS = ['goal', 'args', 'condition', 'oncePer', 'stopCondition', 'output'] as const
-export type TextKnob = (typeof TEXT_KNOBS)[number]
+export const FIELD_KNOBS = ['goal', 'args', 'condition', 'oncePer', 'stopCondition', 'output'] as const
+export type TextKnob = (typeof FIELD_KNOBS)[number]
 
-export const DRAFTING_NOTE = 'Claude is drafting this project: blocks appear here as they are written'
+const DRAFTING_NOTE = 'Claude is drafting this project: blocks appear here as they are written'
 /** Under the splash while a draft is awaited. */
 export const DRAFT_WAIT_NOTE = 'Claude is drafting your workflow · answer its questions in the prompt'
 
@@ -833,9 +830,9 @@ export function fitsFull(bodyColumns: number, bodyRows: number): boolean {
 }
 
 /** The detail pane beside the graph: about this share of the columns, within these bounds. */
-export const DETAIL_SHARE = 0.3
-export const DETAIL_MIN_W = 34
-export const DETAIL_MAX_W = 52
+const DETAIL_SHARE = 0.3
+const DETAIL_MIN_W = 34
+const DETAIL_MAX_W = 52
 
 export function detailWidth(columns: number): number {
   return Math.max(DETAIL_MIN_W, Math.min(DETAIL_MAX_W, Math.floor(columns * DETAIL_SHARE)))
@@ -847,7 +844,7 @@ export function detailWidth(columns: number): number {
 export const HELP_PAGES = 4
 
 /** The third help page. */
-export const KEY_HELP: readonly (readonly [string, string])[] = [
+const KEY_HELP: readonly (readonly [string, string])[] = [
   ['w a s d', 'move the selection'],
   ['Shift+W S', 'move the block one place up / down, into and out of the containers on its way'],
   ['Shift+A D', 'swap an arm with the one beside it'],
@@ -881,7 +878,7 @@ function table(pairs: readonly (readonly [string, string])[], columns: number): 
 }
 
 /** The gap after the column is counted. */
-export function helpKeyWidth(pairs: readonly (readonly [string, string])[] = KEY_HELP): number {
+function helpKeyWidth(pairs: readonly (readonly [string, string])[] = KEY_HELP): number {
   return Math.max(...pairs.map(([key]) => key.length)) + 2
 }
 
@@ -890,7 +887,7 @@ export function helpColumn(page: number): number {
 }
 
 /** The first help page on the start screen, where no block is selected. */
-export const START_HELP: readonly string[] = [
+const START_HELP: readonly string[] = [
   'A project is a workflow drawn as a graph of blocks: agents, the code between them, and the containers that run them in a row, at once or in a loop.',
   'The Up and Down arrows choose a row (w and s too), Enter opens it. A saved project opens as it was left; a template starts a new project, and Blank an empty one.',
   `Nothing is written until the first edit. Each saved project is a file in ${PROJECT_DIR}/: rename or delete it there.`,
@@ -946,7 +943,7 @@ export function runSummary(run: RunState, elapsedMs: number | null, room: number
 export type RunTimes = { runId: string | null; startedAt: number | null; endedAt: number | null; seenAt: number | null }
 
 /** The elapsed time shown moves on about this often while the run is live. */
-export const ELAPSED_STEP_MS = 1000
+const ELAPSED_STEP_MS = 1000
 
 export function initialTimes(): RunTimes {
   return { runId: null, startedAt: null, endedAt: null, seenAt: null }
@@ -974,7 +971,7 @@ export function elapsedOf(times: RunTimes, run: RunState): number | null {
 }
 
 /** The last block in the project's order with an agent running: the front of the work. */
-export function runningBlock(project: Project, run: RunState): string | null {
+function runningBlock(project: Project, run: RunState): string | null {
   const busy = flatten(project).filter(row => (run.byNode[row.node.id]?.running ?? 0) > 0)
   return busy.at(-1)?.node.id ?? null
 }
@@ -987,7 +984,7 @@ export function followRun(ui: ProjectUi, project: Project | null, run: RunState,
   return { ...ui, selectedId: id, confirmId: null, editing: false, freshId: null }
 }
 
-export function failedBlock(project: Project, run: RunState): string | null {
+function failedBlock(project: Project, run: RunState): string | null {
   return flatten(project).find(row => (run.byNode[row.node.id]?.failed ?? 0) > 0)?.node.id ?? null
 }
 
@@ -1000,10 +997,10 @@ export function endRun(ui: ProjectUi, project: Project | null, run: RunState, ru
 }
 
 /** The columns of the terminal the dock leaves to the transcript: a sliver, the prompt stays full width. */
-export const DOCK_MARGIN = 30
+const DOCK_MARGIN = 30
 /** In a terminal narrower than DOCK_ROOMY the sliver is the least the dock leaves by itself, so the graph keeps its room. */
-export const DOCK_MARGIN_TIGHT = 24
-export const DOCK_ROOMY = 130
+const DOCK_MARGIN_TIGHT = 24
+const DOCK_ROOMY = 130
 
 /** Undefined with the width unknown: nothing is asked, and the dock keeps the width it has. */
 export function dockColumns(terminal: number | undefined): number | undefined {
@@ -1011,10 +1008,7 @@ export function dockColumns(terminal: number | undefined): number | undefined {
   return Math.max(40, Math.floor(terminal) - (terminal < DOCK_ROOMY ? DOCK_MARGIN_TIGHT : DOCK_MARGIN))
 }
 
-/**
- * What bare `/conductor` shows: a run in progress, as its project or the phase view; else the project this session last had open.
- * Never an empty run view. Both hooks modules ask this, so either may be asked first.
- */
+/** Never an empty run view. Both hooks modules ask this, so either may be asked first. */
 export function bareTarget(status: RunState['status'], runProject: string | null, ui: Pick<ProjectUi, 'name' | 'status'>): { view: 'run' } | { view: 'project'; name: string; live: boolean } {
   if (status === 'running') return runProject === null ? { view: 'run' } : { view: 'project', name: runProject, live: true }
   if (ui.status !== 'closed') return { view: 'project', name: ui.name, live: false }

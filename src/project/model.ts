@@ -192,7 +192,7 @@ export function emptyProject(name: string): Project {
   return withStart({ version: 1, name: toKebab(name) || 'untitled', nodes: [] })
 }
 
-export const START_KNOBS: readonly (keyof Knobs)[] = ['goal', 'args']
+const START_KNOBS: readonly (keyof Knobs)[] = ['goal', 'args']
 
 /** Why a block may not say these knobs, or undefined: the goal and the args are the start block's alone. */
 export function startOnly(node: Pick<ProjectNode, 'type' | 'knobs'>): string | undefined {

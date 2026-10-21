@@ -28,7 +28,7 @@ import {
   LOCK_NOTICE,
   REVEAL_STEPS,
   SCRATCH_PREFIX,
-  TEXT_KNOBS,
+  FIELD_KNOBS,
   addHeading,
   agentsOf,
   applyMessage,
@@ -78,7 +78,7 @@ import {
   withoutKeys,
 } from '../src/project/session'
 import type { ProjectUi, GraphBox, PickRow, RunContext, SavedProject, Step, TextKnob } from '../src/project/session'
-import { FIELD_LABEL, PALETTE_GROUPS, TEACH, fieldWord as fieldLabel, groupOf, hasLogic, hasName, knobsOf, pickName, placeholderOf, teachOf, useWhen } from '../src/project/teach'
+import { FIELD_LABEL, PALETTE_GROUPS, TEACH, fieldWord, groupOf, hasLogic, hasName, knobsOf, pickName, placeholderOf, teachOf, useWhen } from '../src/project/teach'
 import type { BlockRef } from '../src/project/teach'
 import { TEMPLATES } from '../src/project/templates'
 import { emptyRunState } from '../src/run/events'
@@ -134,7 +134,7 @@ const isField = (element: string | undefined): boolean => {
   const base = baseOf(element ?? '')
   return base === NAME_FIELD || base === LOGIC_FIELD || base.startsWith(KNOB_PREFIX)
 }
-const fieldWord = (base: string): string => fieldLabel(base === NAME_FIELD ? 'name' : base === LOGIC_FIELD ? 'logic' : base.slice(KNOB_PREFIX.length))
+const draftFieldWord = (base: string): string => fieldWord(base === NAME_FIELD ? 'name' : base === LOGIC_FIELD ? 'logic' : base.slice(KNOB_PREFIX.length))
 const firstField = (node: { type: ProjectNode['type'] }): string => (hasName(node) ? NAME_FIELD : `${KNOB_PREFIX}goal`)
 /**
  * Where the ring rests while no field is open: an Input (a Button's hotkey cannot see Shift), first among the stops, since the engine keeps the ring by its place.
@@ -475,7 +475,7 @@ const flushDrafts = ($: EngineInterface, keep = false): Promise<string | null> =
     const ui = await read($, uiAtom)
     let project: Project | null = await read($, projectAtom)
     // The project typed for is not the one shown, or a run locks it: nothing can be saved, and it is said.
-    const lost = `unsaved text in ${Object.keys(pending.values).map(fieldWord).join(', ')} discarded`
+    const lost = `unsaved text in ${Object.keys(pending.values).map(draftFieldWord).join(', ')} discarded`
     if (!project || ui.status !== 'ready' || ui.name !== pending.name) {
       $.ui.toast(`conductor: ${lost} (project ${pending.name} is no longer on the board)`)
 
@@ -2401,7 +2401,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const parent = node ? flatten(project).find(row => row.node.id === node.id)?.parentId : undefined
     const around = parent === undefined ? undefined : findNode(project, parent)
     const knobs = node ? knobsOf(node, around?.type) : []
-    const textKnobs = TEXT_KNOBS.filter(key => knobs.includes(key))
+    const textKnobs = FIELD_KNOBS.filter(key => knobs.includes(key))
     const typed = (key: string, saved: string): string => (node && drafts.id === node.id && drafts.name === ui.name ? (drafts.values[key] ?? saved) : saved)
     // Text typed and not saved is saved as soon as a drawing sees its field cannot be typed in: the pane lost the keyboard (Escape, which no hook hears; a chat turn),
     // changed shape (a resize moves it between dock and inline and takes the keys), or shows another block.

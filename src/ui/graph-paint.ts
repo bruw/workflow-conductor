@@ -96,14 +96,14 @@ const FRAMES: Record<'leaf' | 'chain' | 'stack', { rest: Frame; selected: Frame 
 /** A leaf in the pointer's hand. */
 const LIFTED: Frame = ['╭', '╴', '╮', '╎', '╰', '╯']
 
-function shapeOf(card: Pick<GraphCard, 'type' | 'flow'>): keyof typeof FRAMES {
+function frameOf(card: Pick<GraphCard, 'type' | 'flow'>): keyof typeof FRAMES {
   return card.flow ?? 'leaf'
 }
 
 /** `↓` hands each result on as it arrives, `all ⇓` waits for all of them. */
-export const ARROW = { stream: '↓', barrier: '⇓' } as const
-export const ARROW_ALL = 'all '
-export const GUTTER_GLYPH = { left: '◀', right: '▶' } as const
+const ARROW = { stream: '↓', barrier: '⇓' } as const
+const ARROW_ALL = 'all '
+const GUTTER_GLYPH = { left: '◀', right: '▶' } as const
 
 function accentOf(type: NodeType | 'unmapped', gray: boolean): string {
   return type === 'unmapped' ? FADED : (gray ? GRAY : ACCENT)[type]
@@ -115,7 +115,7 @@ function pressed(scope: string): Hover {
 }
 
 /** Each block's own agents plus those of everything it holds, drawn or not. Keyed by block id, and `unmapped`. */
-export function graphRuns(layout: GraphLayout, run: RunOverlay): Map<string, CardRun> {
+function graphRuns(layout: GraphLayout, run: RunOverlay): Map<string, CardRun> {
   const blocks: { id: string; type: NodeType | 'unmapped'; parentId: string | undefined }[] = [...layout.blocks]
   if (layout.cards.some(card => card.type === 'unmapped')) blocks.push({ id: UNMAPPED_ID, type: 'unmapped', parentId: undefined })
   const sums = new Map<string, NodeRun>()
@@ -226,7 +226,7 @@ export function paintGraph(layout: GraphLayout, options: GraphPaintOptions): Spa
     const tint = faded ? gone : accentOf(card.type, gray)
     // The selection is the heavy border in `claude`; at rest a leaf's border is quiet and a container's has its type's colour.
     const border = faded ? gone : card.selected || flashed ? 'claude' : card.kind === 'leaf' ? RULE : tint
-    const shape = shapeOf(card)
+    const shape = frameOf(card)
     const frame = lifted ? (shape === 'leaf' ? LIFTED : FRAMES[shape].rest) : card.selected ? FRAMES[shape].selected : FRAMES[shape].rest
     return { faded, loud: flashed && flashStrong, tint, frame, edge: look(card.selected && !faded ? { color: border, bold: true } : { color: border }), run }
   }

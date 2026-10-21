@@ -173,12 +173,12 @@ export function problemFields(rule: LintRule): string[] {
   return []
 }
 
-export function lintIds(lints: readonly Lint[]): string[] {
+function lintIds(lints: readonly Lint[]): string[] {
   return [...new Set(lints.map(one => one.nodeId))]
 }
 
 /** How many block ids a preflight line names before it says `…`. */
-export const LINT_IDS_MAX = 6
+const LINT_IDS_MAX = 6
 
 /** `problems in n3, n5`, or null where there are none: said when a project is handed off. */
 export function preflightLine(project: Project): string | null {

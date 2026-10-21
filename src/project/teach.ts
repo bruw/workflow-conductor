@@ -26,7 +26,7 @@ export const PALETTE_GROUPS: readonly { group: PaletteGroup; heading: string }[]
 ]
 
 export const HINT_MAX = 25
-export const WHEN_MAX = 70
+const WHEN_MAX = 70
 
 export const TEACH: Record<NodeType, Teach> = {
   agent: {
@@ -500,7 +500,7 @@ export function fieldWord(field: string): string {
   return (FIELD_LABEL as Readonly<Record<string, string>>)[field] ?? field
 }
 
-export const FIELD_PLACEHOLDER = {
+const FIELD_PLACEHOLDER = {
   logic: 'what this block does and why, for whoever reads the project',
   goal: 'what this workflow is for, in a sentence',
   args: 'what it is run on, e.g. { target? }: a branch or a path; empty: no input',
@@ -550,10 +550,7 @@ export function allBlocks(): BlockRef[] {
   })
 }
 
-/**
- * `ver` finds `agent verify` and `loop converged`, `loop` every kind of loop; a name that starts with it comes first.
- * An empty query matches nothing: the list then shows the blocks, not their kinds.
- */
+/** An empty query matches nothing, so the list shows the blocks, not their kinds. */
 export function searchBlocks(query: string): BlockRef[] {
   const wanted = query.trim().toLowerCase().replace(/\s+/g, ' ')
   if (wanted === '') return []

@@ -194,7 +194,7 @@ export function syncGraph(state: GraphState, context: GraphContext): GraphState 
 /** Key events named as the key catcher names them. Few arrive: the pane takes the keyboard back at once after a click. */
 const NAMED_KEYS: Record<string, string> = { return: ENTER, enter: ENTER, up: 'w', left: 'a', down: 's', right: 'd' }
 
-export function graphKey(input: Pick<GraphKey, 'key' | 'shift'>): string | undefined {
+function graphKey(input: Pick<GraphKey, 'key' | 'shift'>): string | undefined {
   const key = (Object.hasOwn(NAMED_KEYS, input.key) ? NAMED_KEYS[input.key] : undefined) ?? (input.key.length === 1 && input.shift ? input.key.toUpperCase() : input.key)
   return Object.hasOwn(KEY_OPS, key) ? key : undefined
 }
@@ -302,7 +302,7 @@ export function graphReduce(state: GraphState, input: GraphInput, context: Graph
 }
 
 /** A drag held at the window's edge pans one row per this long. */
-export const DRAG_SCROLL_MS = 96
+const DRAG_SCROLL_MS = 96
 
 /** 0 where there is no more graph that way. */
 export function dragScroll(state: Pick<GraphState, 'drag' | 'panY'>, context: GraphContext): -1 | 0 | 1 {
@@ -362,7 +362,7 @@ export function graphMoving(state: Pick<GraphState, 'motionX' | 'motionY' | 'mot
 
 /** How long the mark on freshly edited blocks shows, and how long its first, louder part lasts. */
 export const FLASH_MS = 800
-export const FLASH_STRONG_MS = 400
+const FLASH_STRONG_MS = 400
 
 /** A `seq` not seen before starts the mark. Returns `state` itself otherwise. */
 export function flashGraph(state: GraphState, flash: GraphProps['flash']): GraphState {

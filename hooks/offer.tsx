@@ -56,10 +56,7 @@ export const takeOffered = (): boolean => {
   return was
 }
 
-/**
- * The project the last "Conductor" answer led to, until it is handed off or run. While it waits the question is not
- * asked again: Claude would draft a second project, or write a script the board knows nothing of.
- */
+/** While it waits the question is not asked again: Claude would draft a second project, or a script the board knows nothing of. */
 let waiting: string | null = null
 /** The tool already answered in this turn that a project waits: a second call is for another workflow, and asks. */
 let answered = false

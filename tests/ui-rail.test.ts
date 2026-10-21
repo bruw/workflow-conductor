@@ -98,14 +98,14 @@ test('rows are header, phases in first-seen order, the loose group, footer', asy
 
   const header = byKey(rows, 'header')
   expect(header?.counts).toEqual({ total: 5, running: 2, done: 2, failed: 1 })
-  expect(header?.tokens).toBe('23.3k')
+  expect(header?.tokens).toBe(fmtCount(4100 + 3300 + 900 + 15_000))
   expect(header?.color).toBe('claude')
 
   const review = byKey(rows, 'phase:Review')
-  expect(review).toMatchObject({ glyph: SPINNER[0], color: 'claude', open: false, tokens: '7.4k' })
+  expect(review).toMatchObject({ color: 'claude', open: false, tokens: fmtCount(4100 + 3300) })
   expect(review?.counts).toEqual({ total: 2, running: 1, done: 1, failed: 0 })
 
-  expect(byKey(rows, 'phase:Verify')).toMatchObject({ color: 'error', open: false, tokens: '15.9k' })
+  expect(byKey(rows, 'phase:Verify')).toMatchObject({ color: 'error', open: false, tokens: fmtCount(900 + 15_000) })
   expect(byKey(rows, `phase:${NO_PHASE}`)?.counts).toEqual({ total: 1, running: 1, done: 0, failed: 0 })
 })
 
@@ -117,7 +117,7 @@ test('a phase with a failed agent opens by itself, and the person can close it',
   expect(rows.filter(row => row.kind === 'agent').map(row => row.key)).toEqual(['agent:a3', 'agent:a5'])
 
   const failed = byKey(rows, 'agent:a3')
-  expect(failed).toMatchObject({ color: 'error', phase: 'Verify', tokens: '900' })
+  expect(failed).toMatchObject({ color: 'error', phase: 'Verify', tokens: fmtCount(900) })
 
   const closed = togglePhase({ expanded: [], collapsed: [] }, 'Verify', true)
   expect(closed).toEqual({ expanded: [], collapsed: ['Verify'] })
@@ -127,13 +127,13 @@ test('a phase with a failed agent opens by itself, and the person can close it',
   expect(reopened).toEqual({ expanded: ['Verify'], collapsed: [] })
 })
 
-test('an open phase lists its agents with a spinner on the running ones', async () => {
+test('an open phase lists its agents under it, the running one in the run colour', async () => {
   const rows = buildRunRows(MIXED, { expanded: new Set(['Review']), collapsed: new Set(['Verify']), now: SPIN_MS * 2 })
   const agents = rows.filter(row => row.kind === 'agent')
 
   expect(agents.map(row => row.key)).toEqual(['agent:a1', 'agent:a2'])
-  expect(agents[0]).toMatchObject({ glyph: SPINNER[2], color: 'claude', tokens: '4.1k' })
-  expect(agents[1]).toMatchObject({ color: 'success', tokens: '3.3k' })
+  expect(agents[0]).toMatchObject({ color: 'claude', tokens: fmtCount(4100) })
+  expect(agents[1]).toMatchObject({ color: 'success', tokens: fmtCount(3300) })
   expect(rows.indexOf(agents[0] as Row)).toBe(rows.findIndex(row => row.key === 'phase:Review') + 1)
 })
 

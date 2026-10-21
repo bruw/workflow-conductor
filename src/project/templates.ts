@@ -94,7 +94,7 @@ export function research(): Project {
   }
 }
 
-export function migrate(): Project {
+function migrate(): Project {
   return {
     version: 1,
     name: 'migrate',
@@ -123,7 +123,7 @@ export function migrate(): Project {
   }
 }
 
-export function judgePanel(): Project {
+function judgePanel(): Project {
   return {
     version: 1,
     name: 'judge-panel',

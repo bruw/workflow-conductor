@@ -38,7 +38,7 @@ export const WHY_TEXT: Record<CompactWhy, string> = {
 }
 
 /** The designer's rows, and the prompt's under them. */
-export const DOCK_MIN_ROWS = FULL_MIN_ROWS + 6
+const DOCK_MIN_ROWS = FULL_MIN_ROWS + 6
 
 export function wouldDock(viewport: { columns: number; rows: number; isFullscreen?: boolean } | undefined): boolean {
   return viewport !== undefined && viewport.isFullscreen === true && viewport.columns >= DOCK_MIN_TERMINAL && viewport.rows >= DOCK_MIN_ROWS

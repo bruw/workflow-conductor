@@ -8,7 +8,7 @@ export type HistoryEntry = { project: Project; what: string }
 
 export type History = { undo: HistoryEntry[]; redo: HistoryEntry[] }
 
-export const HISTORY_MAX = 50
+const HISTORY_MAX = 50
 
 /** What every message announcing a change ends with. */
 export const UNDO_HINT = '[u] Undo'

@@ -20,38 +20,38 @@ export type Direction = 'left' | 'right' | 'up' | 'down'
 export const UNMAPPED_ID = 'unmapped'
 
 /** An arm of a stack is never narrower than this: fewer are shown, and the rest wait behind a gutter. */
-export const ARM_MIN_W = 28
+const ARM_MIN_W = 28
 /** The most rows an arm of a stack grows by, to end on the same row as its taller neighbours. */
-export const ARM_GROW_MAX = 3
+const ARM_GROW_MAX = 3
 /** A container more than this many containers below the view's root is drawn collapsed. */
-export const OPEN_DEPTH = 3
+const OPEN_DEPTH = 3
 /** A container whose inside would have fewer columns than this is drawn collapsed. */
-export const OPEN_MIN_W = 34
+const OPEN_MIN_W = 34
 /** The columns at each side of a carousel: `◀` or `▶` and the count hidden on that side. */
-export const GUTTER_W = 3
-export const NOTE_ROWS_MAX = 8
+const GUTTER_W = 3
+const NOTE_ROWS_MAX = 8
 /** The narrowest graph that is laid out: fewer columns are treated as this many (and the paint clips). */
-export const GRAPH_MIN_W = 12
+const GRAPH_MIN_W = 12
 /** The widest the graph's content is drawn: in a wider region it is centred. */
-export const GRAPH_MAX_W = 132
+const GRAPH_MAX_W = 132
 
 export function graphColumns(region: number): number {
   return Math.max(GRAPH_MIN_W, Math.min(GRAPH_MAX_W, Math.trunc(region) || 0))
 }
 
-export const SLOT = '[+]'
-export const SLOT_OPEN = '[+] Add block here'
-export const EMPTY = 'empty'
+const SLOT = '[+]'
+const SLOT_OPEN = '[+] Add block here'
+const EMPTY = 'empty'
 /** Under an empty project's `[+]`: the keys that start it, then what Claude can do. */
 export const EMPTY_KEYS: readonly (readonly [string, string])[] = [
   ['n', 'add a block'],
   ['e', 'say what this workflow is for'],
 ]
 export const EMPTY_NOTE: readonly string[] = ['A plain message to Claude in the prompt', 'can draft the project, or change it later.']
-export const EMPTY_W = Math.max(SLOT.length, ...EMPTY_KEYS.map(([key, text]) => key.length + 2 + text.length), ...EMPTY_NOTE.map(line => line.length))
-export const EMPTY_ROWS = 2 + EMPTY_KEYS.length + 1 + EMPTY_NOTE.length
+const EMPTY_W = Math.max(SLOT.length, ...EMPTY_KEYS.map(([key, text]) => key.length + 2 + text.length), ...EMPTY_NOTE.map(line => line.length))
+const EMPTY_ROWS = 2 + EMPTY_KEYS.length + 1 + EMPTY_NOTE.length
 export const NOT_SET = '[not set]'
-export const OPEN_HINT = 'o: open'
+const OPEN_HINT = 'o: open'
 
 export type SegRole =
   | 'type'
@@ -190,7 +190,7 @@ export function samePlace(a: Place | null | undefined, b: Place | null | undefin
   return a !== null && a !== undefined && b !== null && b !== undefined && a.parentId === b.parentId && a.index === b.index
 }
 
-export function childFlow(type: NodeType | undefined): Flow {
+function childFlow(type: NodeType | undefined): Flow {
   return type === 'parallel' || type === 'branch' ? 'stack' : 'chain'
 }
 
@@ -199,15 +199,15 @@ function cardText(node: ProjectNode): string {
   return (node.type === 'start' ? (node.knobs?.goal ?? '') : (node.logic ?? '')).trim()
 }
 
-export function armWord(type: NodeType | undefined): string {
+function armWord(type: NodeType | undefined): string {
   return type === 'branch' ? 'OR' : '∥'
 }
 
-export function noteRows(rows: number): number {
+function noteRows(rows: number): number {
   return Math.max(1, Math.min(NOTE_ROWS_MAX, Math.floor(rows / 3)))
 }
 
-export function stackShare(inner: number, count: number, type: NodeType | undefined): { share: number; shown: number; gap: number; carousel: boolean } {
+function stackShare(inner: number, count: number, type: NodeType | undefined): { share: number; shown: number; gap: number; carousel: boolean } {
   const gap = armWord(type).length + 2
   if (count <= 0) return { share: inner, shown: 0, gap, carousel: false }
   const all = Math.floor((inner - (count - 1) * gap) / count)
@@ -218,7 +218,7 @@ export function stackShare(inner: number, count: number, type: NodeType | undefi
 }
 
 /** `depth` counts the container itself. */
-export function drawnOpen(depth: number, width: number): boolean {
+function drawnOpen(depth: number, width: number): boolean {
   return depth <= OPEN_DEPTH && width - 4 >= OPEN_MIN_W
 }
 
@@ -226,7 +226,7 @@ export function drawnOpen(depth: number, width: number): boolean {
 const KNOB_MAX = 14
 
 /** Each with the digit that steps it (`stepKnob` in ops.ts): `1` model, `2` effort. */
-export function quickKnobs(node: Pick<ProjectNode, 'type' | 'kind'>): { key: string; knob: QuickKnob }[] {
+function quickKnobs(node: Pick<ProjectNode, 'type' | 'kind'>): { key: string; knob: QuickKnob }[] {
   const out: { key: string; knob: QuickKnob }[] = []
   for (const slot of [1, 2]) {
     const knob = quickKnob(node, slot)
@@ -291,7 +291,7 @@ function armWidth(arm: Arm): number {
 const BADGE = ' ! '
 
 /** `AGENT`, `AGENT verify`, `LOOP dry`: the kind is said where it is not the plain one. */
-export function typeLabel(block: Pick<ProjectNode, 'type' | 'kind'>): string {
+function typeLabel(block: Pick<ProjectNode, 'type' | 'kind'>): string {
   return `${block.type.toUpperCase()}${block.kind === undefined || block.kind === plainKind(block.type) ? '' : ` ${block.kind}`}`
 }
 
@@ -542,8 +542,8 @@ export const CRUMB_SEP = '  ›  '
 /** Cells at each side of a crumb's words that are the crumb's too: under the pointer, and where the view's own is lit. */
 export const CRUMB_PAD = 1
 /** In a window of at least `CRUMB_RULE_ROWS` rows: the crumbs, and a rule between them and the graph. */
-export const CRUMB_ROWS = 2
-export const CRUMB_RULE_ROWS = 8
+const CRUMB_ROWS = 2
+const CRUMB_RULE_ROWS = 8
 /** The level is said only where the row keeps this many columns for the crumbs. */
 const CRUMB_LEAST_W = 36
 
@@ -826,20 +826,20 @@ export function cardAt(layout: GraphLayout, x: number, y: number): GraphCard | u
 }
 
 /** The slot whose `[+]` (its words, and the cell on either side) is under a cell. */
-export function slotAt(layout: GraphLayout, x: number, y: number): GraphSlot | undefined {
+function slotAt(layout: GraphLayout, x: number, y: number): GraphSlot | undefined {
   return layout.slots.find(slot => slot.mark !== null && slot.mark.y === y && x >= slot.mark.x - 1 && x <= slot.mark.x + slot.mark.label.length)
 }
 
-export function gutterAt(layout: GraphLayout, x: number, y: number): GraphGutter | undefined {
+function gutterAt(layout: GraphLayout, x: number, y: number): GraphGutter | undefined {
   return layout.gutters.find(gutter => within(gutter, x, y))
 }
 
-export function chipAt(layout: GraphLayout, x: number, y: number): GraphChip | undefined {
+function chipAt(layout: GraphLayout, x: number, y: number): GraphChip | undefined {
   return layout.chips.find(chip => within(chip, x, y))
 }
 
 /** The last crumb (the view shown) and the `…` open nothing. */
-export function crumbAt(layout: GraphLayout, x: number): GraphCrumb | undefined {
+function crumbAt(layout: GraphLayout, x: number): GraphCrumb | undefined {
   return layout.crumbs.find(crumb => !crumb.last && crumb.id !== undefined && x >= crumb.x && x < crumb.x + crumb.w)
 }
 
@@ -925,7 +925,7 @@ function subtree(layout: GraphLayout, id: string): GraphCard[] {
 }
 
 /** How far (columns, a row counting four) a dragged card may be from a slot and still drop into it. */
-export const DROP_REACH = 16
+const DROP_REACH = 16
 
 export type GraphDrop = {
   slot: GraphSlot
@@ -1021,7 +1021,7 @@ export function navigate(project: Project, layout: GraphLayout, id: string | nul
   return stay === rootId ? stay : (here.parentId ?? stay)
 }
 
-export const ONLY_ARMS = 'only arms move sideways'
+const ONLY_ARMS = 'only arms move sideways'
 
 export type MoveTarget = { to: Place; reason?: undefined } | { to: null; reason: string }
 

@@ -74,7 +74,7 @@ export const MINIMIZE_KEYS = 'm'
 export const FOCUS_HINT = 'Ctrl+x tab: focus'
 
 /** Characters that arrive at once are keys up to this many; more is a paste. */
-export const BURST_MAX = 8
+const BURST_MAX = 8
 
 export const PASTE_NOTICE = 'pasted text is not keys: nothing was done'
 
@@ -194,7 +194,7 @@ export function legendItems(state: LegendState): Legend {
 export const LEGEND_GAP = 2
 
 /** `[n] New`: the brackets and the space are the 3. */
-export function legendCells(item: LegendItem): number {
+function legendCells(item: LegendItem): number {
   return item.keys.length + 3 + item.word.length
 }
 

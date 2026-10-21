@@ -12,7 +12,7 @@ export function parseNodeId(label: string): string | undefined {
 export type Mapping = { ids: ReadonlySet<string>; match?: Readonly<Record<string, readonly string[]>> }
 
 /** An exact string wins over any prefix, then the longest prefix, then the first block in project order. */
-export function matchNode(text: string, match: Mapping['match']): string | undefined {
+function matchNode(text: string, match: Mapping['match']): string | undefined {
   let found: string | undefined
   let length = -1
   for (const [id, patterns] of Object.entries(match ?? {})) {
@@ -28,7 +28,7 @@ export function matchNode(text: string, match: Mapping['match']): string | undef
 }
 
 /** The id the label opens with (with a project, only one it has), else a match on the label, else on the phase title. */
-export function nodeOf(label: string, phase: string | undefined, mapping?: Mapping): string | undefined {
+function nodeOf(label: string, phase: string | undefined, mapping?: Mapping): string | undefined {
   const parsed = parseNodeId(label)
   if (parsed !== undefined && (!mapping || mapping.ids.has(parsed))) return parsed
   if (!mapping?.match) return undefined

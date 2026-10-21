@@ -81,7 +81,7 @@ function startTaken(id: string): string {
   return `the project already has its start block (${id}): every project has one, first, and no other`
 }
 
-export const START_KEPT = 'the start block stays: every project has it, first. Clear its args for a workflow that takes no input'
+const START_KEPT = 'the start block stays: every project has it, first. Clear its args for a workflow that takes no input'
 
 /** `start` goes first whatever is asked, and nothing else goes before it. */
 export function placeFor(project: Pick<Project, 'nodes'>, type: NodeType, at: Place): Place {
@@ -230,8 +230,8 @@ export function retypeNode(project: Project, id: string, type: NodeType, kind?: 
 
 /** The knobs a digit steps on the selected block. */
 export type QuickKnob = 'model' | 'effort'
-export const MODEL_STEPS: readonly string[] = ['haiku', 'sonnet', 'opus']
-export const INHERIT = 'inherit'
+const MODEL_STEPS: readonly string[] = ['haiku', 'sonnet', 'opus']
+const INHERIT = 'inherit'
 
 export function quickKnob(node: Pick<ProjectNode, 'type' | 'kind'>, slot: number): QuickKnob | undefined {
   const has = (knob: keyof Knobs): boolean => offers(node, knob)
@@ -240,7 +240,7 @@ export function quickKnob(node: Pick<ProjectNode, 'type' | 'kind'>, slot: number
   return undefined
 }
 
-export function quickValue(node: Pick<ProjectNode, 'knobs'>, knob: QuickKnob): string {
+function quickValue(node: Pick<ProjectNode, 'knobs'>, knob: QuickKnob): string {
   return node.knobs?.[knob] ?? INHERIT
 }
 

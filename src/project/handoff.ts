@@ -13,11 +13,16 @@ export type Handoff = { text: string; context: string[] }
 /** Outline rows the tool for Claude shows before the rest is left to the file. */
 export const OUTLINE_MAX = 34
 /** `condition` is not among them: an arm's condition is said before its row. */
-const KNOB_KEYS = ['model', 'effort', 'isolation', 'agentType', 'output', 'oncePer', 'stopCondition'] as const
+const OUTLINE_KNOBS = ['model', 'effort', 'isolation', 'agentType', 'output', 'oncePer', 'stopCondition'] as const
 /** The most of a condition an outline row says; the file has the rest. */
-const WHEN_MAX = 72
+const CONDITION_MAX = 72
 
-const clip = (value: string, max: number = 24): string => (value.length > max ? `${value.slice(0, max - 1)}…` : value).replace(/\s+/g, ' ')
+// By code point, so a cut never splits a surrogate pair.
+const clipLine = (value: string, max: number = 24): string => {
+  const chars = [...value]
+  return (chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : value).replace(/\s+/g, ' ')
+}
+
 /** On one line and in JSON quotes, so that no name ends its string or starts a line of its own. */
 const quoted = (value: string): string => JSON.stringify(value.replace(/\s+/g, ' ').trim())
 
@@ -25,7 +30,7 @@ function armWords(project: Project, row: { node: { knobs?: { condition?: string 
   const parent = row.parentId === undefined ? undefined : flatten(project).find(one => one.node.id === row.parentId)?.node
   if (parent?.type !== 'branch') return ''
   const when = (row.node.knobs?.condition ?? '').replace(/\s+/g, ' ').trim()
-  if (when !== '') return `IF ${clip(when, WHEN_MAX)}: `
+  if (when !== '') return `IF ${clipLine(when, CONDITION_MAX)}: `
   const arms = parent.children?.length ?? 0
   return arms > 1 && row.index === arms - 1 ? 'ELSE: ' : 'IF (no condition set): '
 }
@@ -34,7 +39,7 @@ function armWords(project: Project, row: { node: { knobs?: { condition?: string 
 export function outline(project: Project): string[] {
   const rows = flatten(project)
   const lines = rows.slice(0, OUTLINE_MAX).map(row => {
-    const knobs = KNOB_KEYS.filter(key => row.node.knobs?.[key] !== undefined).map(key => `${key}=${clip(String(row.node.knobs?.[key]))}`)
+    const knobs = OUTLINE_KNOBS.filter(key => row.node.knobs?.[key] !== undefined).map(key => `${key}=${clipLine(String(row.node.knobs?.[key]))}`)
     const tail = [knobs.length > 0 ? `[${knobs.join(' ')}]` : '', row.node.logic ? '(has logic)' : ''].filter(Boolean).join(' ')
     return `${'  '.repeat(row.depth + 1)}${armWords(project, row)}${row.node.id} ${typeName(row.node)} ${quoted(row.node.name)}${tail ? ` ${tail}` : ''}`
   })
@@ -77,7 +82,7 @@ export type LastRun = { runId: string; transcriptDir?: string }
 export type HandoffScript = { path: string | null; run?: LastRun }
 
 /** Claude Code's own folder of saved workflows: it runs each `*.js` there by its `meta.name`, with `Workflow({ name })`. */
-export const SAVED_WORKFLOWS_DIR = '.claude/workflows'
+const SAVED_WORKFLOWS_DIR = '.claude/workflows'
 
 export function savedWorkflowFile(root: string, name: string): string {
   return `${root.replace(/\/+$/, '')}/${SAVED_WORKFLOWS_DIR}/${name}.js`
@@ -91,10 +96,7 @@ export function newestScript(ran: ScriptFile | null, copy: ScriptFile | null): s
   return copy.mtimeMs > ran.mtimeMs ? copy.path : ran.path
 }
 
-/**
- * A run's end, as the question whether to save its script reads it. `script`: the run's script, null where it cannot be read;
- * `copy`: the saved one, null where there is none; `answerable`: the main conversation started the run and a surface draws.
- */
+/** Null `script`: unreadable; null `copy`: none saved; `answerable`: the main conversation started the run and a surface draws. */
 export type SaveCase = { ending: 'done' | 'failed' | 'stopped'; project: string | undefined; script: string | null; copy: string | null; answerable: boolean }
 
 /** `save` a first copy, `update` one that differs, null to ask nothing. */
@@ -146,7 +148,7 @@ export function buildHandoff(project: Project, projectPath: string, script: Hand
     'Where a block\'s result sends work back (a rejection, failures, gaps), the agents that do that work are given those items in full.',
     '',
     `The user approved it on the board with r: do not call ${OFFER_TOOL_FULL_NAME} for it again.`,
-    `Ask, and wait for the answer, only about what is unresolved: ${args === '' ? '' : `what to run it on, unless they have said it (the start block's \`args\`: ${clip(args, WHEN_MAX)}); `}a flow that looks ambiguous or unintended.`,
+    `Ask, and wait for the answer, only about what is unresolved: ${args === '' ? '' : `what to run it on, unless they have said it (the start block's \`args\`: ${clipLine(args, CONDITION_MAX)}); `}a flow that looks ambiguous or unintended.`,
     'Otherwise say in one or two lines what the workflow will do, with its worst-case agent count and rough wall-clock from',
     'its loop caps and fan-outs, and run it.',
     '',

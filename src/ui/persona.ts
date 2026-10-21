@@ -95,8 +95,8 @@ const FULL: Record<Pose, Sprite> = {
   ],
 }
 
-export const FULL_W = 26
-export const FULL_H = 28
+const FULL_W = 26
+const FULL_H = 28
 
 /** One of the ensemble: at rest, and with its arms up. */
 const AGENT: readonly Sprite[] = [
@@ -166,7 +166,7 @@ export function paintPixels(pixels: readonly (readonly string[])[]): PersonaSpan
   return paint(pixels.map(row => [...row]))
 }
 
-export function fullPersona(pose: Pose): PersonaSpan[][] {
+function fullPersona(pose: Pose): PersonaSpan[][] {
   const canvas = blankCanvas(FULL_W, FULL_H)
   const sprite = FULL[pose] ?? FULL.idle
   stamp(canvas, sprite, 0, FULL_H - sprite.length)
