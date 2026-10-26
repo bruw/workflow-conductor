@@ -94,7 +94,6 @@ import type { KeyOp, LegendAction, LegendItem } from '../src/ui/keys'
 import { FAILED, fmtCount } from '../src/ui/rail'
 import { BEAT_MS, SCENE_COLUMNS, SCENE_ROWS, SOLO_ROWS, SPLASH_MS, splashScene, waitScene } from '../src/ui/persona'
 import type { PersonaSpan } from '../src/ui/persona'
-import { MARK_ROWS, MARK_W, markFrame, markPalette } from '../src/ui/mark'
 import { cellWidth, clip, cutCells, firstLines, oneLine, padCells, sanitize, wrapText } from '../src/ui/text'
 import { ACCENT, FADED, GLYPH, PANE_ID, PANE_TITLE, RULE, TEXT } from '../src/ui/theme'
 import { wordmark } from '../src/ui/wordmark'
@@ -178,9 +177,6 @@ const SAID_RULE_W = 3
 export const PANE_ROWS = 28
 /** A command's `e.presentation.columns` is the only place a hook is told the terminal's width: undefined until one has run. */
 let terminalColumns: number | undefined
-/** The person's theme setting, for the mark's raw colours; read again once it is this old. */
-const THEME_MS = 5000
-let themeRead: { at: number; theme: string | undefined } = { at: -THEME_MS, theme: undefined }
 let splashing = false
 /** The splash stays on its last beat this long before the designer is drawn. */
 const SPLASH_REST_MS = 150
@@ -319,8 +315,6 @@ const projectAtom = atom({ plugin: 'workflow-conductor', key: 'project' } as con
 const uiAtom = atom({ plugin: 'workflow-conductor', key: 'projectUi' } as const, initialUi())
 const splashedAtom = atom({ plugin: 'workflow-conductor', key: 'splashed' } as const, false)
 const draftBeatAtom = atom({ plugin: 'workflow-conductor', key: 'draftBeat' } as const, 0)
-/** Grows by one on each key that moves the selection: the mark steps on at once. */
-const nudgeAtom = atom({ plugin: 'workflow-conductor', key: 'markNudge' } as const, 0)
 const timesAtom = atom({ plugin: 'workflow-conductor', key: 'runTimes' } as const, initialTimes())
 const shellAtom = atom({ plugin: 'workflow-conductor', key: 'shell' } as const, initialShell())
 const runScriptAtom = atom({ plugin: 'workflow-conductor', key: 'runScript' } as const, null)
@@ -361,26 +355,68 @@ const loadedDisk = (name: string, project: Project): void => {
   heldOver.delete(name)
 }
 
+const LOCK_WAIT_MS = 2000
+/** A lock this old was left by a session that died mid-save; a save itself takes milliseconds. */
+const LOCK_STALE_MS = 30_000
+const LOCK_RETRY_MS = 50
+
+/**
+ * Runs `save` while holding `<name>.lock` beside the project, so no other save of it, from this session or another
+ * sharing the root, lands between its read and its write. A directory, since `mkdir` is the one create-if-absent the
+ * engine reaches: `$.fs` has no exclusive create or write-if-unchanged.
+ */
+const withSaveLock = async <T,>($: EngineInterface, dir: string, name: string, save: () => Promise<T>): Promise<T> => {
+  const isWindows = /^[A-Za-z]:/.test(dir)
+  const lock = `${dir}/${name}.lock`
+  const spelled = isWindows ? lock.replaceAll('/', '\\') : lock
+  // cmd's mkdir makes the parents too; POSIX mkdir without -p fails on an existing directory, which is the lock.
+  const run = (verb: 'mkdir' | 'rmdir') => $.process.run(isWindows ? ['cmd', '/d', '/c', verb, spelled] : [verb, spelled])
+  if (!isWindows) await $.process.run(['mkdir', '-p', dir])
+  let deadline: number | undefined
+  for (;;) {
+    const made = await run('mkdir')
+    if (made.exitCode === 0) break
+    const held = await $.fs.stat(lock).catch(() => undefined)
+    const now = await $.clock.now()
+    deadline ??= now + LOCK_WAIT_MS
+    if (held !== undefined && now - held.mtimeMs > LOCK_STALE_MS) {
+      await run('rmdir')
+      continue
+    }
+    if (now > deadline) {
+      throw new Error(held === undefined ? `cannot lock ${name}: ${made.stderr.trim()}` : `project ${name} is being saved by another session`)
+    }
+    await $.clock.sleep(LOCK_RETRY_MS)
+  }
+  try {
+    return await save()
+  } finally {
+    await run('rmdir').catch(() => undefined)
+  }
+}
+
 // Spelled whole, not built by `projectFile`, so that a reader of the call sees where every save lands.
 // `board` stands in for `onDisk` where a reload with changed source lost it; null for a project not saved yet.
 const saveProject = async ($: EngineInterface, name: string, project: Project, board: Project | null, overwrite = false): Promise<void> => {
   // The name is spelled into the path: anything but kebab-case could reach outside the projects' directory.
   if (!isProjectName(name)) throw new Error(`not a project name: ${name}`)
   const root = await $.session.root()
-  const path = `${root.replace(/\/+$/, '')}/.claude/workflow-conductor/${name}.json`
-  // Read and write are two calls, so a save landing between them is still lost: the engine has no write-if-unchanged.
-  const text = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
-  if (text !== undefined) {
-    const known = onDisk[name] ?? board
-    const now = parseProject(text)
-    if (!now.ok) {
-      if (!overwrite) {
-        heldOver.add(name)
-        throw new InvalidFile(name)
-      }
-    } else if (known === null || !sameProject(now.project, known)) throw new StaleFile(name, text)
-  }
-  await $.fs.write(path, serializeProject(project))
+  const dir = `${root.replace(/\/+$/, '')}/.claude/workflow-conductor`
+  const path = `${dir}/${name}.json`
+  await withSaveLock($, dir, name, async () => {
+    const text = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
+    if (text !== undefined) {
+      const known = onDisk[name] ?? board
+      const now = parseProject(text)
+      if (!now.ok) {
+        if (!overwrite) {
+          heldOver.add(name)
+          throw new InvalidFile(name)
+        }
+      } else if (known === null || !sameProject(now.project, known)) throw new StaleFile(name, text)
+    }
+    await $.fs.write(path, serializeProject(project))
+  })
   onDisk[name] = project
   heldOver.delete(name)
 }
@@ -712,19 +748,6 @@ const store = async ($: EngineInterface, step: Step, before: Project | null, kep
   if (step.what !== undefined) record(step.ui.name, before, step.what)
 
   return { project: step.project, ui: notice === undefined ? step.ui : { ...step.ui, notice } }
-}
-
-const beat = ($: EngineInterface): void => {
-  void update($, nudgeAtom, nudge => nudge + 1)
-}
-
-const themeOf = async ($: EngineInterface): Promise<string | undefined> => {
-  const now = Date.now()
-  if (now - themeRead.at < THEME_MS) return themeRead.theme
-  const row = (await $.config.list().catch(() => [])).find(one => one.key === 'theme')
-  themeRead = { at: now, theme: typeof row?.value === 'string' ? row.value : undefined }
-
-  return themeRead.theme
 }
 
 /** Started by the drawing that shows the splash; a reload in the middle of it starts it again. */
@@ -1164,7 +1187,6 @@ const startKey = async ($: EngineInterface, key: string): Promise<boolean> => {
     return false
   }
   const helping = (ui.help ?? 0) > 0
-  if (op === 'up' || op === 'down') beat($)
   if (op === 'up' || op === 'down') await update($, uiAtom, held => ({ ...moveStartMark(held, op === 'up' ? -1 : 1), help: 0 }))
   else if (op === 'help') await update($, uiAtom, held => ({ ...held, notice: null, help: ((held.help ?? 0) % HELP_PAGES) + 1 }))
   else if (op === 'remove' && helping) await update($, uiAtom, held => ({ ...held, help: 0 }))
@@ -1247,7 +1269,6 @@ const runKey = async ($: EngineInterface, key: string): Promise<boolean> => {
 
     return false
   }
-  if (op === 'up' || op === 'down' || op === 'left' || op === 'right') beat($)
   const flushed = await flushDrafts($)
   const step = await commit($, (before, held, context) => keyStep(before, held, op, context))
   await keepSaid($, flushed)
@@ -1891,7 +1912,6 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const file = `${PROJECT_DIR}/${ui.name}.json`
     const bodyColumns = e.props.bodyColumns || 80
     const columns = Math.max(20, bodyColumns - 2)
-    const headColumns = columns - MARK_W
     const run = await read($, runAtom)
     const runProject = await read($, runProjectAtom)
     const over = overlaysProject(run, runProject, ui)
@@ -1900,9 +1920,6 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const clock = locked ? await read($, clockAtom) : 0
     const overlay = over ? runOverlay(run, clock) : undefined
     const draftBeats = (ui.drafting ?? null) !== null ? await read($, draftBeatAtom) : 0
-    const theme = await themeOf($)
-    // A Client's props may hold no undefined: with no theme read, the key is left out.
-    const cycle = { nudge: await read($, nudgeAtom), ...(theme === undefined ? {} : { theme }) }
     const splashed = await read($, splashedAtom)
     // Whether the pane holds the keyboard: Escape hands it to the prompt, and a field left open then is closed to the eye.
     const focused = e.props.isFocused !== false
@@ -1952,7 +1969,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     // Every part is cut to its room, so the row never wraps.
     const drafting = ui.drafting === 'show' && project !== null
     const listing = starting && (ui.back ?? null) !== null
-    const summary = over ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, headColumns - COMMAND.length - 3 - 10 - 3)) : null
+    const summary = over ? runSummary(run, elapsedOf(await read($, timesAtom), run), Math.max(8, columns - COMMAND.length - 3 - 10 - 3)) : null
     const begins = listing ? 'PROJECTS' : 'START'
     const state: { text: string; color: 'claude' | 'success' | 'error' | typeof FADED } =
       summary !== null
@@ -1987,7 +2004,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       ])
     // Short of room the state goes first; the name keeps eight cells at the least.
     const headOf = (keys: readonly LegendItem[] = []) => {
-      const room = headColumns - COMMAND.length - 3 - nameMark.length
+      const room = columns - COMMAND.length - 3 - nameMark.length
       const said = room - cellWidth(state.text) - 3 >= 8 ? state : null
       const left = room - (said === null ? 0 : cellWidth(said.text) + 3)
       const name = <Text bold color={TEXT}>{clip(shownName, Math.max(8, left))}</Text>
@@ -2007,7 +2024,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
           {said !== null && <Text key="project-state" color={said.color}>{said.text}</Text>}
         </Box>,
         <Box key="project-legend" flexDirection="row" height={1} flexShrink={0}>
-          {keys.length > 0 ? headLegend(legendRows(keys, headColumns, 1)[0] ?? []) : <Text color={TEXT}> </Text>}
+          {keys.length > 0 ? headLegend(legendRows(keys, columns, 1)[0] ?? []) : <Text color={TEXT}> </Text>}
         </Box>,
       ]
     }
@@ -2154,10 +2171,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
     const frame = (catching: boolean, head: RenderChildren, graph: RenderChildren, detail: RenderChildren | null, said: Said, actions: RenderChildren) => (
       <Box flexDirection="column" position="relative">
         <Box flexDirection="row" paddingLeft={1} paddingRight={1}>
-          <Box key="project-mark" flexDirection="column" width={MARK_W} flexShrink={0}>
-            {'Client' in els ? <els.Client key="project-mark-cycle" module="./mark.tsx" width={MARK_W} height={MARK_ROWS} props={cycle} /> : spanRows(markFrame(0, 0, markPalette(cycle.theme)))}
-          </Box>
-          <Box flexDirection="column" width={headColumns} height={HEAD_ROWS} flexShrink={0}>
+          <Box flexDirection="column" width={columns} height={HEAD_ROWS} flexShrink={0}>
             {head}
           </Box>
         </Box>

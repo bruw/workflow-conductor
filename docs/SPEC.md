@@ -18,7 +18,6 @@ hooks/project.tsx      the designer: /conductor, the screen, the key catcher and
 hooks/offer.tsx        the before_workflow tool and its question
 hooks/canvas.tsx       Client: draws the graph from props, posts pointer messages
 hooks/splash.tsx       Client: the splash and the draft's waiting scene
-hooks/mark.tsx         Client: the header's mark, cycling on its own clock
 src/run/               events (types) · reducer (events → RunState, label → block) · tracker (which run is whose, timers, run end)
                        journal (on-disk journal → events, phases, usage) · replay (events from a fixture or a project)
 src/project/           model (types, parse, serialize) · ops (add, move, update, retype, remove) · lints (problems, preflight)
@@ -28,7 +27,7 @@ src/project/           model (types, parse, serialize) · ops (add, move, update
                        handoff (the hand-off text and prompts) · offer (every question's words and results) · history (undo)
 src/ui/                graph-layout (project → cells, hit tests, navigation walks) · graph-paint (layout → styled spans, run overlay)
                        graph-model (Client props, messages, reducer) · keys (the one key table, legends) · compact (the band's view)
-                       rail (run view rows, status text) · text · theme · tween · persona · mark · wordmark
+                       rail (run view rows, status text) · text · theme · tween · persona · wordmark
 types/index.d.ts       the $.state contract; cannot import, so it re-declares the run and project shapes (tsc catches drift)
 fixtures/              recorded runs, as generated .ts modules (the test runner refuses node:fs and non-code imports)
 scripts/render-graph.ts  layout + paint as text with no session (--list names the cases)
