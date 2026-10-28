@@ -171,13 +171,37 @@ In the desktop app, where no flag can be given, the `env` of your user settings 
 
 ## What it touches
 
-**Conductor makes no network requests and reads no settings or credentials.**
+Conductor makes no network requests, runs no program, and reads no settings or credentials.
 
-| Area | What Conductor does | What it never does |
-| --- | --- | --- |
-| Files | Writes only under the session's root: `.claude/workflow-conductor/<name>.json`, and, when you answer `Save to repo` after a project's run, a copy of the script that run ran to `.claude/workflows/<name>.js`, which the Workflow tool runs by name; `<name>` is always kebab-case. On a hand-off Claude passes the Workflow script inline; the Workflow tool keeps its own copy in the session folder, and Conductor remembers that path for the next hand-off. | Write any other file another tool runs, settings, `CLAUDE.md`, build or start-up files. Delete or rename a file: to remove or rename a project, remove or rename its files. |
-| Programs | Nothing. | Run any program. |
-| Prompts | Submits a prompt to your own session in two cases. `r`: `Implement and run the "<name>" workflow project (Conductor hands it off: call mcp__workflow-conductor__before_workflow first).` `/conductor <description>`: `Draft a workflow project: <description>`, your own words. `q` and the draft key only put a sentence in the prompt box for you to send. | Put file content or conversation text in a prompt it submits: only the project name, or your own words. Read the prompt box beyond whether it is empty. |
-| Tools | Stands in for two tools, both its own, on every call: its `tool.call` hook returns the result, and no other tool runs in their place. It is the only way a mod serves a tool it adds. `mcp__workflow-conductor__before_workflow` (`hooks/offer.tsx`): Claude calls it before writing or running a Workflow script; Conductor asks you whether to design the workflow on the board first and answers with your choice; subagents and `-p` runs get the standard answer without a question. `mcp__workflow-conductor__project` (`hooks/project.tsx`): Claude calls it to read and edit a project (`read`, `apply`, `write`, `attach`); the project's goal, blocks and file paths reach Claude this way and in notes on the prompts you send while the board is open. | Answer another tool's call in that tool's place. |
-| Claude's tools | Refreshes the board after a project file is written and tracks a started run. Refuses a write or edit of a project file while that project is running. Asks once whether to draw a `Workflow` run no project claims: a yes, or what you type instead, is added to the tool's result as a note to Claude. | Change Claude's own `Write`, `Edit` and `Workflow` calls otherwise. |
-| Hooks | `/conductor` (`command.run`, on that command name alone): opens the board or the run view, folds or expands the designer, or starts a draft, the same whoever runs the command, you or other code. Subagent starts, model requests and turn ends (`agent.spawn`, `turn.step`, `turn.complete`): reads a workflow agent's id and label, a subagent's token usage and how its turn ended, to draw the run, and passes each on unchanged; the end of Claude's own turn after a run finished is when the save question is asked. The prompt box (`prompt.edit`): while the board is taking the keyboard back, one letter typed into the empty box goes to the board as a key instead. Prompts you send (`prompt.submit`): reads each for the hand-off sentence, and adds a note of board changes Claude has not seen as context. Run ends (`tool.call` on `TaskStop`, the task-notification row's `UserMessage` render): reads which run was stopped or ended. `session.compact` and `session.end` (on clear or resume): reset what Claude was told. | Hook any other command. Read a prompt, instruction or tool description in the run hooks. |
+**Files it writes.** Only under the session's root, and `<name>` is always kebab-case:
+
+- `.claude/workflow-conductor/<name>.json`: the project, on every save.
+- `.claude/workflows/<name>.js`: a copy of the script a run ran, only when you answer `Save to repo` after the run. The Workflow tool runs it by name.
+
+It never writes any other file: not settings, `CLAUDE.md`, build or start-up files, and nothing another tool runs. It never deletes or renames a file: to remove or rename a project, remove or rename its files.
+
+**Prompts it submits.** Two fixed sentences, sent to your own session:
+
+- `r`: `Implement and run the "<name>" workflow project (Conductor hands it off: call mcp__workflow-conductor__before_workflow first).`
+- `/conductor <description>`: `Draft a workflow project: <description>`, your own words.
+
+`q` and the draft key only put a sentence in the prompt box for you to send. No file content or conversation text ever goes into a prompt it submits: only the project name, or your own words. It reads the prompt box only to see whether it is empty.
+
+**Tools it adds.** Two of its own; it answers each call itself and never answers another tool's call:
+
+- `mcp__workflow-conductor__before_workflow`: Claude calls it before writing or running a Workflow script. Conductor asks whether to design on the board first and answers with your choice. Subagents and `-p` runs get the standard answer without a question.
+- `mcp__workflow-conductor__project`: Claude calls it to read and edit a project (`read`, `apply`, `write`, `attach`). The project's goal, blocks and file paths reach Claude this way, and in notes on the prompts you send while the board is open.
+
+**Claude's own tools.** `Write`, `Edit` and `Workflow` calls pass through unchanged, except:
+
+- A write or edit of a project file refreshes the board; while that project is running it is refused.
+- A started `Workflow` run is tracked on the board. One no project claims gets a single question: a yes, or what you type instead, is added to the tool's result as a note to Claude.
+
+**Hooks it holds.** Only these, and only to draw the board and the run:
+
+- `/conductor`: opens the board or the run view, folds or expands the designer, or starts a draft. No other command.
+- Subagent starts, model requests, turn ends: reads a workflow agent's id and label, its token usage and how its turn ended, and passes each on unchanged. It never reads a prompt, instruction or tool description here. The save question is asked when Claude's own turn ends after a run.
+- The prompt box: while the board is taking the keyboard back, one letter typed into the empty box goes to the board as a key.
+- Prompts you send: each is read for the hand-off sentence, and a note of board changes Claude has not seen is added as context.
+- Run ends (`TaskStop`, the task-notification row): reads which run was stopped or ended.
+- Compact, clear, resume: resets what Claude was told.

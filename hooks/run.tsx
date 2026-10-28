@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import { visualizeBrief } from '../src/project/chat'
-import { LAST_SCRIPTS_STORE, lastScripts, noteScript, saveAsk, savedWorkflowFile } from '../src/project/handoff'
-import { parseProject } from '../src/project/model'
+import { LAST_SCRIPTS_STORE, lastScripts, noteScript, saveAsk } from '../src/project/handoff'
+import { isProjectName, parseProject } from '../src/project/model'
 import {
   SAVE_HEADER,
   SAVE_OPTIONS,
@@ -72,8 +72,11 @@ const offerSave = async ($: EngineInterface, end: RunEnded): Promise<void> => {
   const name = end.project
   const ran = await read($, runScriptAtom)
   if (name === undefined || ran === null || ran.runId !== end.runId) return
+  // The name is spelled into the path: anything but kebab-case could reach outside the workflows' directory.
+  if (!isProjectName(name)) return
   const root = await $.session.root()
-  const file = savedWorkflowFile(root, name)
+  // Spelled whole, not built by `savedWorkflowFile`, so that a reader of the write sees where the script lands.
+  const file = `${root.replace(/\/+$/, '')}/.claude/workflows/${name}.js`
   const surfaces = await $.session.surfaces().catch(() => undefined)
   const answerable = ownRuns.has(end.runId) && (surfaces === undefined || surfaces.length > 0)
   const script = await textOf($, ran.path)
