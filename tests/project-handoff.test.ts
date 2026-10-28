@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { OUTLINE_MAX, buildHandoff, handoffPrompt, handoffTarget, lastScripts, newestScript, noteScript, outline, saveAsk, savedWorkflowFile } from '../src/project/handoff'
+import { OUTLINE_MAX, buildHandoff, handoffPrompt, handoffTarget, newestScript, noteRun, outline, saveAsk, savedWorkflowFile } from '../src/project/handoff'
 import { flatten } from '../src/project/model'
 import type { Project, ProjectNode } from '../src/project/model'
 import { KIND_TEACH } from '../src/project/teach'
@@ -41,7 +41,7 @@ test('handoff: with a remembered script it is updated from that one, without one
 
 test("handoff: the last run's id and journal are named only where it was in this session and its script is there", () => {
   const project = { ...review(), name: 'demo' }
-  const run = { runId: 'wf_7', transcriptDir: '/sessions/s1/workflows/wf_7' }
+  const run = { runId: 'wf_7', transcriptDir: '/sessions/s1/workflows/wf_7', script: RAN }
   const resumable = buildHandoff(project, PATH, { path: RAN, run }).context[0] ?? ''
   const elsewhere = buildHandoff(project, PATH, { path: RAN }).context[0] ?? ''
   const gone = buildHandoff(project, PATH, { path: null, run }).context[0] ?? ''
@@ -69,16 +69,15 @@ test('handoff: each kind the project uses is explained once, and no other kind i
   for (const kind of ['task', 'judge', 'dry', 'each'] as const) expect(context).not.toContain(KIND_TEACH[kind].script)
 })
 
-test('the script a project last ran is remembered, and a run only named as the project does not replace one that is', () => {
-  const noted = noteScript(undefined, 'demo', RAN, false)
-  const NEWER = '/sessions/s1/workflows/wf_2/script.js'
+test('the run a project last had is remembered, and a run only named as the project does not replace one that is', () => {
+  const first = { runId: 'wf_1', script: RAN }
+  const newer = { runId: 'wf_2', script: '/sessions/s1/workflows/wf_2/script.js' }
+  const noted = noteRun({}, 'demo', first, false)
 
-  expect(noted).toEqual({ demo: RAN })
-  expect(noteScript(noted, 'demo', NEWER, false)).toEqual({ demo: RAN })
-  expect(noteScript(noted, 'demo', NEWER, true)).toEqual({ demo: NEWER })
-  expect(noteScript({ other: RAN }, 'demo', NEWER, false)).toEqual({ other: RAN, demo: NEWER })
-  expect(lastScripts(['x'])).toEqual({})
-  expect(lastScripts({ demo: RAN, bad: 3 })).toEqual({ demo: RAN })
+  expect(noted).toEqual({ demo: first })
+  expect(noteRun(noted, 'demo', newer, false)).toEqual({ demo: first })
+  expect(noteRun(noted, 'demo', newer, true)).toEqual({ demo: newer })
+  expect(noteRun({ other: first }, 'demo', newer, false)).toEqual({ other: first, demo: newer })
 })
 
 test("a saved workflow is the project's name as a .js file in Claude Code's own folder under the root", () => {

@@ -7,7 +7,7 @@ import type { History } from '../src/project/history'
 import { lint, preflightLine, problemFields } from '../src/project/lints'
 import * as partial29 from '../fixtures/partial-29'
 import * as review41 from '../fixtures/review-41'
-import { LAST_SCRIPTS_STORE, handoffPrompt, handoffTarget, noteScript, reviewPrompt } from '../src/project/handoff'
+import { handoffPrompt, handoffTarget, reviewPrompt } from '../src/project/handoff'
 import { replayEvents } from '../src/run/replay'
 import type { ReplayFixture } from '../src/run/replay'
 import { emptyProject, findNode, flatten, goalOf, isBlank, isProjectName, kindsOf, parseProject, sameProject, serializeProject, typeName } from '../src/project/model'
@@ -1625,8 +1625,7 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       }
       // The script the run is of is the one the next handoff starts from.
       if (ran !== null) {
-        await $.store.set(LAST_SCRIPTS_STORE, noteScript(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined), name, ran.path, true)).catch(() => undefined)
-        offerRan(name, { runId: ran.runId, transcriptDir: tracked.transcriptDir })
+        offerRan(name, { runId: ran.runId, transcriptDir: tracked.transcriptDir, script: ran.path }, true)
       }
       // Undone like any edit made by hand; and Claude has seen what it just wrote.
       const said = changeWords(edit)

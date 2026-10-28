@@ -1,7 +1,7 @@
 import type { EngineInterface, On } from 'claude-code'
 
 import { offerBrief } from '../src/project/chat'
-import { LAST_SCRIPTS_STORE, buildHandoff, lastScripts, newestScript, savedWorkflowFile } from '../src/project/handoff'
+import { buildHandoff, newestScript, noteRun, savedWorkflowFile } from '../src/project/handoff'
 import type { HandoffScript, LastRun, ScriptFile } from '../src/project/handoff'
 import { isBlank, parseProject } from '../src/project/model'
 import {
@@ -22,10 +22,12 @@ import { projectFile } from '../src/project/session'
 import type { Tracker } from '../src/run/tracker'
 
 /** Per project, its last run in this session, whose script is the one remembered: a resume works only in the session that ran it. */
-const lastRuns: Record<string, LastRun> = {}
+let lastRuns: Record<string, LastRun> = {}
 
-export const offerRan = (name: string, run: LastRun): void => {
-  lastRuns[name] = run
+export const lastRunOf = (name: string): LastRun | undefined => lastRuns[name]
+
+export const offerRan = (name: string, run: LastRun, replace: boolean): void => {
+  lastRuns = noteRun(lastRuns, name, run, replace)
 }
 
 const fileOf = async ($: EngineInterface, path: string | undefined): Promise<ScriptFile | null> => {
@@ -37,12 +39,12 @@ const fileOf = async ($: EngineInterface, path: string | undefined): Promise<Scr
 
 /** The last run's script in the session folder, or the copy saved in the repository: the newer, as the session's is cleared after a while. */
 const scriptOf = async ($: EngineInterface, name: string): Promise<HandoffScript> => {
-  const last = lastScripts(await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined))[name]
-  const path = newestScript(await fileOf($, last), await fileOf($, savedWorkflowFile(await $.session.root(), name)))
+  const last = lastRuns[name]
+  const path = newestScript(await fileOf($, last?.script), await fileOf($, savedWorkflowFile(await $.session.root(), name)))
   // The run is named only with the script it ran: the saved copy may be another.
   if (path === null) return { path: null }
 
-  return path === last ? { path, run: lastRuns[name] } : { path }
+  return last !== undefined && path === last.script ? { path, run: last } : { path }
 }
 
 /** "Conductor" was answered and the draft it asks Claude for has not landed yet. A module variable: it lasts a turn. */
@@ -102,7 +104,7 @@ export const registerOffer = (on: On, tracker: Tracker): void => {
   })
   // A cleared or resumed conversation is another session: no run of it can be resumed from there.
   on('session.end', { reason: ['clear', 'resume'] }, async (_$, e, next) => {
-    for (const name of Object.keys(lastRuns)) delete lastRuns[name]
+    lastRuns = {}
 
     return next(e)
   })

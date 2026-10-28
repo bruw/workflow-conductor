@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import { visualizeBrief } from '../src/project/chat'
-import { LAST_SCRIPTS_STORE, lastScripts, noteScript, saveAsk } from '../src/project/handoff'
+import { saveAsk } from '../src/project/handoff'
 import { isProjectName, parseProject } from '../src/project/model'
 import {
   SAVE_HEADER,
@@ -29,7 +29,7 @@ import { initialShell } from '../src/ui/compact'
 import { FADED, GLYPH, PANE_ID, PANE_TITLE, TEXT } from '../src/ui/theme'
 
 import { paneArgs, runBoardOf } from './project'
-import { offerRan, offerSettled } from './offer'
+import { lastRunOf, offerRan, offerSettled } from './offer'
 
 const PLACEHOLDER = 'no workflow running yet'
 const MAX_WIDTH = 96
@@ -199,12 +199,9 @@ export const registerRun = (on: On, tracker: Tracker): void => {
         offerSettled(claimed)
         // Out of a handoff the script is the project's as of now, for the next handoff to start from.
         if (script !== undefined && isSaved(claimed)) {
-          const stored = await $.store.get(LAST_SCRIPTS_STORE).catch(() => undefined)
-          const kept = lastScripts(stored)[claimed]
+          const kept = lastRunOf(claimed)?.script
           const replace = tracker.handedOff() || (kept !== undefined && !(await $.fs.exists(kept).catch(() => true)))
-          const noted = noteScript(stored, claimed, script, replace)
-          if (noted[claimed] === script) offerRan(claimed, { runId: id, transcriptDir: text(transcriptDir) })
-          await $.store.set(LAST_SCRIPTS_STORE, noted).catch(() => undefined)
+          offerRan(claimed, { runId: id, transcriptDir: text(transcriptDir), script }, replace)
         }
         // Where nobody handed the project off, a toast says where the run went.
         if (own !== null) {

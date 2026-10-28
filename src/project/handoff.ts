@@ -61,22 +61,13 @@ export function reviewPrompt(name: string): string {
   return `Review the "${name}" workflow project as it is on the board now (it may have changed by hand: read it, unless a Conductor note with this prompt says what changed): is the structure right for its goal, what is missing, what is wasteful, and what are its worst-case agent count and rough wall-clock? `
 }
 
-/** `$.store` key: per project, the script its last run ran, the file the Workflow tool kept in the session folder. */
-export const LAST_SCRIPTS_STORE = 'lastScripts'
-
-export function lastScripts(value: unknown): Record<string, string> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return {}
-  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-}
+/** A run of the project in this session: what a resume of it needs, and `script`, the file the Workflow tool kept in the session folder. */
+export type LastRun = { runId: string; transcriptDir?: string; script: string }
 
 /** `replace`: the run came out of a handoff, or the script remembered is gone. A run that only has the project's name may be of an older script. */
-export function noteScript(value: unknown, name: string, ran: string, replace: boolean): Record<string, string> {
-  const kept = lastScripts(value)
-  return replace || kept[name] === undefined ? { ...kept, [name]: ran } : kept
+export function noteRun(kept: Record<string, LastRun>, name: string, run: LastRun, replace: boolean): Record<string, LastRun> {
+  return replace || kept[name] === undefined ? { ...kept, [name]: run } : kept
 }
-
-/** A run of the project in this session: what a resume of it needs. */
-export type LastRun = { runId: string; transcriptDir?: string }
 
 /** `path`: the script to start from (the last run's or the saved copy), null where there is neither; `run`: the last run, where it was in this session. */
 export type HandoffScript = { path: string | null; run?: LastRun }
