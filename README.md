@@ -158,11 +158,7 @@ It's MIT-licensed, so feel free to change it to fit your needs.
 claude --plugin-dir /path/to/conductor
 ```
 
-In the desktop app, where no flag can be given, the `env` of your user settings takes it:
-
-```json
-{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/conductor" } }
-```
+In the desktop app, where no flag can be given, set the plugin-directories variable of your user settings to the same path, as the Claude Code documentation on loading a mod describes.
 
 - `bun install`, then `bun run check`: the plugin validation, `tsc` and the tests.
 - `bun scripts/render-graph.ts --list` names what it can draw, and draws it with no session.

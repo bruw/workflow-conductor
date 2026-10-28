@@ -2,5 +2,5 @@
 # Usage: scripts/send.sh -l '/conductor'; sleep 1; scripts/send.sh Enter
 set -euo pipefail
 
-SESSION="${CONDUCTOR_SESSION:-conductor-dev}"
+SESSION="conductor-dev"
 exec tmux send-keys -t "=$SESSION:" "$@"

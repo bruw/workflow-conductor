@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SESSION="${CONDUCTOR_SESSION:-conductor-dev}"
+SESSION="conductor-dev"
 # A fixed path lets capture.sh find the log: without --debug-file its name is the session id.
 DEBUG_LOG="$REPO/.capture/debug.log"
 

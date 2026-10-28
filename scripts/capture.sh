@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SESSION="${CONDUCTOR_SESSION:-conductor-dev}"
+SESSION="conductor-dev"
 OUT="$REPO/.capture"
 DEBUG_LOG="$OUT/debug.log"
 
