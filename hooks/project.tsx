@@ -365,7 +365,7 @@ const LOCK_RETRY_MS = 50
  * sharing the root, lands between its read and its write. A directory, since `mkdir` is the one create-if-absent the
  * engine reaches: `$.fs` has no exclusive create or write-if-unchanged.
  */
-const withSaveLock = async <T,>($: EngineInterface, dir: string, name: string, save: () => Promise<T>): Promise<T> => {
+const withSaveLock = async ($: EngineInterface, dir: string, name: string, save: () => Promise<void>): Promise<void> => {
   const isWindows = /^[A-Za-z]:/.test(dir)
   const lock = `${dir}/${name}.lock`
   const spelled = isWindows ? lock.replaceAll('/', '\\') : lock
@@ -389,7 +389,7 @@ const withSaveLock = async <T,>($: EngineInterface, dir: string, name: string, s
     await $.clock.sleep(LOCK_RETRY_MS)
   }
   try {
-    return await save()
+    await save()
   } finally {
     await run('rmdir').catch(() => undefined)
   }
