@@ -355,68 +355,25 @@ const loadedDisk = (name: string, project: Project): void => {
   heldOver.delete(name)
 }
 
-const LOCK_WAIT_MS = 2000
-/** A lock this old was left by a session that died mid-save; a save itself takes milliseconds. */
-const LOCK_STALE_MS = 30_000
-const LOCK_RETRY_MS = 50
-
-/**
- * Runs `save` while holding `<name>.lock` beside the project, so no other save of it, from this session or another
- * sharing the root, lands between its read and its write. A directory, since `mkdir` is the one create-if-absent the
- * engine reaches: `$.fs` has no exclusive create or write-if-unchanged.
- */
-const withSaveLock = async ($: EngineInterface, dir: string, name: string, save: () => Promise<void>): Promise<void> => {
-  const isWindows = /^[A-Za-z]:/.test(dir)
-  const lock = `${dir}/${name}.lock`
-  const spelled = isWindows ? lock.replaceAll('/', '\\') : lock
-  // cmd's mkdir makes the parents too; POSIX mkdir without -p fails on an existing directory, which is the lock.
-  const run = (verb: 'mkdir' | 'rmdir') => $.process.run(isWindows ? ['cmd', '/d', '/c', verb, spelled] : [verb, spelled])
-  if (!isWindows) await $.process.run(['mkdir', '-p', dir])
-  let deadline: number | undefined
-  for (;;) {
-    const made = await run('mkdir')
-    if (made.exitCode === 0) break
-    const held = await $.fs.stat(lock).catch(() => undefined)
-    const now = await $.clock.now()
-    deadline ??= now + LOCK_WAIT_MS
-    if (held !== undefined && now - held.mtimeMs > LOCK_STALE_MS) {
-      await run('rmdir')
-      continue
-    }
-    if (now > deadline) {
-      throw new Error(held === undefined ? `cannot lock ${name}: ${made.stderr.trim()}` : `project ${name} is being saved by another session`)
-    }
-    await $.clock.sleep(LOCK_RETRY_MS)
-  }
-  try {
-    await save()
-  } finally {
-    await run('rmdir').catch(() => undefined)
-  }
-}
-
 // Spelled whole, not built by `projectFile`, so that a reader of the call sees where every save lands.
 // `board` stands in for `onDisk` where a reload with changed source lost it; null for a project not saved yet.
 const saveProject = async ($: EngineInterface, name: string, project: Project, board: Project | null, overwrite = false): Promise<void> => {
   // The name is spelled into the path: anything but kebab-case could reach outside the projects' directory.
   if (!isProjectName(name)) throw new Error(`not a project name: ${name}`)
   const root = await $.session.root()
-  const dir = `${root.replace(/\/+$/, '')}/.claude/workflow-conductor`
-  const path = `${dir}/${name}.json`
-  await withSaveLock($, dir, name, async () => {
-    const text = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
-    if (text !== undefined) {
-      const known = onDisk[name] ?? board
-      const now = parseProject(text)
-      if (!now.ok) {
-        if (!overwrite) {
-          heldOver.add(name)
-          throw new InvalidFile(name)
-        }
-      } else if (known === null || !sameProject(now.project, known)) throw new StaleFile(name, text)
-    }
-    await $.fs.write(path, serializeProject(project))
-  })
+  const path = `${root.replace(/\/+$/, '')}/.claude/workflow-conductor/${name}.json`
+  const text = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
+  if (text !== undefined) {
+    const known = onDisk[name] ?? board
+    const now = parseProject(text)
+    if (!now.ok) {
+      if (!overwrite) {
+        heldOver.add(name)
+        throw new InvalidFile(name)
+      }
+    } else if (known === null || !sameProject(now.project, known)) throw new StaleFile(name, text)
+  }
+  await $.fs.write(path, serializeProject(project))
   onDisk[name] = project
   heldOver.delete(name)
 }

@@ -7,29 +7,6 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 9 }, view: {} },
 } as const
 
-/** Answers the lock a save takes, `mkdir` and `rmdir` of `<name>.lock`, over the directories it hands back. */
-const lockDirs = (on: Parameters<TestBody>[1], made = new Map<string, number>()): Map<string, number> => {
-  on('process.run', async (_$, e) => {
-    const [verb, ...rest] = e.argv
-    const dir = rest.at(-1) ?? ''
-    const ok = { stdout: '', isStdoutTruncated: false, isStderrTruncated: false }
-    if (verb === 'mkdir' && rest[0] === '-p') return { value: { exitCode: 0, stderr: '', ...ok } }
-    if (verb === 'mkdir' && made.has(dir)) return { value: { exitCode: 1, stderr: `mkdir: ${dir}: File exists`, ...ok } }
-    if (verb === 'mkdir') made.set(dir, 0)
-    if (verb === 'rmdir') made.delete(dir)
-
-    return { value: { exitCode: 0, stderr: '', ...ok } }
-  })
-  on('fs.stat', async (_$, e) => {
-    const at = made.get(e.path)
-    if (at === undefined) throw new Error(`ENOENT ${e.path}`)
-
-    return { value: { kind: 'dir' as const, size: 0, mtimeMs: at, isLink: false } }
-  })
-
-  return made
-}
-
 test('the minimized strip keeps what is drawn beneath it in the band', async ($, on) => {
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('command.register', async (_$, e) => ({ value: { command: e.name } }))
@@ -68,7 +45,6 @@ test("an edit is refused, not saved, once another session saved the project sinc
     return { value: undefined }
   })
   on('fs.list', async () => ({ value: [] }))
-  lockDirs(on)
   on('session.root', async () => ({ value: '/work' }))
   on('tool.register', async (_$, e) => ({ value: { tool: e.name } }))
 
@@ -111,7 +87,6 @@ test('a write Claude made from an older read is refused once another session sav
     return { value: undefined }
   })
   on('fs.list', async () => ({ value: [] }))
-  lockDirs(on)
   on('session.root', async () => ({ value: '/work' }))
   on('tool.register', async (_$, e) => ({ value: { tool: e.name } }))
 
@@ -149,7 +124,6 @@ test('a board edit over a file that is no valid project is kept unsaved, and wri
     return { value: undefined }
   })
   on('fs.list', async () => ({ value: [] }))
-  lockDirs(on)
   on('session.root', async () => ({ value: '/work' }))
   on('tool.register', async (_$, e) => ({ value: { tool: e.name } }))
   const clock = mock.clock(on)
@@ -185,95 +159,4 @@ test('a board edit over a file that is no valid project is kept unsaved, and wri
   expect(names).toContain('first')
   expect(names).not.toContain('second')
   await pane.unmount()
-})
-
-test("another session's save cannot land between a save's read and its write", async ($, on) => {
-  const files = new Map<string, string>()
-  const path = '/work/.claude/workflow-conductor/demo.json'
-  const lock = '/work/.claude/workflow-conductor/demo.lock'
-  let isRacing = false
-  let isShutOut = false
-  const locks = lockDirs(on)
-  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  on('command.register', async (_$, e) => ({ value: { command: e.name } }))
-  on('ui.panes', async () => ({ value: [] }))
-  on('fs.exists', async (_$, e) => ({ value: files.has(e.path) }))
-  on('fs.read', async (_$, e) => {
-    const text = files.get(e.path)
-    if (text === undefined) throw new Error(`no file ${e.path}`)
-    // Another session saves a newer project now, taking the lock as every save does.
-    if (isRacing && e.path === path) {
-      isRacing = false
-      if (locks.has(lock)) isShutOut = true
-      else {
-        const other = JSON.parse(text)
-        other.nodes.push({ id: 'n90', type: 'agent', name: 'from another session' })
-        files.set(path, JSON.stringify(other))
-      }
-    }
-
-    return { value: text }
-  })
-  on('fs.write', async (_$, e) => {
-    files.set(e.path, e.text)
-
-    return { value: undefined }
-  })
-  on('fs.list', async () => ({ value: [] }))
-  on('session.root', async () => ({ value: '/work' }))
-  on('tool.register', async (_$, e) => ({ value: { tool: e.name } }))
-
-  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-  const apply = (name: string) => $.tool.call({ tool: 'mcp__workflow-conductor__project', action: 'apply', name: 'demo', ops: [{ op: 'add', type: 'agent', name }] })
-  expect(await apply('first')).toHaveProperty('result')
-
-  isRacing = true
-  expect(await apply('second')).toHaveProperty('result')
-  // The other session met the lock and saved nothing, rather than saving what this write then replaced.
-  expect(isShutOut).toBe(true)
-  expect(JSON.parse(files.get(path) ?? '{}').nodes.map((node: { name: string }) => node.name)).toContain('second')
-  expect(locks.has(lock)).toBe(false)
-})
-
-test('a save that cannot take the lock another session holds fails without writing', async ($, on) => {
-  const files = new Map<string, string>()
-  const path = '/work/.claude/workflow-conductor/demo.json'
-  const lock = '/work/.claude/workflow-conductor/demo.lock'
-  const clock = mock.clock(on, { now: 1_000_000 })
-  const locks = lockDirs(on)
-  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  on('command.register', async (_$, e) => ({ value: { command: e.name } }))
-  on('ui.panes', async () => ({ value: [] }))
-  on('fs.exists', async (_$, e) => ({ value: files.has(e.path) }))
-  on('fs.read', async (_$, e) => {
-    const text = files.get(e.path)
-    if (text === undefined) throw new Error(`no file ${e.path}`)
-
-    return { value: text }
-  })
-  on('fs.write', async (_$, e) => {
-    files.set(e.path, e.text)
-
-    return { value: undefined }
-  })
-  on('fs.list', async () => ({ value: [] }))
-  on('session.root', async () => ({ value: '/work' }))
-  on('tool.register', async (_$, e) => ({ value: { tool: e.name } }))
-
-  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-  const apply = (name: string) => $.tool.call({ tool: 'mcp__workflow-conductor__project', action: 'apply', name: 'demo', ops: [{ op: 'add', type: 'agent', name }] })
-  expect(await apply('first')).toHaveProperty('result')
-  const saved = files.get(path)
-
-  locks.set(lock, clock.now())
-  const refused = apply('second')
-  await clock.advance(5_000)
-  expect(await refused).toHaveProperty('deny')
-  expect(files.get(path)).toBe(saved)
-  expect(locks.has(lock)).toBe(true)
-
-  // A lock left by a session that died mid-save is taken over.
-  await clock.advance(60_000)
-  expect(await apply('third')).toHaveProperty('result')
-  expect(files.get(path)).not.toBe(saved)
 })
