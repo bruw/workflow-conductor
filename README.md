@@ -176,12 +176,13 @@ Conductor makes no network requests, runs no program, and reads no settings or c
 
 It never writes any other file: not settings, `CLAUDE.md`, build or start-up files, and nothing another tool runs. It never deletes or renames a file: to remove or rename a project, remove or rename its files.
 
-**Prompts it submits.** Two fixed sentences, sent to your own session:
+**Prompts.** It never submits a prompt. It only puts a sentence in the prompt box, for you to send with Enter or change first:
 
 - `r`: `Implement and run the "<name>" workflow project (Conductor hands it off: call mcp__workflow-conductor__before_workflow first).`
 - `/conductor <description>`: `Draft a workflow project: <description>`, your own words.
+- `q`: a review question naming the project.
 
-`q` and the draft key only put a sentence in the prompt box for you to send. No file content or conversation text ever goes into a prompt it submits: only the project name, or your own words. It reads the prompt box only to see whether it is empty.
+No file content or conversation text ever goes into the box: only the project name, or your own words. It reads the prompt box only to see whether it is empty.
 
 **Tools it adds.** Two of its own; it answers each call itself and never answers another tool's call:
 

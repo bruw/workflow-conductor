@@ -157,7 +157,7 @@ let doorGen = 0
 const doorKey = (): string => `${DOOR_ELEMENT}:${LOAD}.${doorGen}`
 const isDoor = (element: string | undefined): boolean => (element ?? '').startsWith(`${DOOR_ELEMENT}:`)
 const isDetailStop = (element: string | undefined): boolean => element !== undefined && (isField(element) || isPickerField(element) || restBase(element) !== null)
-/** How long after the command's answer the handoff prompt is submitted. */
+/** How long after the command's answer the draft sentence is put in the prompt box. */
 export const SUBMIT_DELAY_MS = 64
 /** How many times the ring is sent to an element before the field is given up. */
 const LAND_TRIES = 5
@@ -856,20 +856,10 @@ const request = async ($: EngineInterface, kind: 'run' | 'ask' | 'draft'): Promi
     return filled.isFilled
   }
   if (kind === 'run') {
-    // The mod's own prompt does not come by its `prompt.submit` hook: the hand-off is made here.
+    // The mod never submits a prompt: the sentence waits in the box and the person's Enter goes by the `prompt.submit` hook, which makes this hand-off again.
     if (!(await handOff($, ui.name))) return say($, `run: ${ui.name} could not be handed off`)
     const problems = now === null ? null : preflightLine(now)
     if (now !== null) $.ui.toast(`conductor: ${ui.name} handed to Claude${problems === null ? '' : ` · ${problems}`}`)
-    // From a clock callback, never from inside the chain of keys, which it would hold for the turn.
-    // Refused (the prompt box holds text): the request is left there for the person to send.
-    $.clock.after(SUBMIT_DELAY_MS, () => {
-      const submitted = $.prompt.submit({ text: line, asUser: true })
-      void submitted.then(entered => (entered.drop === undefined ? undefined : fill())).catch(() => fill())
-    })
-    await $.ui.close({ id: PROJECT_PANE_ID }).catch(() => undefined)
-    await $.ui.open(paneArgs(false)).catch(() => undefined)
-
-    return
   }
   if (!(await fill())) return
   await $.ui.close({ id: PROJECT_PANE_ID }).catch(() => undefined)
@@ -1382,14 +1372,10 @@ export const registerProject = (on: On, tracker: Tracker): void => {
       // The brief goes with this answer, and the prompt that follows starts the turn.
       await beginDraft($)
       const prompt = `Draft a workflow project: ${words}`
-      // `prompt.submit` is refused inside this hook (it would wait on the turn the hook holds), so it is sent once the command has settled.
+      // The box is filled once the command has settled, so the text is not under the turn the hook holds; the person's Enter starts the draft.
       $.clock.after(SUBMIT_DELAY_MS, () => {
-        const fill = async (): Promise<void> => {
-          const filled = await $.prompt.fill({ text: prompt }).catch(() => ({ isFilled: false }))
-          $.ui.toast(filled.isFilled ? 'conductor: press Enter to start the draft' : `conductor: type "${prompt}" to start the draft`)
-        }
-        const submitted = $.prompt.submit({ text: prompt })
-        void submitted.then(entered => (entered.drop === undefined ? undefined : fill())).catch(() => fill())
+        const filled = $.prompt.fill({ text: prompt }).catch(() => ({ isFilled: false }))
+        void filled.then(entered => $.ui.toast(entered.isFilled ? 'conductor: press Enter to start the draft' : `conductor: type "${prompt}" to start the draft`))
       })
 
       return { text: 'drafting a workflow project', context: draftBrief(words) }
